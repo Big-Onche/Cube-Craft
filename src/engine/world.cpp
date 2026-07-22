@@ -1419,9 +1419,10 @@ bool emptymap(int scale, bool force, const char *mname, bool usecfg)    // main 
         return false;
     }
 
+    clearworldchunks();
     resetmap();
 
-    setvar("mapscale", scale<10 ? 10 : (scale>16 ? 16 : scale), true, false);
+    setvar("mapscale", scale<9 ? 9 : (scale>16 ? 16 : scale), true, false);
     setvar("mapsize", 1<<worldscale, true, false);
     setvar("emptymap", 1, true, false);
 
@@ -1457,6 +1458,7 @@ bool enlargemap(bool force)
     }
     if(worldsize >= 1<<16) return false;
 
+    clearworldchunks();
     while(outsideents.length()) removeentity(outsideents.pop());
 
     worldscale++;
@@ -1496,6 +1498,7 @@ void shrinkmap()
     }
     if(octant < 0) return;
 
+    clearworldchunks();
     while(outsideents.length()) removeentity(outsideents.pop());
 
     if(!worldroot[octant].children) subdividecube(worldroot[octant], false, false);
@@ -1560,4 +1563,3 @@ void mpeditent(int i, const vec &o, int type, int attr1, int attr2, int attr3, i
 
 int getworldsize() { return worldsize; }
 int getmapversion() { return mapversion; }
-

@@ -212,6 +212,7 @@ extern const cube *neighbourstack[32];
 extern int neighbourdepth;
 extern const cube &neighbourcube(const cube &c, int orient, const ivec &co, int size, ivec &ro = lu, int &rsize = lusize);
 extern void resetclipplanes();
+extern void clearworldchunks();
 extern int getmippedtexture(const cube &p, int orient);
 extern void forcemip(cube &c, bool fixtex = true);
 extern bool subdividecube(cube &c, bool fullcheck=true, bool brighten=true);
@@ -807,4 +808,3 @@ namespace recorder
 #endif
 
 #endif
-
