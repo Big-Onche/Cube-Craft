@@ -1,0 +1,1652 @@
+# depslib dependency file v1.0
+1673925824 source:c:\users\frtst\documents\github\tesseract_main-tesseract_main.r2549\src\engine\engine.h
+	"cube.h"
+	"world.h"
+	"octa.h"
+	"light.h"
+	"texture.h"
+	"bih.h"
+	"model.h"
+
+1606774535 c:\users\frtst\documents\github\tesseract_main-tesseract_main.r2549\src\shared\cube.h
+	<math.h>
+	<string.h>
+	<stdio.h>
+	<stdlib.h>
+	<ctype.h>
+	<stdarg.h>
+	<limits.h>
+	<float.h>
+	<assert.h>
+	<time.h>
+	"windows.h"
+	<eh.h>
+	<dbghelp.h>
+	<intrin.h>
+	"SDL.h"
+	<OpenGL/gl.h>
+	<SDL.h>
+	<SDL_opengl.h>
+	<enet/enet.h>
+	<zlib.h>
+	"tools.h"
+	"geom.h"
+	"ents.h"
+	"command.h"
+	"glexts.h"
+	"glemu.h"
+	"iengine.h"
+	"igame.h"
+
+1584893389 c:\users\frtst\documents\github\tesseract_main-tesseract_main.r2549\src\include\sdl.h
+	"SDL_main.h"
+	"SDL_stdinc.h"
+	"SDL_assert.h"
+	"SDL_atomic.h"
+	"SDL_audio.h"
+	"SDL_clipboard.h"
+	"SDL_cpuinfo.h"
+	"SDL_endian.h"
+	"SDL_error.h"
+	"SDL_events.h"
+	"SDL_filesystem.h"
+	"SDL_gamecontroller.h"
+	"SDL_haptic.h"
+	"SDL_hints.h"
+	"SDL_joystick.h"
+	"SDL_loadso.h"
+	"SDL_log.h"
+	"SDL_messagebox.h"
+	"SDL_metal.h"
+	"SDL_mutex.h"
+	"SDL_power.h"
+	"SDL_render.h"
+	"SDL_rwops.h"
+	"SDL_sensor.h"
+	"SDL_shape.h"
+	"SDL_system.h"
+	"SDL_thread.h"
+	"SDL_timer.h"
+	"SDL_version.h"
+	"SDL_video.h"
+	"begin_code.h"
+	"close_code.h"
+
+1584893389 c:\users\frtst\documents\github\tesseract_main-tesseract_main.r2549\src\include\sdl_main.h
+	"SDL_stdinc.h"
+	"begin_code.h"
+	"close_code.h"
+
+1584893389 c:\users\frtst\documents\github\tesseract_main-tesseract_main.r2549\src\include\sdl_stdinc.h
+	"SDL_config.h"
+	<sys/types.h>
+	<stdio.h>
+	<stdlib.h>
+	<stddef.h>
+	<stdarg.h>
+	<stdlib.h>
+	<malloc.h>
+	<stddef.h>
+	<stdarg.h>
+	<memory.h>
+	<string.h>
+	<strings.h>
+	<wchar.h>
+	<inttypes.h>
+	<stdint.h>
+	<ctype.h>
+	<math.h>
+	<float.h>
+	<alloca.h>
+	<malloc.h>
+	<malloc.h>
+	<malloc.h>
+	<stdlib.h>
+	<sal.h>
+	"begin_code.h"
+	"close_code.h"
+
+1584893389 c:\users\frtst\documents\github\tesseract_main-tesseract_main.r2549\src\include\sdl_config.h
+	"SDL_platform.h"
+	"SDL_config_windows.h"
+	"SDL_config_winrt.h"
+	"SDL_config_macosx.h"
+	"SDL_config_iphoneos.h"
+	"SDL_config_android.h"
+	"SDL_config_psp.h"
+	"SDL_config_os2.h"
+	"SDL_config_minimal.h"
+
+1584893389 c:\users\frtst\documents\github\tesseract_main-tesseract_main.r2549\src\include\sdl_platform.h
+	"AvailabilityMacros.h"
+	"TargetConditionals.h"
+	<winapifamily.h>
+	"begin_code.h"
+	"close_code.h"
+
+1584893389 c:\users\frtst\documents\github\tesseract_main-tesseract_main.r2549\src\include\begin_code.h
+
+1584893389 c:\users\frtst\documents\github\tesseract_main-tesseract_main.r2549\src\include\close_code.h
+
+1584893389 c:\users\frtst\documents\github\tesseract_main-tesseract_main.r2549\src\include\sdl_config_windows.h
+	"SDL_platform.h"
+
+1584893389 c:\users\frtst\documents\github\tesseract_main-tesseract_main.r2549\src\include\sdl_config_winrt.h
+	"SDL_platform.h"
+	<sdkddkver.h>
+
+1584893389 c:\users\frtst\documents\github\tesseract_main-tesseract_main.r2549\src\include\sdl_config_macosx.h
+	"SDL_platform.h"
+	<AvailabilityMacros.h>
+
+1584893389 c:\users\frtst\documents\github\tesseract_main-tesseract_main.r2549\src\include\sdl_config_iphoneos.h
+	"SDL_platform.h"
+
+1584893389 c:\users\frtst\documents\github\tesseract_main-tesseract_main.r2549\src\include\sdl_config_android.h
+	"SDL_platform.h"
+	<stdarg.h>
+
+1584893389 c:\users\frtst\documents\github\tesseract_main-tesseract_main.r2549\src\include\sdl_config_psp.h
+	"SDL_platform.h"
+
+1584893389 c:\users\frtst\documents\github\tesseract_main-tesseract_main.r2549\src\include\sdl_config_os2.h
+	"SDL_platform.h"
+
+1584893389 c:\users\frtst\documents\github\tesseract_main-tesseract_main.r2549\src\include\sdl_config_minimal.h
+	"SDL_platform.h"
+
+1584893389 c:\users\frtst\documents\github\tesseract_main-tesseract_main.r2549\src\include\sdl_assert.h
+	"SDL_config.h"
+	"begin_code.h"
+	<signal.h>
+	"close_code.h"
+
+1584893389 c:\users\frtst\documents\github\tesseract_main-tesseract_main.r2549\src\include\sdl_atomic.h
+	"SDL_stdinc.h"
+	"SDL_platform.h"
+	"begin_code.h"
+	<sys/cpuinline.h>
+	<mbarrier.h>
+	"close_code.h"
+
+1584893389 c:\users\frtst\documents\github\tesseract_main-tesseract_main.r2549\src\include\sdl_audio.h
+	"SDL_stdinc.h"
+	"SDL_error.h"
+	"SDL_endian.h"
+	"SDL_mutex.h"
+	"SDL_thread.h"
+	"SDL_rwops.h"
+	"begin_code.h"
+	"close_code.h"
+
+1584893389 c:\users\frtst\documents\github\tesseract_main-tesseract_main.r2549\src\include\sdl_error.h
+	"SDL_stdinc.h"
+	"begin_code.h"
+	"close_code.h"
+
+1584893389 c:\users\frtst\documents\github\tesseract_main-tesseract_main.r2549\src\include\sdl_endian.h
+	"SDL_stdinc.h"
+	<endian.h>
+	<endian.h>
+	"begin_code.h"
+	"close_code.h"
+
+1584893389 c:\users\frtst\documents\github\tesseract_main-tesseract_main.r2549\src\include\sdl_mutex.h
+	"SDL_stdinc.h"
+	"SDL_error.h"
+	"begin_code.h"
+	"close_code.h"
+
+1584893389 c:\users\frtst\documents\github\tesseract_main-tesseract_main.r2549\src\include\sdl_thread.h
+	"SDL_stdinc.h"
+	"SDL_error.h"
+	"SDL_atomic.h"
+	"SDL_mutex.h"
+	"begin_code.h"
+	<process.h>
+	<process.h>
+	<stdlib.h>
+	"close_code.h"
+
+1584893389 c:\users\frtst\documents\github\tesseract_main-tesseract_main.r2549\src\include\sdl_rwops.h
+	"SDL_stdinc.h"
+	"SDL_error.h"
+	"begin_code.h"
+	"close_code.h"
+
+1584893389 c:\users\frtst\documents\github\tesseract_main-tesseract_main.r2549\src\include\sdl_clipboard.h
+	"SDL_stdinc.h"
+	"begin_code.h"
+	"close_code.h"
+
+1584893389 c:\users\frtst\documents\github\tesseract_main-tesseract_main.r2549\src\include\sdl_cpuinfo.h
+	"SDL_stdinc.h"
+	<intrin.h>
+	<intrin.h>
+	<altivec.h>
+	<arm_neon.h>
+	<armintr.h>
+	<arm_neon.h>
+	<arm64intr.h>
+	<arm64_neon.h>
+	<mm3dnow.h>
+	<immintrin.h>
+	<mmintrin.h>
+	<xmmintrin.h>
+	<emmintrin.h>
+	<pmmintrin.h>
+	"begin_code.h"
+	"close_code.h"
+
+1584893389 c:\users\frtst\documents\github\tesseract_main-tesseract_main.r2549\src\include\sdl_events.h
+	"SDL_stdinc.h"
+	"SDL_error.h"
+	"SDL_video.h"
+	"SDL_keyboard.h"
+	"SDL_mouse.h"
+	"SDL_joystick.h"
+	"SDL_gamecontroller.h"
+	"SDL_quit.h"
+	"SDL_gesture.h"
+	"SDL_touch.h"
+	"begin_code.h"
+	"close_code.h"
+
+1584893389 c:\users\frtst\documents\github\tesseract_main-tesseract_main.r2549\src\include\sdl_video.h
+	"SDL_stdinc.h"
+	"SDL_pixels.h"
+	"SDL_rect.h"
+	"SDL_surface.h"
+	"begin_code.h"
+	"close_code.h"
+
+1584893389 c:\users\frtst\documents\github\tesseract_main-tesseract_main.r2549\src\include\sdl_pixels.h
+	"SDL_stdinc.h"
+	"SDL_endian.h"
+	"begin_code.h"
+	"close_code.h"
+
+1584893389 c:\users\frtst\documents\github\tesseract_main-tesseract_main.r2549\src\include\sdl_rect.h
+	"SDL_stdinc.h"
+	"SDL_error.h"
+	"SDL_pixels.h"
+	"SDL_rwops.h"
+	"begin_code.h"
+	"close_code.h"
+
+1584893389 c:\users\frtst\documents\github\tesseract_main-tesseract_main.r2549\src\include\sdl_surface.h
+	"SDL_stdinc.h"
+	"SDL_pixels.h"
+	"SDL_rect.h"
+	"SDL_blendmode.h"
+	"SDL_rwops.h"
+	"begin_code.h"
+	"close_code.h"
+
+1584893389 c:\users\frtst\documents\github\tesseract_main-tesseract_main.r2549\src\include\sdl_blendmode.h
+	"begin_code.h"
+	"close_code.h"
+
+1584893389 c:\users\frtst\documents\github\tesseract_main-tesseract_main.r2549\src\include\sdl_keyboard.h
+	"SDL_stdinc.h"
+	"SDL_error.h"
+	"SDL_keycode.h"
+	"SDL_video.h"
+	"begin_code.h"
+	"close_code.h"
+
+1584893389 c:\users\frtst\documents\github\tesseract_main-tesseract_main.r2549\src\include\sdl_keycode.h
+	"SDL_stdinc.h"
+	"SDL_scancode.h"
+
+1584893389 c:\users\frtst\documents\github\tesseract_main-tesseract_main.r2549\src\include\sdl_scancode.h
+	"SDL_stdinc.h"
+
+1584893389 c:\users\frtst\documents\github\tesseract_main-tesseract_main.r2549\src\include\sdl_mouse.h
+	"SDL_stdinc.h"
+	"SDL_error.h"
+	"SDL_video.h"
+	"begin_code.h"
+	"close_code.h"
+
+1584893389 c:\users\frtst\documents\github\tesseract_main-tesseract_main.r2549\src\include\sdl_joystick.h
+	"SDL_stdinc.h"
+	"SDL_error.h"
+	"begin_code.h"
+	"close_code.h"
+
+1584893389 c:\users\frtst\documents\github\tesseract_main-tesseract_main.r2549\src\include\sdl_gamecontroller.h
+	"SDL_stdinc.h"
+	"SDL_error.h"
+	"SDL_rwops.h"
+	"SDL_joystick.h"
+	"begin_code.h"
+	"close_code.h"
+
+1584893389 c:\users\frtst\documents\github\tesseract_main-tesseract_main.r2549\src\include\sdl_quit.h
+	"SDL_stdinc.h"
+	"SDL_error.h"
+
+1584893389 c:\users\frtst\documents\github\tesseract_main-tesseract_main.r2549\src\include\sdl_gesture.h
+	"SDL_stdinc.h"
+	"SDL_error.h"
+	"SDL_video.h"
+	"SDL_touch.h"
+	"begin_code.h"
+	"close_code.h"
+
+1584893389 c:\users\frtst\documents\github\tesseract_main-tesseract_main.r2549\src\include\sdl_touch.h
+	"SDL_stdinc.h"
+	"SDL_error.h"
+	"SDL_video.h"
+	"begin_code.h"
+	"close_code.h"
+
+1584893389 c:\users\frtst\documents\github\tesseract_main-tesseract_main.r2549\src\include\sdl_filesystem.h
+	"SDL_stdinc.h"
+	"begin_code.h"
+	"close_code.h"
+
+1584893389 c:\users\frtst\documents\github\tesseract_main-tesseract_main.r2549\src\include\sdl_haptic.h
+	"SDL_stdinc.h"
+	"SDL_error.h"
+	"SDL_joystick.h"
+	"begin_code.h"
+	"close_code.h"
+
+1584893389 c:\users\frtst\documents\github\tesseract_main-tesseract_main.r2549\src\include\sdl_hints.h
+	"SDL_stdinc.h"
+	"begin_code.h"
+	"close_code.h"
+
+1584893389 c:\users\frtst\documents\github\tesseract_main-tesseract_main.r2549\src\include\sdl_loadso.h
+	"SDL_stdinc.h"
+	"SDL_error.h"
+	"begin_code.h"
+	"close_code.h"
+
+1584893389 c:\users\frtst\documents\github\tesseract_main-tesseract_main.r2549\src\include\sdl_log.h
+	"SDL_stdinc.h"
+	"begin_code.h"
+	"close_code.h"
+
+1584893389 c:\users\frtst\documents\github\tesseract_main-tesseract_main.r2549\src\include\sdl_messagebox.h
+	"SDL_stdinc.h"
+	"SDL_video.h"
+	"begin_code.h"
+	"close_code.h"
+
+1584894196 c:\users\frtst\documents\github\tesseract_main-tesseract_main.r2549\src\include\sdl_metal.h
+	"SDL_video.h"
+	"begin_code.h"
+	"close_code.h"
+
+1584893389 c:\users\frtst\documents\github\tesseract_main-tesseract_main.r2549\src\include\sdl_power.h
+	"SDL_stdinc.h"
+	"begin_code.h"
+	"close_code.h"
+
+1584893389 c:\users\frtst\documents\github\tesseract_main-tesseract_main.r2549\src\include\sdl_render.h
+	"SDL_stdinc.h"
+	"SDL_rect.h"
+	"SDL_video.h"
+	"begin_code.h"
+	"close_code.h"
+
+1584893389 c:\users\frtst\documents\github\tesseract_main-tesseract_main.r2549\src\include\sdl_sensor.h
+	"SDL_stdinc.h"
+	"SDL_error.h"
+	"begin_code.h"
+	"close_code.h"
+
+1584893389 c:\users\frtst\documents\github\tesseract_main-tesseract_main.r2549\src\include\sdl_shape.h
+	"SDL_stdinc.h"
+	"SDL_pixels.h"
+	"SDL_rect.h"
+	"SDL_surface.h"
+	"SDL_video.h"
+	"begin_code.h"
+	"close_code.h"
+
+1584893389 c:\users\frtst\documents\github\tesseract_main-tesseract_main.r2549\src\include\sdl_system.h
+	"SDL_stdinc.h"
+	"SDL_keyboard.h"
+	"SDL_render.h"
+	"SDL_video.h"
+	"begin_code.h"
+	"close_code.h"
+
+1584893389 c:\users\frtst\documents\github\tesseract_main-tesseract_main.r2549\src\include\sdl_timer.h
+	"SDL_stdinc.h"
+	"SDL_error.h"
+	"begin_code.h"
+	"close_code.h"
+
+1584893389 c:\users\frtst\documents\github\tesseract_main-tesseract_main.r2549\src\include\sdl_version.h
+	"SDL_stdinc.h"
+	"begin_code.h"
+	"close_code.h"
+
+1584893389 c:\users\frtst\documents\github\tesseract_main-tesseract_main.r2549\src\include\sdl_opengl.h
+	"SDL_config.h"
+	"gl_mangle.h"
+	<windows.h>
+	"SDL_opengl_glext.h"
+
+1584893389 c:\users\frtst\documents\github\tesseract_main-tesseract_main.r2549\src\include\sdl_opengl_glext.h
+	<windows.h>
+	<stddef.h>
+	<inttypes.h>
+	<inttypes.h>
+	<inttypes.h>
+	<stdint.h>
+	<stdint.h>
+	<inttypes.h>
+
+1605462377 c:\users\frtst\documents\github\tesseract_main-tesseract_main.r2549\src\enet\include\enet\enet.h
+	<stdlib.h>
+	"enet/win32.h"
+	"enet/unix.h"
+	"enet/types.h"
+	"enet/protocol.h"
+	"enet/list.h"
+	"enet/callbacks.h"
+
+1398323083 c:\users\frtst\documents\github\tesseract_main-tesseract_main.r2549\src\enet\include\enet\win32.h
+	<stdlib.h>
+	<winsock2.h>
+
+1577750855 c:\users\frtst\documents\github\tesseract_main-tesseract_main.r2549\src\enet\include\enet\unix.h
+	<stdlib.h>
+	<sys/time.h>
+	<sys/types.h>
+	<sys/socket.h>
+	<arpa/inet.h>
+	<netinet/in.h>
+	<unistd.h>
+
+1370438864 c:\users\frtst\documents\github\tesseract_main-tesseract_main.r2549\src\enet\include\enet\types.h
+
+1398323083 c:\users\frtst\documents\github\tesseract_main-tesseract_main.r2549\src\enet\include\enet\protocol.h
+	"enet/types.h"
+
+1370438864 c:\users\frtst\documents\github\tesseract_main-tesseract_main.r2549\src\enet\include\enet\list.h
+	<stdlib.h>
+
+1370438864 c:\users\frtst\documents\github\tesseract_main-tesseract_main.r2549\src\enet\include\enet\callbacks.h
+	<stdlib.h>
+
+1370438864 c:\users\frtst\documents\github\tesseract_main-tesseract_main.r2549\src\include\zlib.h
+	"zconf.h"
+
+1370438864 c:\users\frtst\documents\github\tesseract_main-tesseract_main.r2549\src\include\zconf.h
+	<windows.h>
+	<sys/types.h>
+	<unistd.h>
+	<unixio.h>
+
+1675316456 c:\users\frtst\documents\github\tesseract_main-tesseract_main.r2549\src\shared\tools.h
+
+1642133891 c:\users\frtst\documents\github\tesseract_main-tesseract_main.r2549\src\shared\geom.h
+
+1587660950 c:\users\frtst\documents\github\tesseract_main-tesseract_main.r2549\src\shared\ents.h
+
+1675845761 c:\users\frtst\documents\github\tesseract_main-tesseract_main.r2549\src\shared\command.h
+
+1592163785 c:\users\frtst\documents\github\tesseract_main-tesseract_main.r2549\src\shared\glexts.h
+
+1608400521 c:\users\frtst\documents\github\tesseract_main-tesseract_main.r2549\src\shared\glemu.h
+
+1675845761 c:\users\frtst\documents\github\tesseract_main-tesseract_main.r2549\src\shared\iengine.h
+
+1606667565 c:\users\frtst\documents\github\tesseract_main-tesseract_main.r2549\src\shared\igame.h
+
+1401315760 c:\users\frtst\documents\github\tesseract_main-tesseract_main.r2549\src\engine\world.h
+
+1589615018 c:\users\frtst\documents\github\tesseract_main-tesseract_main.r2549\src\engine\octa.h
+
+1590211185 c:\users\frtst\documents\github\tesseract_main-tesseract_main.r2549\src\engine\light.h
+
+1591783940 c:\users\frtst\documents\github\tesseract_main-tesseract_main.r2549\src\engine\texture.h
+
+1522015151 c:\users\frtst\documents\github\tesseract_main-tesseract_main.r2549\src\engine\bih.h
+
+1592863853 c:\users\frtst\documents\github\tesseract_main-tesseract_main.r2549\src\engine\model.h
+
+1605238895 source:c:\users\frtst\documents\github\tesseract_main-tesseract_main.r2549\src\game\game.h
+	"cube.h"
+	"ai.h"
+
+1383659024 c:\users\frtst\documents\github\tesseract_main-tesseract_main.r2549\src\game\ai.h
+
+1606774535 source:c:\users\frtst\documents\github\tesseract_main-tesseract_main.r2549\src\shared\cube.h
+	<math.h>
+	<string.h>
+	<stdio.h>
+	<stdlib.h>
+	<ctype.h>
+	<stdarg.h>
+	<limits.h>
+	<float.h>
+	<assert.h>
+	<time.h>
+	"windows.h"
+	<eh.h>
+	<dbghelp.h>
+	<intrin.h>
+	"SDL.h"
+	<OpenGL/gl.h>
+	<SDL.h>
+	<SDL_opengl.h>
+	<enet/enet.h>
+	<zlib.h>
+	"tools.h"
+	"geom.h"
+	"ents.h"
+	"command.h"
+	"glexts.h"
+	"glemu.h"
+	"iengine.h"
+	"igame.h"
+
+1453794649 source:c:\users\frtst\documents\github\tesseract_main-tesseract_main.r2549\src\engine\aa.cpp
+	"engine.h"
+
+1673925824 c:\users\frtst\documents\github\tesseract_main-tesseract_main.r2549\src\engine\engine.h
+	"cube.h"
+	"world.h"
+	"octa.h"
+	"light.h"
+	"texture.h"
+	"bih.h"
+	"model.h"
+
+1587872867 source:c:\users\frtst\documents\github\tesseract_main-tesseract_main.r2549\src\engine\bih.cpp
+	"engine.h"
+
+1548823692 source:c:\users\frtst\documents\github\tesseract_main-tesseract_main.r2549\src\engine\blend.cpp
+	"engine.h"
+
+1587509979 source:c:\users\frtst\documents\github\tesseract_main-tesseract_main.r2549\src\engine\client.cpp
+	"engine.h"
+
+1676242223 source:c:\users\frtst\documents\github\tesseract_main-tesseract_main.r2549\src\engine\command.cpp
+	"engine.h"
+
+1675660154 source:c:\users\frtst\documents\github\tesseract_main-tesseract_main.r2549\src\engine\console.cpp
+	"engine.h"
+
+1587872867 source:c:\users\frtst\documents\github\tesseract_main-tesseract_main.r2549\src\engine\dynlight.cpp
+	"engine.h"
+
+1590827801 source:c:\users\frtst\documents\github\tesseract_main-tesseract_main.r2549\src\engine\grass.cpp
+	"engine.h"
+
+1590211185 source:c:\users\frtst\documents\github\tesseract_main-tesseract_main.r2549\src\engine\light.cpp
+	"engine.h"
+
+1643043197 source:c:\users\frtst\documents\github\tesseract_main-tesseract_main.r2549\src\engine\main.cpp
+	"engine.h"
+	"SDL_syswm.h"
+
+1584893389 c:\users\frtst\documents\github\tesseract_main-tesseract_main.r2549\src\include\sdl_syswm.h
+	"SDL_stdinc.h"
+	"SDL_error.h"
+	"SDL_video.h"
+	"SDL_version.h"
+	<windows.h>
+	<Inspectable.h>
+	<X11/Xlib.h>
+	<X11/Xatom.h>
+	<directfb.h>
+	<UIKit/UIKit.h>
+	"SDL_egl.h"
+	"begin_code.h"
+	"close_code.h"
+
+1584893389 c:\users\frtst\documents\github\tesseract_main-tesseract_main.r2549\src\include\sdl_egl.h
+	<EGL/egl.h>
+	<EGL/eglext.h>
+	<stdint.h>
+	<inttypes.h>
+	<stdint.h>
+	<windows.h>
+	<Unknwn.h>
+	<mir_toolkit/mir_client_library.h>
+	<X11/Xlib.h>
+	<X11/Xutil.h>
+
+1673925824 source:c:\users\frtst\documents\github\tesseract_main-tesseract_main.r2549\src\engine\material.cpp
+	"engine.h"
+
+1483833125 source:c:\users\frtst\documents\github\tesseract_main-tesseract_main.r2549\src\engine\menus.cpp
+	"engine.h"
+
+1606774535 source:c:\users\frtst\documents\github\tesseract_main-tesseract_main.r2549\src\engine\movie.cpp
+	"engine.h"
+	"SDL_mixer.h"
+
+1577474634 c:\users\frtst\documents\github\tesseract_main-tesseract_main.r2549\src\include\sdl_mixer.h
+	"SDL_stdinc.h"
+	"SDL_rwops.h"
+	"SDL_audio.h"
+	"SDL_endian.h"
+	"SDL_version.h"
+	"begin_code.h"
+	"close_code.h"
+
+1676017680 source:c:\users\frtst\documents\github\tesseract_main-tesseract_main.r2549\src\engine\normal.cpp
+	"engine.h"
+
+1512421897 source:c:\users\frtst\documents\github\tesseract_main-tesseract_main.r2549\src\engine\octa.cpp
+	"engine.h"
+
+1679107064 source:c:\users\frtst\documents\github\tesseract_main-tesseract_main.r2549\src\engine\octaedit.cpp
+	"engine.h"
+
+1589615018 source:c:\users\frtst\documents\github\tesseract_main-tesseract_main.r2549\src\engine\octarender.cpp
+	"engine.h"
+
+1618500107 source:c:\users\frtst\documents\github\tesseract_main-tesseract_main.r2549\src\engine\physics.cpp
+	"engine.h"
+	"mpr.h"
+
+1380010892 c:\users\frtst\documents\github\tesseract_main-tesseract_main.r2549\src\engine\mpr.h
+
+1497818235 source:c:\users\frtst\documents\github\tesseract_main-tesseract_main.r2549\src\engine\pvs.cpp
+	"engine.h"
+
+1674454810 source:c:\users\frtst\documents\github\tesseract_main-tesseract_main.r2549\src\engine\rendergl.cpp
+	"engine.h"
+
+1591907661 source:c:\users\frtst\documents\github\tesseract_main-tesseract_main.r2549\src\engine\renderlights.cpp
+	"engine.h"
+
+1606174473 source:c:\users\frtst\documents\github\tesseract_main-tesseract_main.r2549\src\engine\rendermodel.cpp
+	"engine.h"
+	"ragdoll.h"
+	"animmodel.h"
+	"vertmodel.h"
+	"skelmodel.h"
+	"hitzone.h"
+	"md2.h"
+	"md3.h"
+	"md5.h"
+	"obj.h"
+	"smd.h"
+	"iqm.h"
+
+1418250426 c:\users\frtst\documents\github\tesseract_main-tesseract_main.r2549\src\engine\ragdoll.h
+
+1675845761 c:\users\frtst\documents\github\tesseract_main-tesseract_main.r2549\src\engine\animmodel.h
+
+1587509979 c:\users\frtst\documents\github\tesseract_main-tesseract_main.r2549\src\engine\vertmodel.h
+
+1714928634 c:\users\frtst\documents\github\tesseract_main-tesseract_main.r2549\src\engine\skelmodel.h
+
+1587872867 c:\users\frtst\documents\github\tesseract_main-tesseract_main.r2549\src\engine\hitzone.h
+
+1587509979 c:\users\frtst\documents\github\tesseract_main-tesseract_main.r2549\src\engine\md2.h
+
+1638741829 c:\users\frtst\documents\github\tesseract_main-tesseract_main.r2549\src\engine\md3.h
+
+1620214370 c:\users\frtst\documents\github\tesseract_main-tesseract_main.r2549\src\engine\md5.h
+
+1587509979 c:\users\frtst\documents\github\tesseract_main-tesseract_main.r2549\src\engine\obj.h
+
+1511238946 c:\users\frtst\documents\github\tesseract_main-tesseract_main.r2549\src\engine\smd.h
+
+1587509979 c:\users\frtst\documents\github\tesseract_main-tesseract_main.r2549\src\engine\iqm.h
+
+1453665394 source:c:\users\frtst\documents\github\tesseract_main-tesseract_main.r2549\src\engine\renderparticles.cpp
+	"engine.h"
+	"explosion.h"
+	"lensflare.h"
+	"lightning.h"
+
+1650152048 c:\users\frtst\documents\github\tesseract_main-tesseract_main.r2549\src\engine\explosion.h
+
+1438656441 c:\users\frtst\documents\github\tesseract_main-tesseract_main.r2549\src\engine\lensflare.h
+
+1438656441 c:\users\frtst\documents\github\tesseract_main-tesseract_main.r2549\src\engine\lightning.h
+
+1674464647 source:c:\users\frtst\documents\github\tesseract_main-tesseract_main.r2549\src\engine\rendersky.cpp
+	"engine.h"
+
+1417432489 source:c:\users\frtst\documents\github\tesseract_main-tesseract_main.r2549\src\engine\rendertext.cpp
+	"engine.h"
+
+1598928299 source:c:\users\frtst\documents\github\tesseract_main-tesseract_main.r2549\src\engine\renderva.cpp
+	"engine.h"
+
+1644176851 source:c:\users\frtst\documents\github\tesseract_main-tesseract_main.r2549\src\engine\server.cpp
+	"engine.h"
+	"shellapi.h"
+
+1605225869 source:c:\users\frtst\documents\github\tesseract_main-tesseract_main.r2549\src\engine\serverbrowser.cpp
+	"engine.h"
+
+1591783940 source:c:\users\frtst\documents\github\tesseract_main-tesseract_main.r2549\src\engine\shader.cpp
+	"engine.h"
+
+1651890351 source:c:\users\frtst\documents\github\tesseract_main-tesseract_main.r2549\src\engine\sound.cpp
+	"engine.h"
+	"SDL_mixer.h"
+	<wchar.h>
+	<unistd.h>
+	<sys/types.h>
+	<sys/stat.h>
+	<sys/mman.h>
+	<fcntl.h>
+	<wchar.h>
+
+1471822704 source:c:\users\frtst\documents\github\tesseract_main-tesseract_main.r2549\src\engine\stain.cpp
+	"engine.h"
+
+1676017680 source:c:\users\frtst\documents\github\tesseract_main-tesseract_main.r2549\src\engine\texture.cpp
+	"engine.h"
+	"SDL_image.h"
+
+1577474403 c:\users\frtst\documents\github\tesseract_main-tesseract_main.r2549\src\include\sdl_image.h
+	"SDL.h"
+	"SDL_version.h"
+	"begin_code.h"
+	"close_code.h"
+
+1713806018 source:c:\users\frtst\documents\github\tesseract_main-tesseract_main.r2549\src\engine\ui.cpp
+	"engine.h"
+	"textedit.h"
+
+1580677972 c:\users\frtst\documents\github\tesseract_main-tesseract_main.r2549\src\engine\textedit.h
+
+1606271504 source:c:\users\frtst\documents\github\tesseract_main-tesseract_main.r2549\src\engine\water.cpp
+	"engine.h"
+
+1687738297 source:c:\users\frtst\documents\github\tesseract_main-tesseract_main.r2549\src\engine\world.cpp
+	"engine.h"
+
+1548823692 source:c:\users\frtst\documents\github\tesseract_main-tesseract_main.r2549\src\engine\worldio.cpp
+	"engine.h"
+
+1616370599 source:c:\users\frtst\documents\github\tesseract_main-tesseract_main.r2549\src\game\ai.cpp
+	"game.h"
+
+1605238895 c:\users\frtst\documents\github\tesseract_main-tesseract_main.r2549\src\game\game.h
+	"cube.h"
+	"ai.h"
+
+1676442781 source:c:\users\frtst\documents\github\tesseract_main-tesseract_main.r2549\src\game\client.cpp
+	"game.h"
+	"ctf.h"
+	"ctf.h"
+
+1584489614 c:\users\frtst\documents\github\tesseract_main-tesseract_main.r2549\src\game\ctf.h
+
+1586473530 source:c:\users\frtst\documents\github\tesseract_main-tesseract_main.r2549\src\game\entities.cpp
+	"game.h"
+
+1643390501 source:c:\users\frtst\documents\github\tesseract_main-tesseract_main.r2549\src\game\game.cpp
+	"game.h"
+
+1714928255 source:c:\users\frtst\documents\github\tesseract_main-tesseract_main.r2549\src\game\render.cpp
+	"game.h"
+
+1714567177 source:c:\users\frtst\documents\github\tesseract_main-tesseract_main.r2549\src\game\scoreboard.cpp
+	"game.h"
+
+1644176851 source:c:\users\frtst\documents\github\tesseract_main-tesseract_main.r2549\src\game\server.cpp
+	"game.h"
+	"ctf.h"
+	"ctf.h"
+	"extinfo.h"
+	"aiman.h"
+
+1438988978 c:\users\frtst\documents\github\tesseract_main-tesseract_main.r2549\src\game\extinfo.h
+
+1442597505 c:\users\frtst\documents\github\tesseract_main-tesseract_main.r2549\src\game\aiman.h
+
+1406839679 source:c:\users\frtst\documents\github\tesseract_main-tesseract_main.r2549\src\game\waypoint.cpp
+	"game.h"
+
+1586159772 source:c:\users\frtst\documents\github\tesseract_main-tesseract_main.r2549\src\game\weapon.cpp
+	"game.h"
+
+1620343686 source:c:\users\frtst\documents\github\tesseract_main-tesseract_main.r2549\src\shared\crypto.cpp
+	"cube.h"
+
+1397165862 source:c:\users\frtst\documents\github\tesseract_main-tesseract_main.r2549\src\shared\geom.cpp
+	"cube.h"
+
+1606271504 source:c:\users\frtst\documents\github\tesseract_main-tesseract_main.r2549\src\shared\glemu.cpp
+	"cube.h"
+
+1647547858 source:c:\users\frtst\documents\github\tesseract_main-tesseract_main.r2549\src\shared\stream.cpp
+	"cube.h"
+	<shlobj.h>
+	<unistd.h>
+	<sys/stat.h>
+	<sys/types.h>
+	<dirent.h>
+
+1587659496 source:c:\users\frtst\documents\github\tesseract_main-tesseract_main.r2549\src\shared\tools.cpp
+	"cube.h"
+
+1677430761 source:c:\users\frtst\documents\github\tesseract_main-tesseract_main.r2549\src\shared\zip.cpp
+	"cube.h"
+
+1370438864 source:c:\users\frtst\documents\github\tesseract_main-tesseract_main.r2549\src\vcpp\mingw.rc
+	"tesseract.rc"
+
+1370438864 c:\users\frtst\documents\github\tesseract_main-tesseract_main.r2549\src\vcpp\tesseract.rc
+	"winresrc.h"
+
+1673929424 source:e:\github\hover\src\engine\engine.h
+	"cube.h"
+	"world.h"
+	"octa.h"
+	"light.h"
+	"texture.h"
+	"bih.h"
+	"model.h"
+
+1606778135 e:\github\hover\src\shared\cube.h
+	<math.h>
+	<string.h>
+	<stdio.h>
+	<stdlib.h>
+	<ctype.h>
+	<stdarg.h>
+	<limits.h>
+	<float.h>
+	<assert.h>
+	<time.h>
+	"windows.h"
+	<eh.h>
+	<dbghelp.h>
+	<intrin.h>
+	"SDL.h"
+	<OpenGL/gl.h>
+	<SDL.h>
+	<SDL_opengl.h>
+	<enet/enet.h>
+	<zlib.h>
+	"tools.h"
+	"geom.h"
+	"ents.h"
+	"command.h"
+	"glexts.h"
+	"glemu.h"
+	"iengine.h"
+	"igame.h"
+
+1584896989 e:\github\hover\src\include\sdl.h
+	"SDL_main.h"
+	"SDL_stdinc.h"
+	"SDL_assert.h"
+	"SDL_atomic.h"
+	"SDL_audio.h"
+	"SDL_clipboard.h"
+	"SDL_cpuinfo.h"
+	"SDL_endian.h"
+	"SDL_error.h"
+	"SDL_events.h"
+	"SDL_filesystem.h"
+	"SDL_gamecontroller.h"
+	"SDL_haptic.h"
+	"SDL_hints.h"
+	"SDL_joystick.h"
+	"SDL_loadso.h"
+	"SDL_log.h"
+	"SDL_messagebox.h"
+	"SDL_metal.h"
+	"SDL_mutex.h"
+	"SDL_power.h"
+	"SDL_render.h"
+	"SDL_rwops.h"
+	"SDL_sensor.h"
+	"SDL_shape.h"
+	"SDL_system.h"
+	"SDL_thread.h"
+	"SDL_timer.h"
+	"SDL_version.h"
+	"SDL_video.h"
+	"begin_code.h"
+	"close_code.h"
+
+1584896989 e:\github\hover\src\include\sdl_main.h
+	"SDL_stdinc.h"
+	"begin_code.h"
+	"close_code.h"
+
+1584896989 e:\github\hover\src\include\sdl_stdinc.h
+	"SDL_config.h"
+	<sys/types.h>
+	<stdio.h>
+	<stdlib.h>
+	<stddef.h>
+	<stdarg.h>
+	<stdlib.h>
+	<malloc.h>
+	<stddef.h>
+	<stdarg.h>
+	<memory.h>
+	<string.h>
+	<strings.h>
+	<wchar.h>
+	<inttypes.h>
+	<stdint.h>
+	<ctype.h>
+	<math.h>
+	<float.h>
+	<alloca.h>
+	<malloc.h>
+	<malloc.h>
+	<malloc.h>
+	<stdlib.h>
+	<sal.h>
+	"begin_code.h"
+	"close_code.h"
+
+1584896989 e:\github\hover\src\include\sdl_config.h
+	"SDL_platform.h"
+	"SDL_config_windows.h"
+	"SDL_config_winrt.h"
+	"SDL_config_macosx.h"
+	"SDL_config_iphoneos.h"
+	"SDL_config_android.h"
+	"SDL_config_psp.h"
+	"SDL_config_os2.h"
+	"SDL_config_minimal.h"
+
+1584896989 e:\github\hover\src\include\sdl_platform.h
+	"AvailabilityMacros.h"
+	"TargetConditionals.h"
+	<winapifamily.h>
+	"begin_code.h"
+	"close_code.h"
+
+1584896989 e:\github\hover\src\include\begin_code.h
+
+1584896989 e:\github\hover\src\include\close_code.h
+
+1584896989 e:\github\hover\src\include\sdl_config_windows.h
+	"SDL_platform.h"
+
+1584896989 e:\github\hover\src\include\sdl_config_winrt.h
+	"SDL_platform.h"
+	<sdkddkver.h>
+
+1584896989 e:\github\hover\src\include\sdl_config_macosx.h
+	"SDL_platform.h"
+	<AvailabilityMacros.h>
+
+1584896989 e:\github\hover\src\include\sdl_config_iphoneos.h
+	"SDL_platform.h"
+
+1584896989 e:\github\hover\src\include\sdl_config_android.h
+	"SDL_platform.h"
+	<stdarg.h>
+
+1584896989 e:\github\hover\src\include\sdl_config_psp.h
+	"SDL_platform.h"
+
+1584896989 e:\github\hover\src\include\sdl_config_os2.h
+	"SDL_platform.h"
+
+1584896989 e:\github\hover\src\include\sdl_config_minimal.h
+	"SDL_platform.h"
+
+1584896989 e:\github\hover\src\include\sdl_assert.h
+	"SDL_config.h"
+	"begin_code.h"
+	<signal.h>
+	"close_code.h"
+
+1584896989 e:\github\hover\src\include\sdl_atomic.h
+	"SDL_stdinc.h"
+	"SDL_platform.h"
+	"begin_code.h"
+	<sys/cpuinline.h>
+	<mbarrier.h>
+	"close_code.h"
+
+1584896989 e:\github\hover\src\include\sdl_audio.h
+	"SDL_stdinc.h"
+	"SDL_error.h"
+	"SDL_endian.h"
+	"SDL_mutex.h"
+	"SDL_thread.h"
+	"SDL_rwops.h"
+	"begin_code.h"
+	"close_code.h"
+
+1584896989 e:\github\hover\src\include\sdl_error.h
+	"SDL_stdinc.h"
+	"begin_code.h"
+	"close_code.h"
+
+1584896989 e:\github\hover\src\include\sdl_endian.h
+	"SDL_stdinc.h"
+	<endian.h>
+	<endian.h>
+	"begin_code.h"
+	"close_code.h"
+
+1584896989 e:\github\hover\src\include\sdl_mutex.h
+	"SDL_stdinc.h"
+	"SDL_error.h"
+	"begin_code.h"
+	"close_code.h"
+
+1584896989 e:\github\hover\src\include\sdl_thread.h
+	"SDL_stdinc.h"
+	"SDL_error.h"
+	"SDL_atomic.h"
+	"SDL_mutex.h"
+	"begin_code.h"
+	<process.h>
+	<process.h>
+	<stdlib.h>
+	"close_code.h"
+
+1584896989 e:\github\hover\src\include\sdl_rwops.h
+	"SDL_stdinc.h"
+	"SDL_error.h"
+	"begin_code.h"
+	"close_code.h"
+
+1584896989 e:\github\hover\src\include\sdl_clipboard.h
+	"SDL_stdinc.h"
+	"begin_code.h"
+	"close_code.h"
+
+1584896989 e:\github\hover\src\include\sdl_cpuinfo.h
+	"SDL_stdinc.h"
+	<intrin.h>
+	<intrin.h>
+	<altivec.h>
+	<arm_neon.h>
+	<armintr.h>
+	<arm_neon.h>
+	<arm64intr.h>
+	<arm64_neon.h>
+	<mm3dnow.h>
+	<immintrin.h>
+	<mmintrin.h>
+	<xmmintrin.h>
+	<emmintrin.h>
+	<pmmintrin.h>
+	"begin_code.h"
+	"close_code.h"
+
+1584896989 e:\github\hover\src\include\sdl_events.h
+	"SDL_stdinc.h"
+	"SDL_error.h"
+	"SDL_video.h"
+	"SDL_keyboard.h"
+	"SDL_mouse.h"
+	"SDL_joystick.h"
+	"SDL_gamecontroller.h"
+	"SDL_quit.h"
+	"SDL_gesture.h"
+	"SDL_touch.h"
+	"begin_code.h"
+	"close_code.h"
+
+1584896989 e:\github\hover\src\include\sdl_video.h
+	"SDL_stdinc.h"
+	"SDL_pixels.h"
+	"SDL_rect.h"
+	"SDL_surface.h"
+	"begin_code.h"
+	"close_code.h"
+
+1584896989 e:\github\hover\src\include\sdl_pixels.h
+	"SDL_stdinc.h"
+	"SDL_endian.h"
+	"begin_code.h"
+	"close_code.h"
+
+1584896989 e:\github\hover\src\include\sdl_rect.h
+	"SDL_stdinc.h"
+	"SDL_error.h"
+	"SDL_pixels.h"
+	"SDL_rwops.h"
+	"begin_code.h"
+	"close_code.h"
+
+1584896989 e:\github\hover\src\include\sdl_surface.h
+	"SDL_stdinc.h"
+	"SDL_pixels.h"
+	"SDL_rect.h"
+	"SDL_blendmode.h"
+	"SDL_rwops.h"
+	"begin_code.h"
+	"close_code.h"
+
+1584896989 e:\github\hover\src\include\sdl_blendmode.h
+	"begin_code.h"
+	"close_code.h"
+
+1584896989 e:\github\hover\src\include\sdl_keyboard.h
+	"SDL_stdinc.h"
+	"SDL_error.h"
+	"SDL_keycode.h"
+	"SDL_video.h"
+	"begin_code.h"
+	"close_code.h"
+
+1584896989 e:\github\hover\src\include\sdl_keycode.h
+	"SDL_stdinc.h"
+	"SDL_scancode.h"
+
+1584896989 e:\github\hover\src\include\sdl_scancode.h
+	"SDL_stdinc.h"
+
+1584896989 e:\github\hover\src\include\sdl_mouse.h
+	"SDL_stdinc.h"
+	"SDL_error.h"
+	"SDL_video.h"
+	"begin_code.h"
+	"close_code.h"
+
+1584896989 e:\github\hover\src\include\sdl_joystick.h
+	"SDL_stdinc.h"
+	"SDL_error.h"
+	"begin_code.h"
+	"close_code.h"
+
+1584896989 e:\github\hover\src\include\sdl_gamecontroller.h
+	"SDL_stdinc.h"
+	"SDL_error.h"
+	"SDL_rwops.h"
+	"SDL_joystick.h"
+	"begin_code.h"
+	"close_code.h"
+
+1584896989 e:\github\hover\src\include\sdl_quit.h
+	"SDL_stdinc.h"
+	"SDL_error.h"
+
+1584896989 e:\github\hover\src\include\sdl_gesture.h
+	"SDL_stdinc.h"
+	"SDL_error.h"
+	"SDL_video.h"
+	"SDL_touch.h"
+	"begin_code.h"
+	"close_code.h"
+
+1584896989 e:\github\hover\src\include\sdl_touch.h
+	"SDL_stdinc.h"
+	"SDL_error.h"
+	"SDL_video.h"
+	"begin_code.h"
+	"close_code.h"
+
+1584896989 e:\github\hover\src\include\sdl_filesystem.h
+	"SDL_stdinc.h"
+	"begin_code.h"
+	"close_code.h"
+
+1584896989 e:\github\hover\src\include\sdl_haptic.h
+	"SDL_stdinc.h"
+	"SDL_error.h"
+	"SDL_joystick.h"
+	"begin_code.h"
+	"close_code.h"
+
+1584896989 e:\github\hover\src\include\sdl_hints.h
+	"SDL_stdinc.h"
+	"begin_code.h"
+	"close_code.h"
+
+1584896989 e:\github\hover\src\include\sdl_loadso.h
+	"SDL_stdinc.h"
+	"SDL_error.h"
+	"begin_code.h"
+	"close_code.h"
+
+1584896989 e:\github\hover\src\include\sdl_log.h
+	"SDL_stdinc.h"
+	"begin_code.h"
+	"close_code.h"
+
+1584896989 e:\github\hover\src\include\sdl_messagebox.h
+	"SDL_stdinc.h"
+	"SDL_video.h"
+	"begin_code.h"
+	"close_code.h"
+
+1584897796 e:\github\hover\src\include\sdl_metal.h
+	"SDL_video.h"
+	"begin_code.h"
+	"close_code.h"
+
+1584896989 e:\github\hover\src\include\sdl_power.h
+	"SDL_stdinc.h"
+	"begin_code.h"
+	"close_code.h"
+
+1584896989 e:\github\hover\src\include\sdl_render.h
+	"SDL_stdinc.h"
+	"SDL_rect.h"
+	"SDL_video.h"
+	"begin_code.h"
+	"close_code.h"
+
+1584896989 e:\github\hover\src\include\sdl_sensor.h
+	"SDL_stdinc.h"
+	"SDL_error.h"
+	"begin_code.h"
+	"close_code.h"
+
+1584896989 e:\github\hover\src\include\sdl_shape.h
+	"SDL_stdinc.h"
+	"SDL_pixels.h"
+	"SDL_rect.h"
+	"SDL_surface.h"
+	"SDL_video.h"
+	"begin_code.h"
+	"close_code.h"
+
+1584896989 e:\github\hover\src\include\sdl_system.h
+	"SDL_stdinc.h"
+	"SDL_keyboard.h"
+	"SDL_render.h"
+	"SDL_video.h"
+	"begin_code.h"
+	"close_code.h"
+
+1584896989 e:\github\hover\src\include\sdl_timer.h
+	"SDL_stdinc.h"
+	"SDL_error.h"
+	"begin_code.h"
+	"close_code.h"
+
+1584896989 e:\github\hover\src\include\sdl_version.h
+	"SDL_stdinc.h"
+	"begin_code.h"
+	"close_code.h"
+
+1584896989 e:\github\hover\src\include\sdl_opengl.h
+	"SDL_config.h"
+	"gl_mangle.h"
+	<windows.h>
+	"SDL_opengl_glext.h"
+
+1584896989 e:\github\hover\src\include\sdl_opengl_glext.h
+	<windows.h>
+	<stddef.h>
+	<inttypes.h>
+	<inttypes.h>
+	<inttypes.h>
+	<stdint.h>
+	<stdint.h>
+	<inttypes.h>
+
+1605465977 e:\github\hover\src\enet\include\enet\enet.h
+	<stdlib.h>
+	"enet/win32.h"
+	"enet/unix.h"
+	"enet/types.h"
+	"enet/protocol.h"
+	"enet/list.h"
+	"enet/callbacks.h"
+
+1398326683 e:\github\hover\src\enet\include\enet\win32.h
+	<stdlib.h>
+	<winsock2.h>
+
+1577754455 e:\github\hover\src\enet\include\enet\unix.h
+	<stdlib.h>
+	<sys/time.h>
+	<sys/types.h>
+	<sys/socket.h>
+	<arpa/inet.h>
+	<netinet/in.h>
+	<unistd.h>
+
+1370442464 e:\github\hover\src\enet\include\enet\types.h
+
+1398326683 e:\github\hover\src\enet\include\enet\protocol.h
+	"enet/types.h"
+
+1370442464 e:\github\hover\src\enet\include\enet\list.h
+	<stdlib.h>
+
+1370442464 e:\github\hover\src\enet\include\enet\callbacks.h
+	<stdlib.h>
+
+1370442464 e:\github\hover\src\include\zlib.h
+	"zconf.h"
+
+1370442464 e:\github\hover\src\include\zconf.h
+	<windows.h>
+	<sys/types.h>
+	<unistd.h>
+	<unixio.h>
+
+1675320056 e:\github\hover\src\shared\tools.h
+
+1642137491 e:\github\hover\src\shared\geom.h
+
+1587664550 e:\github\hover\src\shared\ents.h
+
+1675849361 e:\github\hover\src\shared\command.h
+
+1592167385 e:\github\hover\src\shared\glexts.h
+
+1608404121 e:\github\hover\src\shared\glemu.h
+
+1675849361 e:\github\hover\src\shared\iengine.h
+
+1606671165 e:\github\hover\src\shared\igame.h
+
+1401319360 e:\github\hover\src\engine\world.h
+
+1589618618 e:\github\hover\src\engine\octa.h
+
+1590214785 e:\github\hover\src\engine\light.h
+
+1591787540 e:\github\hover\src\engine\texture.h
+
+1522018751 e:\github\hover\src\engine\bih.h
+
+1592867453 e:\github\hover\src\engine\model.h
+
+1606778135 source:e:\github\hover\src\shared\cube.h
+	<math.h>
+	<string.h>
+	<stdio.h>
+	<stdlib.h>
+	<ctype.h>
+	<stdarg.h>
+	<limits.h>
+	<float.h>
+	<assert.h>
+	<time.h>
+	"windows.h"
+	<eh.h>
+	<dbghelp.h>
+	<intrin.h>
+	"SDL.h"
+	<OpenGL/gl.h>
+	<SDL.h>
+	<SDL_opengl.h>
+	<enet/enet.h>
+	<zlib.h>
+	"tools.h"
+	"geom.h"
+	"ents.h"
+	"command.h"
+	"glexts.h"
+	"glemu.h"
+	"iengine.h"
+	"igame.h"
+
+1453798249 source:e:\github\hover\src\engine\aa.cpp
+	"engine.h"
+
+1673929424 e:\github\hover\src\engine\engine.h
+	"cube.h"
+	"world.h"
+	"octa.h"
+	"light.h"
+	"texture.h"
+	"bih.h"
+	"model.h"
+
+1587876467 source:e:\github\hover\src\engine\bih.cpp
+	"engine.h"
+
+1548827292 source:e:\github\hover\src\engine\blend.cpp
+	"engine.h"
+
+1587513579 source:e:\github\hover\src\engine\client.cpp
+	"engine.h"
+
+1676245823 source:e:\github\hover\src\engine\command.cpp
+	"engine.h"
+
+1675663754 source:e:\github\hover\src\engine\console.cpp
+	"engine.h"
+
+1587876467 source:e:\github\hover\src\engine\dynlight.cpp
+	"engine.h"
+
+1590831401 source:e:\github\hover\src\engine\grass.cpp
+	"engine.h"
+
+1590214785 source:e:\github\hover\src\engine\light.cpp
+	"engine.h"
+
+1643046797 source:e:\github\hover\src\engine\main.cpp
+	"engine.h"
+	"SDL_syswm.h"
+
+1584896989 e:\github\hover\src\include\sdl_syswm.h
+	"SDL_stdinc.h"
+	"SDL_error.h"
+	"SDL_video.h"
+	"SDL_version.h"
+	<windows.h>
+	<Inspectable.h>
+	<X11/Xlib.h>
+	<X11/Xatom.h>
+	<directfb.h>
+	<UIKit/UIKit.h>
+	"SDL_egl.h"
+	"begin_code.h"
+	"close_code.h"
+
+1584896989 e:\github\hover\src\include\sdl_egl.h
+	<EGL/egl.h>
+	<EGL/eglext.h>
+	<stdint.h>
+	<inttypes.h>
+	<stdint.h>
+	<windows.h>
+	<Unknwn.h>
+	<mir_toolkit/mir_client_library.h>
+	<X11/Xlib.h>
+	<X11/Xutil.h>
+
+1673929424 source:e:\github\hover\src\engine\material.cpp
+	"engine.h"
+
+1483836725 source:e:\github\hover\src\engine\menus.cpp
+	"engine.h"
+
+1606778135 source:e:\github\hover\src\engine\movie.cpp
+	"engine.h"
+	"SDL_mixer.h"
+
+1577478234 e:\github\hover\src\include\sdl_mixer.h
+	"SDL_stdinc.h"
+	"SDL_rwops.h"
+	"SDL_audio.h"
+	"SDL_endian.h"
+	"SDL_version.h"
+	"begin_code.h"
+	"close_code.h"
+
+1676021280 source:e:\github\hover\src\engine\normal.cpp
+	"engine.h"
+
+1512425497 source:e:\github\hover\src\engine\octa.cpp
+	"engine.h"
+
+1679110664 source:e:\github\hover\src\engine\octaedit.cpp
+	"engine.h"
+
+1589618618 source:e:\github\hover\src\engine\octarender.cpp
+	"engine.h"
+
+1618503707 source:e:\github\hover\src\engine\physics.cpp
+	"engine.h"
+	"mpr.h"
+
+1380014492 e:\github\hover\src\engine\mpr.h
+
+1497821835 source:e:\github\hover\src\engine\pvs.cpp
+	"engine.h"
+
+1674458410 source:e:\github\hover\src\engine\rendergl.cpp
+	"engine.h"
+
+1591911261 source:e:\github\hover\src\engine\renderlights.cpp
+	"engine.h"
+
+1606178073 source:e:\github\hover\src\engine\rendermodel.cpp
+	"engine.h"
+	"ragdoll.h"
+	"animmodel.h"
+	"vertmodel.h"
+	"skelmodel.h"
+	"hitzone.h"
+	"md2.h"
+	"md3.h"
+	"md5.h"
+	"obj.h"
+	"smd.h"
+	"iqm.h"
+
+1418254026 e:\github\hover\src\engine\ragdoll.h
+
+1675849361 e:\github\hover\src\engine\animmodel.h
+
+1587513579 e:\github\hover\src\engine\vertmodel.h
+
+1714932234 e:\github\hover\src\engine\skelmodel.h
+
+1587876467 e:\github\hover\src\engine\hitzone.h
+
+1587513579 e:\github\hover\src\engine\md2.h
+
+1638745429 e:\github\hover\src\engine\md3.h
+
+1620217970 e:\github\hover\src\engine\md5.h
+
+1587513579 e:\github\hover\src\engine\obj.h
+
+1511242546 e:\github\hover\src\engine\smd.h
+
+1587513579 e:\github\hover\src\engine\iqm.h
+
+1453668994 source:e:\github\hover\src\engine\renderparticles.cpp
+	"engine.h"
+	"explosion.h"
+	"lensflare.h"
+	"lightning.h"
+
+1650155648 e:\github\hover\src\engine\explosion.h
+
+1438660041 e:\github\hover\src\engine\lensflare.h
+
+1438660041 e:\github\hover\src\engine\lightning.h
+
+1674468247 source:e:\github\hover\src\engine\rendersky.cpp
+	"engine.h"
+
+1417436089 source:e:\github\hover\src\engine\rendertext.cpp
+	"engine.h"
+
+1598931899 source:e:\github\hover\src\engine\renderva.cpp
+	"engine.h"
+
+1644180451 source:e:\github\hover\src\engine\server.cpp
+	"engine.h"
+	"shellapi.h"
+
+1605229469 source:e:\github\hover\src\engine\serverbrowser.cpp
+	"engine.h"
+
+1591787540 source:e:\github\hover\src\engine\shader.cpp
+	"engine.h"
+
+1651893951 source:e:\github\hover\src\engine\sound.cpp
+	"engine.h"
+	"SDL_mixer.h"
+	<wchar.h>
+	<unistd.h>
+	<sys/types.h>
+	<sys/stat.h>
+	<sys/mman.h>
+	<fcntl.h>
+	<wchar.h>
+
+1471826304 source:e:\github\hover\src\engine\stain.cpp
+	"engine.h"
+
+1676021280 source:e:\github\hover\src\engine\texture.cpp
+	"engine.h"
+	"SDL_image.h"
+
+1577478003 e:\github\hover\src\include\sdl_image.h
+	"SDL.h"
+	"SDL_version.h"
+	"begin_code.h"
+	"close_code.h"
+
+1713809618 source:e:\github\hover\src\engine\ui.cpp
+	"engine.h"
+	"textedit.h"
+
+1580681572 e:\github\hover\src\engine\textedit.h
+
+1606275104 source:e:\github\hover\src\engine\water.cpp
+	"engine.h"
+
+1687741897 source:e:\github\hover\src\engine\world.cpp
+	"engine.h"
+
+1548827292 source:e:\github\hover\src\engine\worldio.cpp
+	"engine.h"
+
+1620347286 source:e:\github\hover\src\shared\crypto.cpp
+	"cube.h"
+
+1397169462 source:e:\github\hover\src\shared\geom.cpp
+	"cube.h"
+
+1606275104 source:e:\github\hover\src\shared\glemu.cpp
+	"cube.h"
+
+1647551458 source:e:\github\hover\src\shared\stream.cpp
+	"cube.h"
+	<shlobj.h>
+	<unistd.h>
+	<sys/stat.h>
+	<sys/types.h>
+	<dirent.h>
+
+1587663096 source:e:\github\hover\src\shared\tools.cpp
+	"cube.h"
+
+1677434361 source:e:\github\hover\src\shared\zip.cpp
+	"cube.h"
+
+1370442464 source:e:\github\hover\src\vcpp\mingw.rc
+	"tesseract.rc"
+
+1370442464 e:\github\hover\src\vcpp\tesseract.rc
+	"winresrc.h"
+
+1777383240 source:e:\github\hover\src\game\game.h
+	"cube.h"
+
+1777383169 source:e:\github\hover\src\game\client.cpp
+	"game.h"
+
+1777383240 e:\github\hover\src\game\game.h
+	"cube.h"
+
+1777383169 source:e:\github\hover\src\game\entities.cpp
+	"game.h"
+
+1777383169 source:e:\github\hover\src\game\server.cpp
+	"game.h"
+
+1777386515 source:e:\github\hover\src\game\game.cpp
+	"game.h"
+
