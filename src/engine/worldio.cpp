@@ -156,10 +156,14 @@ enum
     WORLD_CHUNK_SLICES = WORLD_MAP_SIZE / WORLD_CHUNK_SIZE,
     WORLD_GROUND_HEIGHT = -WORLD_MIN_HEIGHT * WORLD_BLOCK_SIZE,
     WORLD_DIRT_DEPTH = 4 * WORLD_BLOCK_SIZE,
-    WORLD_MAX_CHUNKS_PER_SIDE = 64
+    WORLD_RUNTIME_SCALE = 16,
+    WORLD_RUNTIME_SIZE = 1 << WORLD_RUNTIME_SCALE,
+    WORLD_RUNTIME_CHUNKS = WORLD_RUNTIME_SIZE / WORLD_CHUNK_SIZE,
+    WORLD_RUNTIME_CENTER = WORLD_RUNTIME_CHUNKS / 2,
+    WORLD_MAX_CHUNK_DIST = WORLD_RUNTIME_CENTER - 1
 };
 
-VARP(maxchunkdist, 0, 2, WORLD_MAX_CHUNKS_PER_SIDE);
+VARP(maxchunkdist, 0, 2, WORLD_MAX_CHUNK_DIST);
 VARP(worldseed, 0, 1337, INT_MAX);
 
 static int activeworldseed = 1337;
@@ -303,10 +307,16 @@ struct worldchunk
 static vector<worldchunk> worldchunks;
 static string worldfolder = "";
 static int activeworldchunk = -1;
-static int worldchunksperaxis = 0;
 static int worldfirstchunkx = 0, worldfirstchunky = 0;
 static int lastplayerchunkx = INT_MIN, lastplayerchunky = INT_MIN, lastchunkdist = -1;
 static bool rebuildingworldchunks = false;
+
+static cube *generateworldchunk(int chunkx, int chunky);
+static cube *loadworldchunkroot(const char *mname);
+static bool saveworldchunk(worldchunk &chunk);
+static bool saveworldconfig();
+static void worldchunkname(char *name, size_t len, const worldchunk &chunk);
+void setmapfilenames(const char *fname, const char *cname);
 
 void clearworldchunks()
 {
@@ -315,7 +325,6 @@ void clearworldchunks()
     worldchunks.setsize(0);
     worldfolder[0] = '\0';
     activeworldchunk = -1;
-    worldchunksperaxis = 0;
     worldfirstchunkx = worldfirstchunky = 0;
     lastplayerchunkx = lastplayerchunky = INT_MIN;
     lastchunkdist = -1;
@@ -444,23 +453,68 @@ static void invalidateworldchunk(const worldchunk &chunk)
     changed(bbmin, bbmax, false);
 }
 
-static int worldmapscale(int chunksx, int chunksy)
+static int findworldchunk(int x, int y)
 {
-    int scale = WORLD_CHUNK_SCALE,
-        span = max(int(WORLD_MAP_SIZE), max(chunksx, chunksy) * WORLD_CHUNK_SIZE);
-    while((1 << scale) < span) ++scale;
-    return scale;
+    loopv(worldchunks) if(worldchunks[i].x == x && worldchunks[i].y == y) return i;
+    return -1;
+}
+
+static bool worldchunkinview(const worldchunk &chunk, int chunkx, int chunky)
+{
+    return abs(chunk.x - chunkx) <= maxchunkdist && abs(chunk.y - chunky) <= maxchunkdist;
+}
+
+static int acquireworldchunk(int x, int y, int &generated)
+{
+    int index = findworldchunk(x, y);
+    if(index >= 0) return index;
+
+    defformatstring(chunkname, "%s/%d_%d", worldfolder, x, y);
+    defformatstring(chunkfile, "media/map/%s.ogz", chunkname);
+    path(chunkfile);
+    cube *root = fileexists(chunkfile, "r") ? loadworldchunkroot(chunkname) : NULL;
+    if(!root)
+    {
+        root = generateworldchunk(x, y);
+        generated++;
+    }
+    worldchunks.add(worldchunk(x, y, root));
+    return worldchunks.length() - 1;
+}
+
+static void rebaseworldchunks(int chunkx, int chunky)
+{
+    loopv(worldchunks) if(worldchunks[i].mounted) unmountworldchunk(worldchunks[i]);
+
+    int newfirstx = chunkx - WORLD_RUNTIME_CENTER,
+        newfirsty = chunky - WORLD_RUNTIME_CENTER,
+        shiftx = (newfirstx - worldfirstchunkx) * WORLD_CHUNK_SIZE,
+        shifty = (newfirsty - worldfirstchunky) * WORLD_CHUNK_SIZE;
+    freeocta(worldroot);
+    worldroot = newcubes(F_EMPTY);
+    worldfirstchunkx = newfirstx;
+    worldfirstchunky = newfirsty;
+    if(player)
+    {
+        player->o.x -= shiftx;
+        player->o.y -= shifty;
+    }
+    conoutf(CON_DEBUG, "rebased chunk window around %d_%d", chunkx, chunky);
 }
 
 static void rebuildworldchunks(int chunkx, int chunky, bool load, bool updategeometry)
 {
     rebuildingworldchunks = true;
+    int generated = 0;
+    for(int y = chunky - maxchunkdist; y <= chunky + maxchunkdist; ++y)
+    for(int x = chunkx - maxchunkdist; x <= chunkx + maxchunkdist; ++x)
+        acquireworldchunk(x, y, generated);
+
     vector<int> entering, leaving;
     loopv(worldchunks)
     {
         worldchunk &chunk = worldchunks[i];
-        bool shouldmount = abs(chunk.x - chunkx) <= maxchunkdist &&
-                           abs(chunk.y - chunky) <= maxchunkdist;
+        bool shouldmount = worldchunkinview(chunk, chunkx, chunky);
         if(chunk.mounted && !shouldmount) leaving.add(i);
         else if(!chunk.mounted && shouldmount) entering.add(i);
     }
@@ -483,26 +537,52 @@ static void rebuildworldchunks(int chunkx, int chunky, bool load, bool updategeo
         }
     }
 
+    int evicted = 0, evicting = 0;
+    loopv(worldchunks) if(!worldchunkinview(worldchunks[i], chunkx, chunky)) evicting++;
+    if(evicting) saveworldconfig();
+    for(int i = worldchunks.length() - 1; i >= 0; --i) if(!worldchunkinview(worldchunks[i], chunkx, chunky))
+    {
+        worldchunk &chunk = worldchunks[i];
+        if(chunk.mounted) unmountworldchunk(chunk);
+        if(!saveworldchunk(chunk)) continue;
+        freeocta(chunk.root);
+        worldchunks.removeunordered(i);
+        evicted++;
+    }
+    activeworldchunk = findworldchunk(chunkx, chunky);
+    if(worldchunks.inrange(activeworldchunk))
+    {
+        string name;
+        worldchunkname(name, sizeof(name), worldchunks[activeworldchunk]);
+        setmapfilenames(name, NULL);
+    }
+
     int mounted = 0;
     loopv(worldchunks) if(worldchunks[i].mounted) mounted++;
     rebuildingworldchunks = false;
-    conoutf(CON_DEBUG, "chunk view %d_%d: +%d -%d, %d mounted (maxchunkdist %d)",
-            chunkx, chunky, entering.length(), leaving.length(), mounted, maxchunkdist);
+    conoutf(CON_DEBUG, "chunk view %d_%d: +%d -%d, %d generated, %d evicted, %d mounted (maxchunkdist %d)",
+            chunkx, chunky, entering.length(), leaving.length(), generated, evicted, mounted, maxchunkdist);
 }
 
 void updateworldchunks(bool force)
 {
     if(worldchunks.empty() || rebuildingworldchunks || !worldroot) return;
 
-    int chunkx = worldfirstchunkx, chunky = worldfirstchunky;
+    int localchunkx = 0, localchunky = 0;
     if(player)
     {
-        chunkx += int(floor(player->o.x / WORLD_CHUNK_SIZE));
-        chunky += int(floor(player->o.y / WORLD_CHUNK_SIZE));
+        localchunkx = int(floor(player->o.x / WORLD_CHUNK_SIZE));
+        localchunky = int(floor(player->o.y / WORLD_CHUNK_SIZE));
     }
+    int chunkx = worldfirstchunkx + localchunkx,
+        chunky = worldfirstchunky + localchunky;
     if(!force && chunkx == lastplayerchunkx && chunky == lastplayerchunky && maxchunkdist == lastchunkdist)
         return;
-    rebuildworldchunks(chunkx, chunky, force, true);
+
+    bool rebase = localchunkx - maxchunkdist < 0 || localchunkx + maxchunkdist >= WORLD_RUNTIME_CHUNKS ||
+                  localchunky - maxchunkdist < 0 || localchunky + maxchunkdist >= WORLD_RUNTIME_CHUNKS;
+    if(rebase) rebaseworldchunks(chunkx, chunky);
+    rebuildworldchunks(chunkx, chunky, force || rebase, true);
 }
 
 static void setworldcubetexture(cube &c, int texture, int toptexture = -1)
@@ -1060,37 +1140,10 @@ static bool loadworldchunks(const char *mname)
     activeworldchunk = 0;
     worldchunks.add(worldchunk(currentx, currenty, currentroot));
 
-    int minx = currentx, maxx = currentx, miny = currenty, maxy = currenty;
-    defformatstring(dirname, "media/map/%s", worldfolder);
-    vector<char *> files;
-    listfiles(dirname, "ogz", files);
-    files.sort();
-    files.uniquedeletearrays();
-    loopv(files)
-    {
-        int x, y;
-        if(!chunkcoords(files[i], x, y) || (x == currentx && y == currenty)) continue;
-        if(worldchunks.length() >= WORLD_MAX_CHUNKS_PER_SIDE * WORLD_MAX_CHUNKS_PER_SIDE) break;
-        defformatstring(chunkname, "%s/%s", worldfolder, files[i]);
-        cube *root = loadworldchunkroot(chunkname);
-        if(!root)
-        {
-            conoutf(CON_WARN, "could not load world chunk %s", chunkname);
-            continue;
-        }
-        worldchunks.add(worldchunk(x, y, root));
-        minx = min(minx, x); maxx = max(maxx, x);
-        miny = min(miny, y); maxy = max(maxy, y);
-    }
-    files.deletearrays();
-
-    worldfirstchunkx = minx;
-    worldfirstchunky = miny;
-    int chunksx = maxx - minx + 1, chunksy = maxy - miny + 1;
-    worldchunksperaxis = max(chunksx, chunksy);
-    const int scale = worldmapscale(chunksx, chunksy);
-    setvar("mapscale", scale, true, false);
-    setvar("mapsize", 1 << scale, true, false);
+    worldfirstchunkx = currentx - WORLD_RUNTIME_CENTER;
+    worldfirstchunky = currenty - WORLD_RUNTIME_CENTER;
+    setvar("mapscale", WORLD_RUNTIME_SCALE, true, false);
+    setvar("mapsize", WORLD_RUNTIME_SIZE, true, false);
     worldroot = newcubes(F_EMPTY);
     if(player)
     {
@@ -1099,7 +1152,7 @@ static bool loadworldchunks(const char *mname)
                         WORLD_GROUND_HEIGHT + player->eyeheight + 1);
     }
     rebuildworldchunks(currentx, currenty, true, false);
-    conoutf("loaded %d chunks for world %s", worldchunks.length(), worldfolder);
+    conoutf("loaded infinite world %s around chunk %d_%d", worldfolder, currentx, currenty);
     return true;
 }
 
@@ -1355,6 +1408,38 @@ bool save_world(const char *mname, bool nolms)
     return true;
 }
 
+static bool saveworldchunkconfig(const worldchunk &chunk)
+{
+    defformatstring(chunkcfg, "media/map/%s/%d_%d.cfg", worldfolder, chunk.x, chunk.y);
+    stream *f = openfile(path(chunkcfg), "w");
+    if(!f)
+    {
+        conoutf(CON_WARN, "could not write chunk configuration to %s", chunkcfg);
+        return false;
+    }
+    f->printf("exec \"media/map/%s/world.cfg\"\n", worldfolder);
+    delete f;
+    return true;
+}
+
+static bool saveworldchunk(worldchunk &chunk)
+{
+    cube *runtimeroot = worldroot;
+    const int runtimescale = worldscale, runtimesize = worldsize, oldsavebak = savebak;
+    worldroot = chunk.root;
+    setvar("mapscale", WORLD_CHUNK_SCALE, true, false);
+    setvar("mapsize", WORLD_CHUNK_MAP_SIZE, true, false);
+    savebak = 0;
+    string name;
+    worldchunkname(name, sizeof(name), chunk);
+    bool saved = save_world(name, true);
+    savebak = oldsavebak;
+    worldroot = runtimeroot;
+    setvar("mapscale", runtimescale, true, false);
+    setvar("mapsize", runtimesize, true, false);
+    return saved && saveworldchunkconfig(chunk);
+}
+
 static bool saveworldconfig()
 {
     defformatstring(name, "media/map/%s/world.cfg", worldfolder);
@@ -1373,48 +1458,28 @@ static bool saveworldconfig()
         "worldloadseed %d\n"
         "worldminheight = %d\n"
         "worldmaxheight = %d\n"
-        "worldchunksperaxis = %d\n"
-        "worldchunkcount = %d\n\n"
+        "worldinfinite = 1\n\n"
         "terrainload\n",
         WORLD_GROUND_HEIGHT, WORLD_CHUNK_BLOCKS, WORLD_GRID_POWER, WORLD_BLOCK_SIZE, activeworldseed,
-        WORLD_MIN_HEIGHT, WORLD_MAX_HEIGHT, worldchunksperaxis, worldchunks.length()
+        WORLD_MIN_HEIGHT, WORLD_MAX_HEIGHT
     );
     delete f;
 
-    loopv(worldchunks)
-    {
-        defformatstring(chunkcfg, "media/map/%s/%d_%d.cfg", worldfolder,
-                        worldchunks[i].x, worldchunks[i].y);
-        f = openfile(path(chunkcfg), "w");
-        if(!f)
-        {
-            conoutf(CON_WARN, "could not write chunk configuration to %s", chunkcfg);
-            return false;
-        }
-        f->printf("exec \"media/map/%s/world.cfg\"\n", worldfolder);
-        delete f;
-    }
+    loopv(worldchunks) if(!saveworldchunkconfig(worldchunks[i])) return false;
 
     return true;
 }
 
-static void createworld(int chunksperaxis, const char *requestedname)
+static void createworld(const char *requestedname)
 {
-    if(chunksperaxis < 1 || chunksperaxis > WORLD_MAX_CHUNKS_PER_SIDE)
-    {
-        conoutf(CON_ERROR, "newworld size must be between 1 and %d chunks", WORLD_MAX_CHUNKS_PER_SIDE);
-        return;
-    }
-
     chooseworldfolder(requestedname);
     string chosenfolder, activechunkname;
     copystring(chosenfolder, worldfolder);
     formatstring(activechunkname, "%s/0_0", chosenfolder);
 
-    if(!emptymap(WORLD_CHUNK_SCALE, true, activechunkname)) return;
+    if(!emptymap(WORLD_RUNTIME_SCALE, true, activechunkname)) return;
     copystring(worldfolder, chosenfolder);
-    worldchunksperaxis = chunksperaxis;
-    worldfirstchunkx = worldfirstchunky = -(chunksperaxis / 2);
+    worldfirstchunkx = worldfirstchunky = -WORLD_RUNTIME_CENTER;
     if(!loadterrain()) return;
     loadworldseed(worldseed);
 
@@ -1423,16 +1488,8 @@ static void createworld(int chunksperaxis, const char *requestedname)
     activeworldchunk = worldchunks.length();
     worldchunks.add(worldchunk(0, 0, generateworldchunk(0, 0)));
 
-    for(int y = worldfirstchunky; y < worldfirstchunky + chunksperaxis; ++y)
-    for(int x = worldfirstchunkx; x < worldfirstchunkx + chunksperaxis; ++x)
-    {
-        if(!x && !y) continue;
-        worldchunks.add(worldchunk(x, y, generateworldchunk(x, y)));
-    }
-
-    const int scale = worldmapscale(chunksperaxis, chunksperaxis);
-    setvar("mapscale", scale, true, false);
-    setvar("mapsize", 1 << scale, true, false);
+    setvar("mapscale", WORLD_RUNTIME_SCALE, true, false);
+    setvar("mapsize", WORLD_RUNTIME_SIZE, true, false);
     worldroot = newcubes(F_EMPTY);
     if(player)
     {
@@ -1443,14 +1500,22 @@ static void createworld(int chunksperaxis, const char *requestedname)
     updateworldchunks(true);
     if(player) entinmap(player);
 
-    conoutf("generated world %s: %d x %d chunks (%d total)",
-            worldfolder, chunksperaxis, chunksperaxis, worldchunks.length());
-    conoutf("use saveworld to write media/map/%s/<x>_<y>.ogz", worldfolder);
+    conoutf("generated infinite world %s with %d visible chunks", worldfolder, worldchunks.length());
+    conoutf("new chunks are generated on demand; use saveworld to write resident chunks");
 }
 
-ICOMMAND(newworld, "isN", (int *size, char *name, int *numargs),
+ICOMMAND(newworld, "ssN", (char *arg1, char *arg2, int *numargs),
 {
-    createworld(*size, *numargs > 1 ? name : NULL);
+    const char *name = NULL;
+    if(*numargs > 1) name = arg2;
+    else if(*numargs > 0)
+    {
+        char *end = NULL;
+        strtol(arg1, &end, 10);
+        if(end == arg1 || *end) name = arg1;
+        else conoutf(CON_WARN, "newworld size is no longer used; the world expands on demand");
+    }
+    createworld(name);
 });
 
 void saveworld()
