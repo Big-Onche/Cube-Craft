@@ -1,5 +1,6 @@
 // worldio.cpp: loading & saving of maps and savegames
 
+#include "FastNoiseLite.h"
 #include "engine.h"
 
 void validmapname(char *dst, const char *src, const char *prefix = NULL, const char *alt = "untitled", size_t maxlen = 100)
@@ -157,6 +158,38 @@ enum
 };
 
 VARP(maxchunkdist, 0, 2, WORLD_MAX_CHUNKS_PER_SIDE);
+VARP(worldseed, 0, 1337, INT_MAX);
+
+static int activeworldseed = 1337;
+static FastNoiseLite worldcontinentnoise, worlddetailnoise;
+
+static void setupworldnoise(int seed)
+{
+    worldcontinentnoise.SetSeed(seed);
+    worldcontinentnoise.SetNoiseType(FastNoiseLite::NoiseType_OpenSimplex2S);
+    worldcontinentnoise.SetFrequency(0.004f);
+    worldcontinentnoise.SetFractalType(FastNoiseLite::FractalType_FBm);
+    worldcontinentnoise.SetFractalOctaves(3);
+    worldcontinentnoise.SetFractalLacunarity(2.0f);
+    worldcontinentnoise.SetFractalGain(0.5f);
+
+    worlddetailnoise.SetSeed(seed ^ 0x5BD1E995);
+    worlddetailnoise.SetNoiseType(FastNoiseLite::NoiseType_OpenSimplex2S);
+    worlddetailnoise.SetFrequency(0.018f);
+    worlddetailnoise.SetFractalType(FastNoiseLite::FractalType_FBm);
+    worlddetailnoise.SetFractalOctaves(4);
+    worlddetailnoise.SetFractalLacunarity(2.0f);
+    worlddetailnoise.SetFractalGain(0.5f);
+}
+
+static void loadworldseed(int seed)
+{
+    worldseed = max(seed, 0);
+    activeworldseed = worldseed;
+    setupworldnoise(activeworldseed);
+}
+
+ICOMMAND(worldloadseed, "i", (int *seed), loadworldseed(*seed));
 
 struct terraincubetype
 {
@@ -400,33 +433,70 @@ void updateworldchunks(bool force)
 static void setworldcubetexture(cube &c, int texture, int toptexture = -1)
 {
     solidfaces(c);
+    c.material = MAT_AIR;
     loopi(6) c.texture[i] = texture;
     if(toptexture >= 0) c.texture[O_TOP] = toptexture;
 }
 
-enum { WORLD_EMPTY, WORLD_STONE, WORLD_DIRT, WORLD_GRASS, WORLD_MIXED };
-
-static int worldcubetype(const ivec &o, int size)
+static void setworldcubematerial(cube &c, int material)
 {
-    if(o.x >= WORLD_CHUNK_SIZE || o.y >= WORLD_CHUNK_SIZE || o.z >= WORLD_GROUND_HEIGHT)
-        return WORLD_EMPTY;
-    if(o.x + size > WORLD_CHUNK_SIZE || o.y + size > WORLD_CHUNK_SIZE)
-        return WORLD_MIXED;
+    emptyfaces(c);
+    c.material = material;
+}
 
-    const int dirtbottom = WORLD_GROUND_HEIGHT - WORLD_BLOCK_SIZE - WORLD_DIRT_DEPTH,
-              grasbottom = WORLD_GROUND_HEIGHT - WORLD_BLOCK_SIZE;
-    if(o.z + size <= dirtbottom) return WORLD_STONE;
-    if(o.z >= dirtbottom && o.z + size <= grasbottom) return WORLD_DIRT;
-    if(o.z >= grasbottom && o.z + size <= WORLD_GROUND_HEIGHT) return WORLD_GRASS;
+enum { WORLD_EMPTY, WORLD_STONE, WORLD_DIRT, WORLD_GRASS, WORLD_WATER, WORLD_MIXED };
+
+static int worldterrainheight(int chunkx, int chunky, int localx, int localy)
+{
+    const float blockx = float(chunkx * WORLD_CHUNK_BLOCKS + localx / WORLD_BLOCK_SIZE) + 10000.5f,
+                blocky = float(chunky * WORLD_CHUNK_BLOCKS + localy / WORLD_BLOCK_SIZE) - 10000.5f,
+                continental = worldcontinentnoise.GetNoise(blockx, blocky),
+                detail = worlddetailnoise.GetNoise(blockx, blocky);
+    float hillmask = clamp((continental - 0.05f) / 0.5f, 0.0f, 1.0f);
+    hillmask = hillmask * hillmask * (3.0f - 2.0f * hillmask);
+    const float height = continental * 9.0f - 0.5f + detail * (1.75f + 8.0f * hillmask);
+    return clamp(int(floor(height + 0.5f)), -14, 14) * WORLD_BLOCK_SIZE;
+}
+
+static int worldcolumncubetype(int z, int size, int height)
+{
+    const int surface = WORLD_GROUND_HEIGHT + height,
+              watertop = WORLD_GROUND_HEIGHT,
+              dirtbottom = surface - WORLD_BLOCK_SIZE - WORLD_DIRT_DEPTH,
+              grassbottom = surface - WORLD_BLOCK_SIZE;
+
+    if(z >= max(surface, watertop)) return WORLD_EMPTY;
+    if(surface < watertop && z >= surface && z + size <= watertop) return WORLD_WATER;
+    if(z + size <= dirtbottom) return WORLD_STONE;
+    if(z >= dirtbottom && z + size <= grassbottom) return WORLD_DIRT;
+    if(z >= grassbottom && z + size <= surface) return WORLD_GRASS;
     return WORLD_MIXED;
 }
 
-static void generateworldcube(cube &c, const ivec &o, int size)
+static int worldcubetype(const ivec &o, int size, int chunkx, int chunky)
 {
-    switch(worldcubetype(o, size))
+    if(o.x >= WORLD_CHUNK_SIZE || o.y >= WORLD_CHUNK_SIZE || o.z >= WORLD_MAP_SIZE)
+        return WORLD_EMPTY;
+    if(o.x + size > WORLD_CHUNK_SIZE || o.y + size > WORLD_CHUNK_SIZE || o.z + size > WORLD_MAP_SIZE)
+        return WORLD_MIXED;
+
+    int type = -1;
+    for(int y = o.y; y < o.y + size; y += WORLD_BLOCK_SIZE)
+    for(int x = o.x; x < o.x + size; x += WORLD_BLOCK_SIZE)
+    {
+        int columntype = worldcolumncubetype(o.z, size, worldterrainheight(chunkx, chunky, x, y));
+        if(columntype == WORLD_MIXED || (type >= 0 && type != columntype)) return WORLD_MIXED;
+        type = columntype;
+    }
+    return type;
+}
+
+static void generateworldcube(cube &c, const ivec &o, int size, int chunkx, int chunky)
+{
+    switch(worldcubetype(o, size, chunkx, chunky))
     {
         case WORLD_EMPTY:
-            emptyfaces(c);
+            setworldcubematerial(c, MAT_AIR);
             return;
 
         case WORLD_STONE:
@@ -440,24 +510,28 @@ static void generateworldcube(cube &c, const ivec &o, int size)
         case WORLD_GRASS:
             setworldcubetexture(c, worldgrasssidetexture, worldgrasstexture);
             return;
+
+        case WORLD_WATER:
+            setworldcubematerial(c, MAT_WATER);
+            return;
     }
 
     if(size <= WORLD_BLOCK_SIZE)
     {
-        emptyfaces(c);
+        setworldcubematerial(c, MAT_AIR);
         return;
     }
 
     c.children = newcubes(F_EMPTY);
     const int childsize = size >> 1;
-    loopi(8) generateworldcube(c.children[i], ivec(i, o, childsize), childsize);
+    loopi(8) generateworldcube(c.children[i], ivec(i, o, childsize), childsize, chunkx, chunky);
 }
 
-static cube *generateworldchunk()
+static cube *generateworldchunk(int chunkx, int chunky)
 {
     cube *root = newcubes(F_EMPTY);
     const int rootsize = WORLD_CHUNK_ROOT_SIZE;
-    loopi(8) generateworldcube(root[i], ivec(i, ivec(0, 0, 0), rootsize), rootsize);
+    loopi(8) generateworldcube(root[i], ivec(i, ivec(0, 0, 0), rootsize), rootsize, chunkx, chunky);
     return root;
 }
 
@@ -1221,12 +1295,13 @@ static bool saveworldconfig()
         "worldchunksize = %d\n"
         "worldgridpower = %d\n"
         "worldblocksize = %d\n"
+        "worldloadseed %d\n"
         "worldminheight = %d\n"
         "worldmaxheight = %d\n"
         "worldchunksperaxis = %d\n"
         "worldchunkcount = %d\n\n"
         "terrainload\n",
-        WORLD_GROUND_HEIGHT, WORLD_CHUNK_BLOCKS, WORLD_GRID_POWER, WORLD_BLOCK_SIZE,
+        WORLD_GROUND_HEIGHT, WORLD_CHUNK_BLOCKS, WORLD_GRID_POWER, WORLD_BLOCK_SIZE, activeworldseed,
         WORLD_MIN_HEIGHT, WORLD_MAX_HEIGHT, worldchunksperaxis, worldchunks.length()
     );
     delete f;
@@ -1266,17 +1341,18 @@ static void createworld(int chunksperaxis, const char *requestedname)
     worldchunksperaxis = chunksperaxis;
     worldfirstchunkx = worldfirstchunky = -(chunksperaxis / 2);
     if(!loadterrain()) return;
+    loadworldseed(worldseed);
 
     freeocta(worldroot);
     worldroot = NULL;
     activeworldchunk = worldchunks.length();
-    worldchunks.add(worldchunk(0, 0, generateworldchunk()));
+    worldchunks.add(worldchunk(0, 0, generateworldchunk(0, 0)));
 
     for(int y = worldfirstchunky; y < worldfirstchunky + chunksperaxis; ++y)
     for(int x = worldfirstchunkx; x < worldfirstchunkx + chunksperaxis; ++x)
     {
         if(!x && !y) continue;
-        worldchunks.add(worldchunk(x, y, generateworldchunk()));
+        worldchunks.add(worldchunk(x, y, generateworldchunk(x, y)));
     }
 
     const int scale = worldmapscale(chunksperaxis, chunksperaxis);
