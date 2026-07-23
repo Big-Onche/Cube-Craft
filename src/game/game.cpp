@@ -573,6 +573,7 @@ namespace game
     ICOMMAND(scoreboardpj, "i", (int *cn), intret(0));
     ICOMMAND(scoreboardping, "i", (int *cn), intret(player1 ? player1->ping : 0));
     ICOMMAND(scoreboardstatus, "i", (int *cn), intret(0xFFFFFF));
+    ICOMMAND(scoreboardmultiplayer, "", (), intret(multiplayer(false)));
 #endif
 }
 

@@ -209,6 +209,29 @@ FVAR(terrainplainstreedensity, 0.0f, 0.0015f, 0.25f);
 VAR(terrainpinestartheight, WORLD_MIN_HEIGHT + 1, 25, WORLD_MAX_HEIGHT - 1);
 VAR(terrainpinefullheight, WORLD_MIN_HEIGHT + 1, 45, WORLD_MAX_HEIGHT - 1);
 
+FVAR(terraincavefreq, 0.0001f, 0.035f, 0.25f);
+FVAR(terraincavethreshold, -1.0f, 0.55f, 1.0f);
+FVAR(terrainlargecavefreq, 0.0001f, 0.012f, 0.25f);
+FVAR(terrainlargecavethreshold, -1.0f, 0.72f, 1.0f);
+FVAR(terrainlargecavedeepthreshold, -1.0f, 0.48f, 1.0f);
+FVAR(terraintunnelfreq, 0.0001f, 0.018f, 0.25f);
+FVAR(terraintunnelwidth, 0.001f, 0.065f, 0.3f);
+FVAR(terraincaveentrancewidth, 0.001f, 0.015f, 0.3f);
+VAR(terraincavemindepth, 1, 8, 64);
+VAR(terraincavefulldepth, 1, 24, 128);
+VAR(terraincavedeepheight, WORLD_MIN_HEIGHT + 1, -64, WORLD_MAX_HEIGHT - 1);
+
+VAR(terrainbottomlavalayers, 0, 3, 16);
+VAR(terrainlavalakestartheight, WORLD_MIN_HEIGHT + 1, -16, WORLD_MAX_HEIGHT - 1);
+VAR(terrainlavalakedeepheight, WORLD_MIN_HEIGHT + 1, -64, WORLD_MAX_HEIGHT - 1);
+FVAR(terrainlavalakeshallowchance, 0.0f, 0.03f, 1.0f);
+FVAR(terrainlavalakedeepchance, 0.0f, 0.22f, 1.0f);
+VAR(terrainlavalakeminsize, 1, 4, 32);
+VAR(terrainlavalakemaxsize, 1, 14, 32);
+VAR(terrainlavalakespacing, 8, 24, 64);
+FVAR(terrainlavalakeshapefreq, 0.001f, 0.08f, 1.0f);
+FVAR(terrainlavalakeshapevariation, 0.0f, 0.35f, 0.75f);
+
 static int activeworldseed = 1337;
 
 struct terrainsettings
@@ -220,10 +243,16 @@ struct terrainsettings
     float landmasklow, landmaskhigh, mountainmasklow, mountainmaskhigh;
     float deserttemperature, desertmoisture, forestmoisture;
     float foresttreedensity, plainstreedensity;
+    float cavefreq, cavethreshold, largecavefreq, largecavethreshold, largecavedeepthreshold;
+    float tunnelfreq, tunnelwidth, caveentrancewidth;
+    float lavalakeshallowchance, lavalakedeepchance, lavalakeshapefreq, lavalakeshapevariation;
     int sealevel, snowheight, mountainstonelow, mountainstonehigh;
     int biomeblend, coastwidth, coastvariation;
     int beachminheight, beachmaxheight;
     int pinestartheight, pinefullheight;
+    int cavemindepth, cavefulldepth, cavedeepheight;
+    int bottomlavalayers, lavalakestartheight, lavalakedeepheight;
+    int lavalakeminsize, lavalakemaxsize, lavalakespacing;
 
     terrainsettings()
         : continentfreq(terraincontinentfreq), mountainfreq(terrainmountainfreq),
@@ -240,12 +269,27 @@ struct terrainsettings
           mountainmaskhigh(terrainmountainmaskhigh), deserttemperature(terraindeserttemperature),
           desertmoisture(terraindesertmoisture), forestmoisture(terrainforestmoisture),
           foresttreedensity(terrainforesttreedensity), plainstreedensity(terrainplainstreedensity),
+          cavefreq(terraincavefreq), cavethreshold(terraincavethreshold),
+          largecavefreq(terrainlargecavefreq), largecavethreshold(terrainlargecavethreshold),
+          largecavedeepthreshold(terrainlargecavedeepthreshold),
+          tunnelfreq(terraintunnelfreq), tunnelwidth(terraintunnelwidth),
+          caveentrancewidth(terraincaveentrancewidth),
+          lavalakeshallowchance(terrainlavalakeshallowchance),
+          lavalakedeepchance(terrainlavalakedeepchance),
+          lavalakeshapefreq(terrainlavalakeshapefreq),
+          lavalakeshapevariation(terrainlavalakeshapevariation),
           sealevel(terrainsealevel), snowheight(terrainsnowheight),
           mountainstonelow(terrainmountainstonelow), mountainstonehigh(terrainmountainstonehigh),
           biomeblend(terrainbiomeblend),
           coastwidth(terraincoastwidth), coastvariation(terraincoastvariation),
           beachminheight(terrainbeachminheight), beachmaxheight(terrainbeachmaxheight),
-          pinestartheight(terrainpinestartheight), pinefullheight(terrainpinefullheight)
+          pinestartheight(terrainpinestartheight), pinefullheight(terrainpinefullheight),
+          cavemindepth(terraincavemindepth), cavefulldepth(terraincavefulldepth),
+          cavedeepheight(terraincavedeepheight), bottomlavalayers(terrainbottomlavalayers),
+          lavalakestartheight(terrainlavalakestartheight),
+          lavalakedeepheight(terrainlavalakedeepheight),
+          lavalakeminsize(terrainlavalakeminsize), lavalakemaxsize(terrainlavalakemaxsize),
+          lavalakespacing(terrainlavalakespacing)
     {
     }
 };
@@ -914,6 +958,7 @@ struct worldgencontext
     FastNoiseLite continentwarp, featurewarp;
     FastNoiseLite continent, mountains, erosion, hills, detail;
     FastNoiseLite temperature, moisture, weirdness, biomeblend, rockiness;
+    FastNoiseLite caves, largecaves, tunnela, tunnelb, lakeshape;
     terrainsettings terrain;
     int heightmap[WORLD_CHUNK_BLOCKS * WORLD_CHUNK_BLOCKS];
     uchar biomemap[WORLD_CHUNK_BLOCKS * WORLD_CHUNK_BLOCKS];
@@ -941,6 +986,11 @@ struct worldgencontext
         setupworldnoiselayer(biomeblend, seed ^ 0x13C6E91F,
                              terrain.biomeblend > 0 ? 1.0f / terrain.biomeblend : 1.0f, 1);
         setupworldnoiselayer(rockiness, seed ^ 0x5E4A19C3, terrain.mountainstonefreq, 2);
+        setupworldnoiselayer(caves, seed ^ 0x7A84F12D, terrain.cavefreq, 2);
+        setupworldnoiselayer(largecaves, seed ^ 0x36B9C7E5, terrain.largecavefreq, 2);
+        setupworldnoiselayer(tunnela, seed ^ 0x19F3A6C7, terrain.tunnelfreq, 2);
+        setupworldnoiselayer(tunnelb, seed ^ 0x5C2D8E91, terrain.tunnelfreq, 2);
+        setupworldnoiselayer(lakeshape, seed ^ 0x43E7B5D9, terrain.lavalakeshapefreq, 2);
     }
 };
 
@@ -1374,6 +1424,241 @@ static cube &lookupworldgenblock(worldgencontext &ctx, cube *root, const ivec &p
     }
 }
 
+enum { WORLD_CARVE_NONE, WORLD_CARVE_AIR, WORLD_CARVE_LAVA };
+
+static int worldcarveindex(int x, int y, int blockz)
+{
+    return (blockz * WORLD_CHUNK_BLOCKS + y) * WORLD_CHUNK_BLOCKS + x;
+}
+
+static uint mixworldfeaturehash(uint hash, uint value)
+{
+    hash ^= value + 0x9E3779B9U + (hash << 6) + (hash >> 2);
+    hash ^= hash >> 16;
+    hash *= 0x7FEB352DU;
+    hash ^= hash >> 15;
+    return hash;
+}
+
+static uint hashworldfeature(uint seed, long long x, long long y, int z, uint salt)
+{
+    const unsigned long long ux = (unsigned long long)x,
+                             uy = (unsigned long long)y;
+    uint hash = seed ^ salt;
+    hash = mixworldfeaturehash(hash, uint(ux));
+    hash = mixworldfeaturehash(hash, uint(ux >> 32));
+    hash = mixworldfeaturehash(hash, uint(uy));
+    hash = mixworldfeaturehash(hash, uint(uy >> 32));
+    return mixworldfeaturehash(hash, uint(z));
+}
+
+static long long worldfloordiv(long long value, int divisor)
+{
+    long long quotient = value / divisor;
+    if(value < 0 && value % divisor) --quotient;
+    return quotient;
+}
+
+static bool generateworldcaveentrance(const worldgencontext &ctx, int chunkx, int chunky,
+                                      int blockx, int blocky, int height)
+{
+    const int mindepth = min(ctx.terrain.cavemindepth, ctx.terrain.cavefulldepth),
+              logicalz = height / WORLD_BLOCK_SIZE - 1;
+    const float tunnelweight = worldterrainsmoothstep(1.0f, float(mindepth), 1.0f),
+                veinwidth = ctx.terrain.caveentrancewidth
+                          + (ctx.terrain.tunnelwidth - ctx.terrain.caveentrancewidth)
+                          * tunnelweight,
+                noisex = float(chunkx) * WORLD_CHUNK_BLOCKS + blockx + 17500.5f,
+                noisey = float(chunky) * WORLD_CHUNK_BLOCKS + blocky - 17500.5f,
+                noisez = logicalz + 3500.5f;
+    return fabs(ctx.tunnela.GetNoise(noisex, noisey, noisez)) < veinwidth &&
+           fabs(ctx.tunnelb.GetNoise(noisex, noisey, noisez)) < veinwidth;
+}
+
+static void generateworldcheesecaves(worldgencontext &ctx, uchar *carvemap, int chunkx, int chunky)
+{
+    const int bottomlayers = clamp(ctx.terrain.bottomlavalayers, 0, int(WORLD_HEIGHT_BLOCKS)),
+              minheight = WORLD_MIN_HEIGHT + bottomlayers,
+              mindepth = min(ctx.terrain.cavemindepth, ctx.terrain.cavefulldepth),
+              fulldepth = max(ctx.terrain.cavemindepth, ctx.terrain.cavefulldepth);
+    const float deepdenominator = max(float(ctx.terrain.cavedeepheight - minheight), 1.0f);
+
+    loop(y, WORLD_CHUNK_BLOCKS) loop(x, WORLD_CHUNK_BLOCKS)
+    {
+        const int surfaceheight = ctx.heightmap[y * WORLD_CHUNK_BLOCKS + x] / WORLD_BLOCK_SIZE,
+                  caveceiling = min(surfaceheight - 1, WORLD_MAX_HEIGHT - 1);
+        for(int logicalz = minheight; logicalz <= caveceiling; ++logicalz)
+        {
+            const float depth = float(surfaceheight - logicalz),
+                        depthweight = worldterrainsmoothstep(float(mindepth), float(fulldepth), depth),
+                        tunnelweight = worldterrainsmoothstep(1.0f, float(mindepth), depth),
+                        veinwidth = ctx.terrain.caveentrancewidth
+                                  + (ctx.terrain.tunnelwidth - ctx.terrain.caveentrancewidth)
+                                  * tunnelweight,
+                        surfacepenalty = (1.0f - depthweight) * 0.35f,
+                        deepweight = clamp((ctx.terrain.cavedeepheight - logicalz) / deepdenominator,
+                                           0.0f, 1.0f),
+                        largecavethreshold = ctx.terrain.largecavethreshold
+                                           + (ctx.terrain.largecavedeepthreshold
+                                            - ctx.terrain.largecavethreshold) * deepweight
+                                           + surfacepenalty;
+            const float noisex = float(chunkx) * WORLD_CHUNK_BLOCKS + x + 17500.5f,
+                        noisey = float(chunky) * WORLD_CHUNK_BLOCKS + y - 17500.5f,
+                        noisez = logicalz + 3500.5f;
+            bool carve = fabs(ctx.tunnela.GetNoise(noisex, noisey, noisez)) < veinwidth &&
+                         fabs(ctx.tunnelb.GetNoise(noisex, noisey, noisez)) < veinwidth;
+            if(!carve && depth >= mindepth)
+                carve = ctx.caves.GetNoise(noisex, noisey, noisez)
+                            > ctx.terrain.cavethreshold + surfacepenalty ||
+                        ctx.largecaves.GetNoise(noisex, noisey, noisez)
+                            > largecavethreshold;
+            if(carve)
+                carvemap[worldcarveindex(x, y, logicalz - WORLD_MIN_HEIGHT)] = WORLD_CARVE_AIR;
+        }
+    }
+}
+
+static void generateworldlavalakes(worldgencontext &ctx, uchar *carvemap, int chunkx, int chunky)
+{
+    const int spacing = max(ctx.terrain.lavalakespacing, 1),
+              verticalspacing = max(spacing / 2, 8),
+              minradius = min(ctx.terrain.lavalakeminsize, ctx.terrain.lavalakemaxsize),
+              maxradius = max(ctx.terrain.lavalakeminsize, ctx.terrain.lavalakemaxsize),
+              bottomlayers = clamp(ctx.terrain.bottomlavalayers, 0, int(WORLD_HEIGHT_BLOCKS)),
+              minimumheight = WORLD_MIN_HEIGHT + bottomlayers,
+              startheight = max(ctx.terrain.lavalakestartheight, ctx.terrain.lavalakedeepheight),
+              deepheight = min(ctx.terrain.lavalakestartheight, ctx.terrain.lavalakedeepheight);
+    const long long chunkstartx = (long long)chunkx * WORLD_CHUNK_BLOCKS,
+                    chunkstarty = (long long)chunky * WORLD_CHUNK_BLOCKS,
+                    mincellx = worldfloordiv(chunkstartx - maxradius, spacing),
+                    maxcellx = worldfloordiv(chunkstartx + WORLD_CHUNK_BLOCKS - 1 + maxradius, spacing),
+                    mincelly = worldfloordiv(chunkstarty - maxradius, spacing),
+                    maxcelly = worldfloordiv(chunkstarty + WORLD_CHUNK_BLOCKS - 1 + maxradius, spacing);
+    const int mincellz = int(worldfloordiv(minimumheight - maxradius, verticalspacing)),
+              maxcellz = int(worldfloordiv(startheight, verticalspacing));
+
+    for(long long celly = mincelly; celly <= maxcelly; ++celly)
+    for(long long cellx = mincellx; cellx <= maxcellx; ++cellx)
+    for(int cellz = mincellz; cellz <= maxcellz; ++cellz)
+    {
+        const uint positionhash = hashworldfeature(uint(ctx.seed), cellx, celly, cellz, 0xC13FA9A9U),
+                   chancehash = hashworldfeature(uint(ctx.seed), cellx, celly, cellz, 0x91E10DA5U),
+                   sizehash = hashworldfeature(uint(ctx.seed), cellx, celly, cellz, 0xD192ED03U);
+        const long long centerx = cellx * spacing + int(positionhash % uint(spacing)),
+                        centery = celly * spacing + int((positionhash >> 8) % uint(spacing));
+        const int centerz = cellz * verticalspacing
+                          + int((positionhash >> 16) % uint(verticalspacing));
+        if(centerz < minimumheight || centerz > startheight) continue;
+
+        const float approachweight = deepheight < startheight
+                                   ? clamp((startheight - centerz) / float(startheight - deepheight),
+                                           0.0f, 1.0f)
+                                   : 1.0f,
+                    deepweight = deepheight > minimumheight
+                               ? clamp((deepheight - centerz) / float(deepheight - minimumheight),
+                                       0.0f, 1.0f)
+                               : centerz <= deepheight ? 1.0f : 0.0f,
+                    lakechance = ctx.terrain.lavalakeshallowchance * approachweight
+                               + (ctx.terrain.lavalakedeepchance
+                                - ctx.terrain.lavalakeshallowchance) * deepweight;
+        if(worldtreeunit(chancehash) >= clamp(lakechance, 0.0f, 1.0f)) continue;
+
+        const int depthmaxradius = clamp(int(floor(minradius
+                                               + (maxradius - minradius)
+                                               * (0.25f + deepweight * 0.75f) + 0.5f)),
+                                           minradius, maxradius),
+                  radiusrange = max(depthmaxradius - minradius + 1, 1),
+                  radius = minradius + int(sizehash % uint(radiusrange)),
+                  minorradius = max(2, int(floor(radius
+                                  * (0.55f + ((sizehash >> 8) & 0xFFU) / 637.5f) + 0.5f))),
+                  verticalradius = max(2, (radius + minorradius) / 4),
+                  lavalevel = centerz - int((sizehash >> 28) % uint(max(verticalradius / 2, 1)));
+        const float angle = ((sizehash >> 16) & 0x0FFFU) / 4096.0f * 2.0f * M_PI,
+                    anglecos = cosf(angle), anglesin = sinf(angle),
+                    lobeangle = angle + (((positionhash >> 24) & 0xFFU) / 255.0f - 0.5f) * M_PI,
+                    lobedistance = radius * (0.15f + ((chancehash >> 24) & 0xFFU) / 1275.0f),
+                    lobecenterx = cosf(lobeangle) * lobedistance,
+                    lobecentery = sinf(lobeangle) * lobedistance,
+                    loberadius = max(radius * 0.62f, 1.0f),
+                    lobeminorradius = max(minorradius * 0.7f, 1.0f),
+                    shapevariation = clamp(ctx.terrain.lavalakeshapevariation, 0.0f, 0.75f);
+        const int centerlocalx = int(centerx - chunkstartx),
+                  centerlocaly = int(centery - chunkstarty);
+        if(centerlocalx + radius < 0 || centerlocalx - radius >= WORLD_CHUNK_BLOCKS ||
+           centerlocaly + radius < 0 || centerlocaly - radius >= WORLD_CHUNK_BLOCKS) continue;
+
+        const int centerblockx = int(centerx - (long long)chunkx * WORLD_CHUNK_BLOCKS),
+                  centerblocky = int(centery - (long long)chunky * WORLD_CHUNK_BLOCKS),
+                  centerheight = generateworldterrainheight(ctx, chunkx, chunky,
+                                                           centerblockx, centerblocky) / WORLD_BLOCK_SIZE;
+        if(centerz + verticalradius > centerheight - ctx.terrain.cavemindepth) continue;
+
+        const int xmin = max(centerlocalx - radius, 0),
+                  xmax = min(centerlocalx + radius, WORLD_CHUNK_BLOCKS - 1),
+                  ymin = max(centerlocaly - radius, 0),
+                  ymax = min(centerlocaly + radius, WORLD_CHUNK_BLOCKS - 1),
+                  zmin = max(centerz - verticalradius, minimumheight),
+                  zmax = min(centerz + verticalradius, WORLD_MAX_HEIGHT - 1);
+        for(int y = ymin; y <= ymax; ++y) for(int x = xmin; x <= xmax; ++x)
+        {
+            const float localx = float(x - centerlocalx),
+                        localy = float(y - centerlocaly),
+                        rotatedx = localx * anglecos + localy * anglesin,
+                        rotatedy = -localx * anglesin + localy * anglecos,
+                        primary = rotatedx * rotatedx / float(radius * radius)
+                                + rotatedy * rotatedy / float(minorradius * minorradius),
+                        lobex = rotatedx - lobecenterx,
+                        lobey = rotatedy - lobecentery,
+                        lobe = lobex * lobex / (loberadius * loberadius)
+                             + lobey * lobey / (lobeminorradius * lobeminorradius),
+                        horizontal = min(primary, lobe),
+                        shapenoise = ctx.lakeshape.GetNoise(float(chunkx) * WORLD_CHUNK_BLOCKS + x + 9200.5f,
+                                                           float(chunky) * WORLD_CHUNK_BLOCKS + y - 9200.5f),
+                        boundary = 1.0f - shapevariation * 0.5f
+                                 + shapenoise * shapevariation * 0.5f;
+            if(horizontal > boundary) continue;
+
+            const int surfaceheight = ctx.heightmap[y * WORLD_CHUNK_BLOCKS + x] / WORLD_BLOCK_SIZE;
+            for(int logicalz = zmin; logicalz <= zmax; ++logicalz)
+            {
+                if(surfaceheight - logicalz < ctx.terrain.cavemindepth) continue;
+                const float dz = (logicalz - centerz) / float(verticalradius);
+                if(horizontal + dz * dz > boundary) continue;
+
+                uchar &carve = carvemap[worldcarveindex(x, y, logicalz - WORLD_MIN_HEIGHT)];
+                if(logicalz <= lavalevel) carve = WORLD_CARVE_LAVA;
+                else if(carve == WORLD_CARVE_NONE) carve = WORLD_CARVE_AIR;
+            }
+        }
+    }
+}
+
+static void placeworldcaves(worldgencontext &ctx, cube *root, int chunkx, int chunky)
+{
+    const int mapblocks = WORLD_CHUNK_BLOCKS * WORLD_CHUNK_BLOCKS * WORLD_HEIGHT_BLOCKS;
+    vector<uchar> carvemap;
+    uchar *carve = carvemap.pad(mapblocks);
+    memset(carve, WORLD_CARVE_NONE, mapblocks * sizeof(uchar));
+
+    generateworldcheesecaves(ctx, carve, chunkx, chunky);
+    generateworldlavalakes(ctx, carve, chunkx, chunky);
+
+    const int bottomlayers = clamp(ctx.terrain.bottomlavalayers, 0, int(WORLD_HEIGHT_BLOCKS));
+    loop(z, bottomlayers) loop(y, WORLD_CHUNK_BLOCKS) loop(x, WORLD_CHUNK_BLOCKS)
+        carve[worldcarveindex(x, y, z)] = WORLD_CARVE_LAVA;
+
+    loop(z, WORLD_HEIGHT_BLOCKS) loop(y, WORLD_CHUNK_BLOCKS) loop(x, WORLD_CHUNK_BLOCKS)
+    {
+        const uchar type = carve[worldcarveindex(x, y, z)];
+        if(type == WORLD_CARVE_NONE) continue;
+        cube &c = lookupworldgenblock(ctx, root, ivec(x * WORLD_BLOCK_SIZE,
+                                                     y * WORLD_BLOCK_SIZE,
+                                                     z * WORLD_BLOCK_SIZE));
+        if(type == WORLD_CARVE_LAVA) setworldcubematerial(c, MAT_LAVA);
+        else if(!isempty(c) && c.material == MAT_AIR) setworldcubematerial(c, MAT_AIR);
+    }
+}
+
 static void placeworldtrees(worldgencontext &ctx, cube *root, int chunkx, int chunky)
 {
     vector<ivec> wood, leaves;
@@ -1397,6 +1682,7 @@ static void placeworldtrees(worldgencontext &ctx, cube *root, int chunkx, int ch
         if(inside ? ctx.rockmap[index] != 0
                   : generateworldrock(ctx, chunkx, chunky, x, y, height)) continue;
         if(ctx.terrain.coastwidth > 0 && height >= beachmin && height <= beachmax) continue;
+        if(generateworldcaveentrance(ctx, chunkx, chunky, x, y, height)) continue;
 
         const float density = biome == BIOME_FOREST
                             ? ctx.terrain.foresttreedensity
@@ -1438,6 +1724,7 @@ static cube *generateworldchunk(int chunkx, int chunky, worldgencontext &ctx)
     cube *root = allocworldgenfamily(ctx);
     const int rootsize = WORLD_CHUNK_ROOT_SIZE;
     loopi(8) generateworldcube(ctx, root[i], ivec(i, ivec(0, 0, 0), rootsize), rootsize);
+    placeworldcaves(ctx, root, chunkx, chunky);
     placeworldtrees(ctx, root, chunkx, chunky);
     return root;
 }
@@ -2430,7 +2717,28 @@ static bool saveworldconfig()
         "terrainforesttreedensity %.9g\n"
         "terrainplainstreedensity %.9g\n"
         "terrainpinestartheight %d\n"
-        "terrainpinefullheight %d\n",
+        "terrainpinefullheight %d\n"
+        "terraincavefreq %.9g\n"
+        "terraincavethreshold %.9g\n"
+        "terrainlargecavefreq %.9g\n"
+        "terrainlargecavethreshold %.9g\n"
+        "terrainlargecavedeepthreshold %.9g\n"
+        "terraintunnelfreq %.9g\n"
+        "terraintunnelwidth %.9g\n"
+        "terraincaveentrancewidth %.9g\n"
+        "terraincavemindepth %d\n"
+        "terraincavefulldepth %d\n"
+        "terraincavedeepheight %d\n"
+        "terrainbottomlavalayers %d\n"
+        "terrainlavalakestartheight %d\n"
+        "terrainlavalakedeepheight %d\n"
+        "terrainlavalakeshallowchance %.9g\n"
+        "terrainlavalakedeepchance %.9g\n"
+        "terrainlavalakeminsize %d\n"
+        "terrainlavalakemaxsize %d\n"
+        "terrainlavalakespacing %d\n"
+        "terrainlavalakeshapefreq %.9g\n"
+        "terrainlavalakeshapevariation %.9g\n",
         WORLD_GROUND_HEIGHT, WORLD_CHUNK_BLOCKS, WORLD_GRID_POWER, WORLD_BLOCK_SIZE, activeworldseed,
         WORLD_MIN_HEIGHT, WORLD_MAX_HEIGHT,
         terraincontinentfreq, terrainmountainfreq, terrainerosionfreq, terrainhillfreq, terraindetailfreq,
@@ -2445,7 +2753,15 @@ static bool saveworldconfig()
         terrainmountainmasklow, terrainmountainmaskhigh, terraindeserttemperature,
         terraindesertmoisture, terrainforestmoisture,
         terrainforesttreedensity, terrainplainstreedensity,
-        terrainpinestartheight, terrainpinefullheight
+        terrainpinestartheight, terrainpinefullheight,
+        terraincavefreq, terraincavethreshold, terrainlargecavefreq,
+        terrainlargecavethreshold, terrainlargecavedeepthreshold,
+        terraintunnelfreq, terraintunnelwidth, terraincaveentrancewidth,
+        terraincavemindepth, terraincavefulldepth, terraincavedeepheight,
+        terrainbottomlavalayers, terrainlavalakestartheight, terrainlavalakedeepheight,
+        terrainlavalakeshallowchance, terrainlavalakedeepchance,
+        terrainlavalakeminsize, terrainlavalakemaxsize, terrainlavalakespacing,
+        terrainlavalakeshapefreq, terrainlavalakeshapevariation
     );
     delete f;
 
