@@ -149,13 +149,108 @@ enum
     WORLD_MAP_SIZE = WORLD_MAX_HEIGHT - WORLD_MIN_HEIGHT,
     WORLD_GROUND_HEIGHT = -WORLD_MIN_HEIGHT,
     WORLD_DIRT_DEPTH = 4 * WORLD_BLOCK_SIZE,
-    WORLD_GRASS_TEXTURE = 1,
-    WORLD_DIRT_TEXTURE = 2,
-    WORLD_STONE_TEXTURE = 3,
     WORLD_MAX_CHUNKS_PER_SIDE = 64
 };
 
 VARP(maxchunkdist, 0, 2, WORLD_MAX_CHUNKS_PER_SIDE);
+
+struct terraincubetype
+{
+    string name, texture, sides;
+    float texsize;
+    int slot, sideslot;
+
+    terraincubetype() : texsize(1), slot(DEFAULT_GEOM), sideslot(DEFAULT_GEOM)
+    {
+        name[0] = texture[0] = sides[0] = '\0';
+    }
+};
+
+static vector<terraincubetype *> terraincubetypes;
+static int worldgrasstexture = DEFAULT_GEOM, worldgrasssidetexture = DEFAULT_GEOM,
+           worlddirttexture = DEFAULT_GEOM, worldstonetexture = DEFAULT_GEOM;
+
+static terraincubetype *findterraincube(const char *name)
+{
+    loopv(terraincubetypes) if(!cubecasecmp(terraincubetypes[i]->name, name)) return terraincubetypes[i];
+    return NULL;
+}
+
+void terrainreset()
+{
+    terraincubetypes.deletecontents();
+    worldgrasstexture = worldgrasssidetexture = worlddirttexture = worldstonetexture = DEFAULT_GEOM;
+}
+
+COMMAND(terrainreset, "");
+
+static void defineterraincube(const char *name, const char *texture, float texsize, const char *sides)
+{
+    if(!name[0] || !texture[0])
+    {
+        conoutf(CON_ERROR, "terraincube requires a cube name and texture path");
+        return;
+    }
+
+    terraincubetype *type = findterraincube(name);
+    if(!type) type = terraincubetypes.add(new terraincubetype);
+    copystring(type->name, name);
+    copystring(type->texture, texture);
+    copystring(type->sides, sides ? sides : "");
+    type->texsize = texsize > 0 ? texsize : 1;
+}
+
+ICOMMAND(terraincube, "ssfsN", (char *name, char *texture, float *texsize, char *sides, int *numargs),
+{
+    defineterraincube(name, texture, *texsize, *numargs >= 4 ? sides : NULL);
+});
+
+static bool loadterrain()
+{
+    terrainreset();
+    if(!execfile("config/terrain.cfg", false))
+    {
+        conoutf(CON_ERROR, "could not load config/terrain.cfg");
+        return false;
+    }
+
+    terraincubetype *grass = findterraincube("Grass"), *dirt = findterraincube("Dirt"),
+                    *stone = findterraincube("Stone");
+    if(!grass || !dirt || !stone)
+    {
+        conoutf(CON_ERROR, "terrain.cfg must define Grass, Dirt, and Stone cubes");
+        return false;
+    }
+
+    execute("texturereset; texsky; setshader stdworld");
+    loopv(terraincubetypes)
+    {
+        terraincubetype &type = *terraincubetypes[i];
+        defformatstring(command, "texture 0 %s; texscale %.9g", escapestring(type.texture), type.texsize);
+        execute(command);
+        type.slot = slots.last()->variants->index;
+    }
+    loopv(terraincubetypes)
+    {
+        terraincubetype &type = *terraincubetypes[i];
+        terraincubetype *sidetype = type.sides[0] ? findterraincube(type.sides) : NULL;
+        if(type.sides[0] && !sidetype)
+        {
+            conoutf(CON_ERROR, "terrain cube %s references unknown side cube %s", type.name, type.sides);
+            return false;
+        }
+        type.sideslot = sidetype ? sidetype->slot : type.slot;
+    }
+
+    worldgrasstexture = grass->slot;
+    worldgrasssidetexture = grass->sideslot;
+    worlddirttexture = dirt->slot;
+    worldstonetexture = stone->slot;
+    conoutf(CON_DEBUG, "loaded %d terrain cube definitions", terraincubetypes.length());
+    return true;
+}
+
+ICOMMAND(terrainload, "", (), intret(loadterrain() ? 1 : 0));
 
 struct worldchunk
 {
@@ -320,15 +415,15 @@ static void generateworldcube(cube &c, const ivec &o, int size)
             return;
 
         case WORLD_STONE:
-            setworldcubetexture(c, WORLD_STONE_TEXTURE);
+            setworldcubetexture(c, worldstonetexture);
             return;
 
         case WORLD_DIRT:
-            setworldcubetexture(c, WORLD_DIRT_TEXTURE);
+            setworldcubetexture(c, worlddirttexture);
             return;
 
         case WORLD_GRASS:
-            setworldcubetexture(c, WORLD_DIRT_TEXTURE, WORLD_GRASS_TEXTURE);
+            setworldcubetexture(c, worldgrasssidetexture, worldgrasstexture);
             return;
     }
 
@@ -381,16 +476,6 @@ static void chooseworldfolder(const char *requested)
     char *slash = strrchr(name, '/');
     if(slash && chunkbasename(slash + 1)) *slash = '\0';
     copystring(worldfolder, name[0] ? name : "untitled");
-}
-
-static void setupworldtextures()
-{
-    execute(
-        "texturereset; texsky; setshader stdworld; "
-        "texture 0 terrain/grass.png; "
-        "texture 0 terrain/dirt.png; "
-        "texture 0 terrain/stone.png"
-    );
 }
 
 static void worldchunkname(char *name, size_t len, const worldchunk &chunk)
@@ -1124,12 +1209,7 @@ static bool saveworldconfig()
         "worldmaxheight = %d\n"
         "worldchunksperaxis = %d\n"
         "worldchunkcount = %d\n\n"
-        "texturereset\n"
-        "texsky\n"
-        "setshader \"stdworld\"\n"
-        "texture 0 \"terrain/grass.png\"\n"
-        "texture 0 \"terrain/dirt.png\"\n"
-        "texture 0 \"terrain/stone.png\"\n",
+        "terrainload\n",
         WORLD_GROUND_HEIGHT, WORLD_CHUNK_BLOCKS, WORLD_BLOCK_SIZE,
         WORLD_MIN_HEIGHT, WORLD_MAX_HEIGHT, worldchunksperaxis, worldchunks.length()
     );
@@ -1169,7 +1249,7 @@ static void createworld(int chunksperaxis, const char *requestedname)
     copystring(worldfolder, chosenfolder);
     worldchunksperaxis = chunksperaxis;
     worldfirstchunkx = worldfirstchunky = -(chunksperaxis / 2);
-    setupworldtextures();
+    if(!loadterrain()) return;
 
     freeocta(worldroot);
     worldroot = NULL;
