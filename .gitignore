@@ -1,0 +1,7 @@
+*.o
+*.gch
+*.exe
+*.res
+*.depend
+*.layout
+*.o
