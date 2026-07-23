@@ -339,29 +339,65 @@ static void pasteworldcube(const cube &src, cube &dst)
     copyworldcube(src, dst);
 }
 
+static void resetworldcube(cube &c)
+{
+    c.children = NULL;
+    c.ext = NULL;
+    c.visible = 0;
+    c.merged = 0;
+    c.material = MAT_AIR;
+    emptyfaces(c);
+    loopi(6) c.texture[i] = DEFAULT_GEOM;
+}
+
+static void moveworldcube(cube &src, cube &dst)
+{
+    discardchildren(dst);
+    dst = src;
+    resetworldcube(src);
+}
+
+static void detachworldcubegeometry(cube &c)
+{
+    c.visible = 0;
+    c.merged = 0;
+    if(c.ext)
+    {
+        if(c.ext->va)
+        {
+            destroyva(c.ext->va);
+            c.ext->va = NULL;
+        }
+        c.ext->tjoints = -1;
+        freeoctaentities(c);
+    }
+    if(c.children) loopi(8) detachworldcubegeometry(c.children[i]);
+}
+
 static ivec worldchunkorigin(const worldchunk &chunk, int z = 0)
 {
     return ivec((chunk.x - worldfirstchunkx) * WORLD_CHUNK_SIZE,
                 (chunk.y - worldfirstchunky) * WORLD_CHUNK_SIZE, z);
 }
 
+static void syncmountedworldchunk(worldchunk &chunk)
+{
+    if(!chunk.mounted || !chunk.root || !worldroot) return;
+    loopi(8)
+    {
+        ivec offset(i, ivec(0, 0, 0), WORLD_CHUNK_ROOT_SIZE);
+        if(offset.x >= WORLD_CHUNK_SIZE || offset.y >= WORLD_CHUNK_SIZE || offset.z >= WORLD_MAP_SIZE)
+            continue;
+        ivec origin = worldchunkorigin(chunk);
+        origin.add(offset);
+        pasteworldcube(lookupcube(origin, WORLD_CHUNK_ROOT_SIZE), chunk.root[i]);
+    }
+}
+
 static void syncmountedworldchunks()
 {
     if(worldchunks.empty() || !worldroot) return;
-    loopv(worldchunks)
-    {
-        worldchunk &chunk = worldchunks[i];
-        if(!chunk.mounted) continue;
-        loopj(8)
-        {
-            ivec offset(j, ivec(0, 0, 0), WORLD_CHUNK_ROOT_SIZE);
-            if(offset.x >= WORLD_CHUNK_SIZE || offset.y >= WORLD_CHUNK_SIZE || offset.z >= WORLD_MAP_SIZE)
-                continue;
-            ivec origin = worldchunkorigin(chunk);
-            origin.add(offset);
-            pasteworldcube(lookupcube(origin, WORLD_CHUNK_ROOT_SIZE), chunk.root[j]);
-        }
-    }
+    loopv(worldchunks) syncmountedworldchunk(worldchunks[i]);
 }
 
 static void mountworldchunk(worldchunk &chunk)
@@ -373,9 +409,33 @@ static void mountworldchunk(worldchunk &chunk)
             continue;
         ivec origin = worldchunkorigin(chunk);
         origin.add(offset);
-        pasteworldcube(chunk.root[i], lookupcube(origin, WORLD_CHUNK_ROOT_SIZE));
+        moveworldcube(chunk.root[i], lookupcube(origin, WORLD_CHUNK_ROOT_SIZE));
     }
     chunk.mounted = true;
+}
+
+static void unmountworldchunk(worldchunk &chunk)
+{
+    loopi(8)
+    {
+        ivec offset(i, ivec(0, 0, 0), WORLD_CHUNK_ROOT_SIZE);
+        if(offset.x >= WORLD_CHUNK_SIZE || offset.y >= WORLD_CHUNK_SIZE || offset.z >= WORLD_MAP_SIZE)
+            continue;
+        ivec origin = worldchunkorigin(chunk);
+        origin.add(offset);
+        cube &c = lookupcube(origin, WORLD_CHUNK_ROOT_SIZE);
+        detachworldcubegeometry(c);
+        moveworldcube(c, chunk.root[i]);
+    }
+    chunk.mounted = false;
+}
+
+static void invalidateworldchunk(const worldchunk &chunk)
+{
+    ivec bbmin = worldchunkorigin(chunk), bbmax = bbmin;
+    bbmin.sub(1).max(0);
+    bbmax.add(ivec(WORLD_CHUNK_SIZE, WORLD_CHUNK_SIZE, WORLD_MAP_SIZE)).add(1).min(worldsize);
+    changed(bbmin, bbmax, false);
 }
 
 static int worldmapscale(int chunksx, int chunksy)
@@ -386,33 +446,42 @@ static int worldmapscale(int chunksx, int chunksy)
     return scale;
 }
 
-static void rebuildworldchunks(int chunkx, int chunky, bool load, bool changed)
+static void rebuildworldchunks(int chunkx, int chunky, bool load, bool updategeometry)
 {
     rebuildingworldchunks = true;
-    syncmountedworldchunks();
-    freeocta(worldroot);
-    worldroot = newcubes(F_EMPTY);
-
-    int mounted = 0;
+    vector<int> entering, leaving;
     loopv(worldchunks)
     {
         worldchunk &chunk = worldchunks[i];
-        chunk.mounted = false;
-        if(abs(chunk.x - chunkx) <= maxchunkdist && abs(chunk.y - chunky) <= maxchunkdist)
-        {
-            mountworldchunk(chunk);
-            mounted++;
-        }
+        bool shouldmount = abs(chunk.x - chunkx) <= maxchunkdist &&
+                           abs(chunk.y - chunky) <= maxchunkdist;
+        if(chunk.mounted && !shouldmount) leaving.add(i);
+        else if(!chunk.mounted && shouldmount) entering.add(i);
     }
+
+    loopv(leaving) unmountworldchunk(worldchunks[leaving[i]]);
+    loopv(entering) mountworldchunk(worldchunks[entering[i]]);
 
     lastplayerchunkx = chunkx;
     lastplayerchunky = chunky;
     lastchunkdist = maxchunkdist;
-    validatec(worldroot, worldsize >> 1);
-    if(changed) allchanged(load);
+    if(load) validatec(worldroot, worldsize >> 1);
+    if(updategeometry)
+    {
+        if(load) allchanged(true);
+        else if(!leaving.empty() || !entering.empty())
+        {
+            loopv(leaving) invalidateworldchunk(worldchunks[leaving[i]]);
+            loopv(entering) invalidateworldchunk(worldchunks[entering[i]]);
+            commitchanges();
+        }
+    }
+
+    int mounted = 0;
+    loopv(worldchunks) if(worldchunks[i].mounted) mounted++;
     rebuildingworldchunks = false;
-    conoutf(CON_DEBUG, "mounted %d chunks around %d_%d (maxchunkdist %d)",
-            mounted, chunkx, chunky, maxchunkdist);
+    conoutf(CON_DEBUG, "chunk view %d_%d: +%d -%d, %d mounted (maxchunkdist %d)",
+            chunkx, chunky, entering.length(), leaving.length(), mounted, maxchunkdist);
 }
 
 void updateworldchunks(bool force)
