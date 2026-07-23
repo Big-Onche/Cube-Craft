@@ -26,6 +26,12 @@ float vfcDnear[5], vfcDfar[5];
 
 vtxarray *visibleva = NULL;
 
+VARP(livecull, 0, 1, 1);
+extern int oqgeom;
+
+static int visiblevas = 0, liveculledvas = 0;
+static vector<vtxarray *> livecullqueries;
+
 bool isfoggedsphere(float rad, const vec &cv)
 {
     loopi(4) if(vfcP[i].dist(cv) < -rad) return true;
@@ -117,6 +123,7 @@ static vtxarray *vasort[VASORTSIZE];
 
 static inline void addvisibleva(vtxarray *va)
 {
+    visiblevas++;
     float dist = vadist(va, camera1->o);
     va->distance = int(dist); /*cv.dist(camera1->o) - va->size*SQRT3/2*/
 
@@ -131,6 +138,26 @@ static inline void addvisibleva(vtxarray *va)
 
     va->next = cur;
     *prev = va;
+}
+
+static inline bool livecullva(vtxarray &va)
+{
+    if(!livecull || !oqgeom || !oqfrags || drawtex ||
+       va.occluded < OCCLUDE_BB || !va.query || va.query->owner != &va ||
+       camera1->o.insidebb(va.o, va.size, 2))
+        return false;
+
+    // Never wait for the GPU here. An unavailable or newly visible result
+    // rejoins the ordinary visible traversal immediately.
+    if(!checkquery(va.query, true))
+    {
+        if(va.query->fragments >= oqfrags) va.occluded = OCCLUDE_NOTHING;
+        return false;
+    }
+
+    livecullqueries.add(&va);
+    liveculledvas++;
+    return true;
 }
 
 void sortvisiblevas()
@@ -167,6 +194,7 @@ static inline void findvisiblevas(vector<vtxarray *> &vas)
                 v.occluded = !v.texs ? OCCLUDE_GEOM : OCCLUDE_NOTHING;
                 v.query = NULL;
             }
+            if(livecullva(v)) continue;
             addvisibleva(&v);
             if(v.children.length())
             {
@@ -184,9 +212,21 @@ static inline void findvisiblevas(vector<vtxarray *> &vas)
 
 void findvisiblevas()
 {
+    visiblevas = liveculledvas = 0;
+    livecullqueries.setsize(0);
     memclear(vasort);
     findvisiblevas<false, false>(varoot);
     sortvisiblevas();
+}
+
+int getnumvisiblevas()
+{
+    return visiblevas;
+}
+
+int getnumliveculledvas()
+{
+    return liveculledvas;
 }
 
 void calcvfcD()
@@ -235,6 +275,9 @@ void visiblecubes(bool cull)
     }
     else
     {
+        visiblevas = valist.length();
+        liveculledvas = 0;
+        livecullqueries.setsize(0);
         memclear(vfcP);
         vfcDfog = farplane;
         memclear(vfcDnear);
@@ -1775,6 +1818,39 @@ void rendergeom()
     int blends = 0;
     if(doOQ)
     {
+        static vector<vtxarray *> proxyqueries, groupqueries;
+        proxyqueries.setsize(0);
+        groupqueries.setsize(0);
+
+        // Keep already hidden groups resident in the query pool first. If the
+        // pool is exhausted, dropping ownership makes the section visible on
+        // the next traversal instead of leaving stale geometry hidden.
+        loopv(livecullqueries)
+        {
+            vtxarray *va = livecullqueries[i];
+            va->query = newquery(va);
+            if(va->query) proxyqueries.add(va);
+            else va->occluded = OCCLUDE_NOTHING;
+        }
+
+        // Reserve queries for coarse section groups before leaf geometry can
+        // consume the finite query pool.
+        for(vtxarray *va = visibleva; va; va = va->next) if(!va->texs && va->children.length())
+        {
+            if(camera1->o.insidebb(va->o, va->size, 2))
+            {
+                va->query = NULL;
+                va->occluded = OCCLUDE_NOTHING;
+                continue;
+            }
+            va->occluded = va->query && va->query->owner == va && checkquery(va->query)
+                         ? min(va->occluded + 1, int(OCCLUDE_BB))
+                         : OCCLUDE_NOTHING;
+            va->query = newquery(va);
+            if(va->query) groupqueries.add(va);
+            else va->occluded = OCCLUDE_NOTHING;
+        }
+
         for(vtxarray *va = visibleva; va; va = va->next) if(va->texs)
         {
             if(!camera1->o.insidebb(va->o, va->size, 2))
@@ -1808,6 +1884,28 @@ void rendergeom()
             }
 
             renderva(cur, va, RENDERPASS_Z, true);
+        }
+
+        // Geometry-free VAs preserve the section hierarchy. They are queried
+        // as aggregate bounds after section geometry has populated the depth
+        // buffer, allowing one result to cull many underground descendants.
+        loopv(groupqueries)
+        {
+            vtxarray *va = groupqueries[i];
+            if(cur.vattribs) disablevattribs(cur, false);
+            if(cur.vbuf) disablevbuf(cur);
+            renderquery(cur, va->query, va);
+        }
+
+        // Hidden sections are absent from visibleva, so the rest of the frame
+        // cannot spend CPU or GPU work on their geometry. Refresh only their
+        // bounding-box queries against the current depth buffer.
+        loopv(proxyqueries)
+        {
+            vtxarray *va = proxyqueries[i];
+            if(cur.vattribs) disablevattribs(cur, false);
+            if(cur.vbuf) disablevbuf(cur);
+            renderquery(cur, va->query, va);
         }
 
         if(cur.vquery) disablevquery(cur);

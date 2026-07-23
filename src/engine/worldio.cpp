@@ -146,6 +146,8 @@ enum
     WORLD_BLOCK_SIZE = 1 << WORLD_GRID_POWER,
     WORLD_CHUNK_BLOCKS = 64,
     WORLD_CHUNK_SIZE = WORLD_BLOCK_SIZE * WORLD_CHUNK_BLOCKS,
+    WORLD_SECTION_BLOCKS = 16,
+    WORLD_SECTION_SIZE = WORLD_BLOCK_SIZE * WORLD_SECTION_BLOCKS,
     WORLD_MIN_HEIGHT = -256,
     WORLD_MAX_HEIGHT = 256,
     WORLD_HEIGHT_BLOCKS = WORLD_MAX_HEIGHT - WORLD_MIN_HEIGHT,
@@ -497,6 +499,11 @@ static void shutdownworldchunkloader();
 static bool saveworldconfig();
 static void worldchunkname(char *name, size_t len, const worldchunk &chunk);
 void setmapfilenames(const char *fname, const char *cname);
+
+int getworldsectionsize()
+{
+    return worldchunks.empty() ? 0 : WORLD_SECTION_SIZE;
+}
 
 void clearworldchunks()
 {

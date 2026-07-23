@@ -1481,7 +1481,7 @@ void calcgeombb(const ivec &co, int size, ivec &bbmin, ivec &bbmax)
 static int entdepth = -1;
 static octaentities *entstack[32];
 
-void setva(cube &c, const ivec &co, int size, int csi)
+void setva(cube &c, const ivec &co, int size, int csi, bool force = false)
 {
     ASSERT(size <= 0x1000);
 
@@ -1500,7 +1500,7 @@ void setva(cube &c, const ivec &co, int size, int csi)
     int maxlevel = -1;
     rendercube(c, co, size, csi, maxlevel);
 
-    if(size == min(0x1000, worldsize/2) || !vc.emptyva())
+    if(force || size == min(0x1000, worldsize/2) || !vc.emptyva())
     {
         vtxarray *va = newva(co, size);
         ext(c).va = va;
@@ -1550,6 +1550,7 @@ VARF(vacubesize, 32, 128, 0x1000, allchanged());
 int updateva(cube *c, const ivec &co, int size, int csi)
 {
     progress("recalculating geometry...");
+    const int worldsectionsize = getworldsectionsize();
     int ccount = 0, cmergemax = vamergemax, chasmerges = vahasmerges;
     neighbourstack[++neighbourdepth] = c;
     loopi(8)                                    // counting number of semi-solid/solid children cubes
@@ -1573,10 +1574,16 @@ int updateva(cube *c, const ivec &co, int size, int csi)
             }
             else count += setcubevisibility(c[i], o, size);
             int tcount = count + (csi <= MAXMERGELEVEL ? vamerges[csi].length() : 0);
-            if(tcount > vafacemax || (tcount >= vafacemin && size >= vacubesize) || size == min(0x1000, worldsize/2))
+            int facemax = worldsectionsize ? max(vafacemax, 8192) : vafacemax;
+            bool makegroup = worldsectionsize > 0 && size >= worldsectionsize &&
+                             size <= min(0x1000, worldsize/2) &&
+                             (tcount > 0 || varoot.length() > childpos);
+            if(tcount > facemax || makegroup ||
+               (!worldsectionsize && tcount >= vafacemin && size >= vacubesize) ||
+               size == min(0x1000, worldsize/2))
             {
                 loadprogress = clamp(recalcprogress/float(allocnodes), 0.0f, 1.0f);
-                setva(c[i], o, size, csi);
+                setva(c[i], o, size, csi, makegroup);
                 if(c[i].ext && c[i].ext->va)
                 {
                     while(varoot.length() > childpos)
@@ -1762,4 +1769,3 @@ void recalc()
 }
 
 COMMAND(recalc, "");
-
