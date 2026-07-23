@@ -184,6 +184,10 @@ FVAR(terrainweirdnessstrength, 0.0f, 0.15f, 1.0f);
 VAR(terrainsealevel, WORLD_MIN_HEIGHT + 1, 0, WORLD_MAX_HEIGHT - 1);
 VAR(terrainsnowheight, WORLD_MIN_HEIGHT + 1, 70, WORLD_MAX_HEIGHT - 1);
 VAR(terrainbiomeblend, 0, 16, 64);
+VAR(terraincoastwidth, 0, 8, 32);
+VAR(terraincoastvariation, 0, 4, 16);
+VAR(terrainbeachminheight, -32, -2, 32);
+VAR(terrainbeachmaxheight, -32, 2, 32);
 FVAR(terraincontinentheight, 0.0f, 35.0f, float(WORLD_HEIGHT_BLOCKS));
 FVAR(terrainhillheight, 0.0f, 10.0f, float(WORLD_HEIGHT_BLOCKS));
 FVAR(terrainmountainheight, 0.0f, 80.0f, float(WORLD_HEIGHT_BLOCKS));
@@ -208,7 +212,8 @@ struct terrainsettings
     float continentheight, hillheight, mountainheight, erosionheight, detailheight;
     float landmasklow, landmaskhigh, mountainmasklow, mountainmaskhigh;
     float deserttemperature, desertmoisture, forestmoisture;
-    int sealevel, snowheight, biomeblend;
+    int sealevel, snowheight, biomeblend, coastwidth, coastvariation;
+    int beachminheight, beachmaxheight;
 
     terrainsettings()
         : continentfreq(terraincontinentfreq), mountainfreq(terrainmountainfreq),
@@ -223,7 +228,9 @@ struct terrainsettings
           landmaskhigh(terrainlandmaskhigh), mountainmasklow(terrainmountainmasklow),
           mountainmaskhigh(terrainmountainmaskhigh), deserttemperature(terraindeserttemperature),
           desertmoisture(terraindesertmoisture), forestmoisture(terrainforestmoisture),
-          sealevel(terrainsealevel), snowheight(terrainsnowheight), biomeblend(terrainbiomeblend)
+          sealevel(terrainsealevel), snowheight(terrainsnowheight), biomeblend(terrainbiomeblend),
+          coastwidth(terraincoastwidth), coastvariation(terraincoastvariation),
+          beachminheight(terrainbeachminheight), beachmaxheight(terrainbeachmaxheight)
     {
     }
 };
@@ -889,6 +896,7 @@ struct worldgencontext
     terrainsettings terrain;
     int heightmap[WORLD_CHUNK_BLOCKS * WORLD_CHUNK_BLOCKS];
     uchar biomemap[WORLD_CHUNK_BLOCKS * WORLD_CHUNK_BLOCKS];
+    uchar coastmap[WORLD_CHUNK_BLOCKS * WORLD_CHUNK_BLOCKS];
     int grasstexture, grasssidetexture, dirttexture, stonetexture, sandtexture, snowtexture;
     bool prepared;
     int families;
@@ -979,6 +987,71 @@ static int generateworldterrainheight(const worldgencontext &ctx, int chunkx, in
     return clamp(int(floor(height + 0.5f)), WORLD_MIN_HEIGHT + 1, WORLD_MAX_HEIGHT - 1) * WORLD_BLOCK_SIZE;
 }
 
+static void generateworldcoastmap(worldgencontext &ctx, int chunkx, int chunky)
+{
+    memset(ctx.coastmap, 0, sizeof(ctx.coastmap));
+    if(ctx.terrain.coastwidth <= 0) return;
+
+    const int maxcoastwidth = ctx.terrain.coastwidth + ctx.terrain.coastvariation,
+              halo = maxcoastwidth + 1,
+              mapsize = WORLD_CHUNK_BLOCKS + 2 * halo,
+              maparea = mapsize * mapsize,
+              fardistance = INT_MAX / 8,
+              seaheight = ctx.terrain.sealevel * WORLD_BLOCK_SIZE;
+    vector<uchar> water;
+    vector<int> distance;
+    water.pad(maparea);
+    distance.pad(maparea);
+
+    loop(y, mapsize) loop(x, mapsize)
+    {
+        const int blockx = x - halo, blocky = y - halo,
+                  height = blockx >= 0 && blockx < WORLD_CHUNK_BLOCKS &&
+                           blocky >= 0 && blocky < WORLD_CHUNK_BLOCKS
+                         ? ctx.heightmap[blocky * WORLD_CHUNK_BLOCKS + blockx]
+                         : generateworldterrainheight(ctx, chunkx, chunky, blockx, blocky);
+        water[y * mapsize + x] = height < seaheight;
+        distance[y * mapsize + x] = fardistance;
+    }
+
+    for(int y = 1; y < mapsize - 1; ++y) for(int x = 1; x < mapsize - 1; ++x)
+    {
+        const int index = y * mapsize + x;
+        const uchar iswater = water[index];
+        if(water[index - 1] != iswater || water[index + 1] != iswater ||
+           water[index - mapsize] != iswater || water[index + mapsize] != iswater)
+            distance[index] = 0;
+    }
+
+    for(int y = 1; y < mapsize - 1; ++y) for(int x = 1; x < mapsize - 1; ++x)
+    {
+        const int index = y * mapsize + x;
+        distance[index] = min(distance[index], distance[index - 1] + 3);
+        distance[index] = min(distance[index], distance[index - mapsize] + 3);
+        distance[index] = min(distance[index], distance[index - mapsize - 1] + 4);
+        distance[index] = min(distance[index], distance[index - mapsize + 1] + 4);
+    }
+    for(int y = mapsize - 2; y >= 1; --y) for(int x = mapsize - 2; x >= 1; --x)
+    {
+        const int index = y * mapsize + x;
+        distance[index] = min(distance[index], distance[index + 1] + 3);
+        distance[index] = min(distance[index], distance[index + mapsize] + 3);
+        distance[index] = min(distance[index], distance[index + mapsize + 1] + 4);
+        distance[index] = min(distance[index], distance[index + mapsize - 1] + 4);
+    }
+
+    loop(y, WORLD_CHUNK_BLOCKS) loop(x, WORLD_CHUNK_BLOCKS)
+    {
+        const float noisex = float(chunkx) * WORLD_CHUNK_BLOCKS + x + 10000.5f,
+                    noisey = float(chunky) * WORLD_CHUNK_BLOCKS + y - 10000.5f,
+                    width = max(ctx.terrain.coastwidth
+                              + ctx.biomeblend.GetNoise(noisex, noisey) * ctx.terrain.coastvariation,
+                                0.0f);
+        ctx.coastmap[y * WORLD_CHUNK_BLOCKS + x] =
+            distance[(y + halo) * mapsize + x + halo] <= int(floor(width * 3.0f + 0.5f));
+    }
+}
+
 static int generateworldbiome(const worldgencontext &ctx, int chunkx, int chunky, int blockx, int blocky,
                               int height)
 {
@@ -1028,10 +1101,14 @@ static void generateworldheightmap(worldgencontext &ctx, int chunkx, int chunky)
 {
     loop(y, WORLD_CHUNK_BLOCKS) loop(x, WORLD_CHUNK_BLOCKS)
     {
-        const int index = y * WORLD_CHUNK_BLOCKS + x,
-                  height = generateworldterrainheight(ctx, chunkx, chunky, x, y);
-        ctx.heightmap[index] = height;
-        ctx.biomemap[index] = generateworldbiome(ctx, chunkx, chunky, x, y, height);
+        const int index = y * WORLD_CHUNK_BLOCKS + x;
+        ctx.heightmap[index] = generateworldterrainheight(ctx, chunkx, chunky, x, y);
+    }
+    generateworldcoastmap(ctx, chunkx, chunky);
+    loop(y, WORLD_CHUNK_BLOCKS) loop(x, WORLD_CHUNK_BLOCKS)
+    {
+        const int index = y * WORLD_CHUNK_BLOCKS + x;
+        ctx.biomemap[index] = generateworldbiome(ctx, chunkx, chunky, x, y, ctx.heightmap[index]);
     }
 }
 
@@ -1045,19 +1122,34 @@ static int worldterrainbiome(const worldgencontext &ctx, int localx, int localy)
     return ctx.biomemap[localy / WORLD_BLOCK_SIZE * WORLD_CHUNK_BLOCKS + localx / WORLD_BLOCK_SIZE];
 }
 
-static int worldcolumncubetype(const worldgencontext &ctx, int z, int size, int height, int biome)
+static bool worldterraincoast(const worldgencontext &ctx, int localx, int localy)
+{
+    return ctx.coastmap[localy / WORLD_BLOCK_SIZE * WORLD_CHUNK_BLOCKS + localx / WORLD_BLOCK_SIZE] != 0;
+}
+
+static int worldcolumncubetype(const worldgencontext &ctx, int z, int size, int height, int biome, bool coast)
 {
     const int surface = WORLD_GROUND_HEIGHT + height,
               watertop = WORLD_GROUND_HEIGHT + ctx.terrain.sealevel * WORLD_BLOCK_SIZE,
               dirtbottom = surface - WORLD_BLOCK_SIZE - WORLD_DIRT_DEPTH,
-              grassbottom = surface - WORLD_BLOCK_SIZE;
+              grassbottom = surface - WORLD_BLOCK_SIZE,
+              beachmin = (ctx.terrain.sealevel
+                        + min(ctx.terrain.beachminheight, ctx.terrain.beachmaxheight)) * WORLD_BLOCK_SIZE,
+              beachmax = (ctx.terrain.sealevel
+                        + max(ctx.terrain.beachminheight, ctx.terrain.beachmaxheight)) * WORLD_BLOCK_SIZE;
+    const bool beach = coast && height >= beachmin && height <= beachmax;
 
     if(z >= max(surface, watertop)) return WORLD_EMPTY;
     if(surface < watertop && z >= surface && z + size <= watertop) return WORLD_WATER;
     if(z + size <= dirtbottom) return WORLD_STONE;
-    if(biome == BIOME_DESERT || biome == BIOME_OCEAN)
+    if(beach || biome == BIOME_DESERT)
     {
         if(z >= dirtbottom && z + size <= surface) return WORLD_SAND;
+        return WORLD_MIXED;
+    }
+    if(biome == BIOME_OCEAN)
+    {
+        if(z >= dirtbottom && z + size <= surface) return WORLD_DIRT;
         return WORLD_MIXED;
     }
     if(z >= dirtbottom && z + size <= grassbottom) return WORLD_DIRT;
@@ -1078,7 +1170,7 @@ static int worldcubetype(const worldgencontext &ctx, const ivec &o, int size)
     for(int x = o.x; x < o.x + size; x += WORLD_BLOCK_SIZE)
     {
         int columntype = worldcolumncubetype(ctx, o.z, size, worldterrainheight(ctx, x, y),
-                                            worldterrainbiome(ctx, x, y));
+                                            worldterrainbiome(ctx, x, y), worldterraincoast(ctx, x, y));
         if(columntype == WORLD_MIXED || (type >= 0 && type != columntype)) return WORLD_MIXED;
         type = columntype;
     }
@@ -2104,6 +2196,10 @@ static bool saveworldconfig()
         "terrainsealevel %d\n"
         "terrainsnowheight %d\n"
         "terrainbiomeblend %d\n"
+        "terraincoastwidth %d\n"
+        "terraincoastvariation %d\n"
+        "terrainbeachminheight %d\n"
+        "terrainbeachmaxheight %d\n"
         "terraincontinentheight %.9g\n"
         "terrainhillheight %.9g\n"
         "terrainmountainheight %.9g\n"
@@ -2121,7 +2217,8 @@ static bool saveworldconfig()
         terraincontinentfreq, terrainmountainfreq, terrainerosionfreq, terrainhillfreq, terraindetailfreq,
         terraincontinentwarpfreq, terraincontinentwarpamp, terrainfeaturewarpfreq, terrainfeaturewarpamp,
         terraintemperaturefreq, terrainmoisturefreq, terrainweirdnessfreq, terrainweirdnessstrength,
-        terrainsealevel, terrainsnowheight, terrainbiomeblend,
+        terrainsealevel, terrainsnowheight, terrainbiomeblend, terraincoastwidth, terraincoastvariation,
+        terrainbeachminheight, terrainbeachmaxheight,
         terraincontinentheight, terrainhillheight, terrainmountainheight,
         terrainerosionheight, terraindetailheight, terrainlandmasklow, terrainlandmaskhigh,
         terrainmountainmasklow, terrainmountainmaskhigh, terraindeserttemperature,
