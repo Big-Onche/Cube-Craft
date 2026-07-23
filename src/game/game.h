@@ -80,8 +80,8 @@ struct gameent : dynent
 
     gameent() : clientnum(-1), privilege(0), ping(0), edit(NULL)
     {
-        type = ENT_CAMERA;
-        state = editstate = CS_EDITING;
+        type = ENT_PLAYER;
+        state = editstate = CS_ALIVE;
         maxspeed = 120.0f;
         name[0] = '\0';
     }

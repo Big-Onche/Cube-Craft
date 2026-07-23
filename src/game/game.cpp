@@ -123,7 +123,6 @@ namespace game
     bool allowedittoggle() { return true; }
     void edittoggled(bool on)
     {
-        if(player1) player1->state = player1->editstate = on ? CS_EDITING : CS_ALIVE;
         addmsg(N_EDITMODE, "ri", on ? 1 : 0);
     }
 
@@ -141,6 +140,10 @@ namespace game
     void changemap(const char *name, int mode)
     {
         gamemode = STARTGAMEMODE;
+#ifndef STANDALONE
+        if(!remote && !isconnected()) localconnect();
+#endif
+        if(editmode) toggleedit();
         if(name && name[0]) load_world(name);
         else emptymap(0, true, NULL);
     }
@@ -157,7 +160,7 @@ namespace game
         physicsframe();
         if(player1)
         {
-            player1->state = editmode ? CS_EDITING : CS_ALIVE;
+            crouchplayer(player1, 10, true);
             moveplayer(player1, 10, true);
             updateworldchunks();
         }
@@ -280,9 +283,8 @@ namespace game
 #ifndef STANDALONE
         if(!initing)
         {
-            connected = true;
+            if(!remote && !isconnected()) localconnect();
             mainmenu = 0;
-            if(!editmode) toggleedit(true);
         }
 #endif
         findplayerspawn(player1, -1, 0);
