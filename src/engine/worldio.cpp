@@ -176,8 +176,14 @@ FVAR(terraincontinentwarpfreq, 0.000001f, 0.001f, 1.0f);
 FVAR(terraincontinentwarpamp, 0.0f, 40.0f, float(WORLD_HEIGHT_BLOCKS * 4));
 FVAR(terrainfeaturewarpfreq, 0.000001f, 0.001f, 1.0f);
 FVAR(terrainfeaturewarpamp, 0.0f, 120.0f, float(WORLD_HEIGHT_BLOCKS * 4));
+FVAR(terraintemperaturefreq, 0.000001f, 0.0004f, 1.0f);
+FVAR(terrainmoisturefreq, 0.000001f, 0.0006f, 1.0f);
+FVAR(terrainweirdnessfreq, 0.000001f, 0.001f, 1.0f);
+FVAR(terrainweirdnessstrength, 0.0f, 0.15f, 1.0f);
 
 VAR(terrainsealevel, WORLD_MIN_HEIGHT + 1, 0, WORLD_MAX_HEIGHT - 1);
+VAR(terrainsnowheight, WORLD_MIN_HEIGHT + 1, 70, WORLD_MAX_HEIGHT - 1);
+VAR(terrainbiomeblend, 0, 16, 64);
 FVAR(terraincontinentheight, 0.0f, 35.0f, float(WORLD_HEIGHT_BLOCKS));
 FVAR(terrainhillheight, 0.0f, 10.0f, float(WORLD_HEIGHT_BLOCKS));
 FVAR(terrainmountainheight, 0.0f, 80.0f, float(WORLD_HEIGHT_BLOCKS));
@@ -188,6 +194,9 @@ FVAR(terrainlandmasklow, -1.0f, -0.2f, 1.0f);
 FVAR(terrainlandmaskhigh, -1.0f, 0.1f, 1.0f);
 FVAR(terrainmountainmasklow, -1.0f, 0.15f, 1.0f);
 FVAR(terrainmountainmaskhigh, -1.0f, 0.65f, 1.0f);
+FVAR(terraindeserttemperature, -1.0f, 0.4f, 1.0f);
+FVAR(terraindesertmoisture, -1.0f, -0.25f, 1.0f);
+FVAR(terrainforestmoisture, -1.0f, 0.35f, 1.0f);
 
 static int activeworldseed = 1337;
 
@@ -195,20 +204,26 @@ struct terrainsettings
 {
     float continentfreq, mountainfreq, erosionfreq, hillfreq, detailfreq;
     float continentwarpfreq, continentwarpamp, featurewarpfreq, featurewarpamp;
+    float temperaturefreq, moisturefreq, weirdnessfreq, weirdnessstrength;
     float continentheight, hillheight, mountainheight, erosionheight, detailheight;
     float landmasklow, landmaskhigh, mountainmasklow, mountainmaskhigh;
-    int sealevel;
+    float deserttemperature, desertmoisture, forestmoisture;
+    int sealevel, snowheight, biomeblend;
 
     terrainsettings()
         : continentfreq(terraincontinentfreq), mountainfreq(terrainmountainfreq),
           erosionfreq(terrainerosionfreq), hillfreq(terrainhillfreq), detailfreq(terraindetailfreq),
           continentwarpfreq(terraincontinentwarpfreq), continentwarpamp(terraincontinentwarpamp),
           featurewarpfreq(terrainfeaturewarpfreq), featurewarpamp(terrainfeaturewarpamp),
+          temperaturefreq(terraintemperaturefreq), moisturefreq(terrainmoisturefreq),
+          weirdnessfreq(terrainweirdnessfreq), weirdnessstrength(terrainweirdnessstrength),
           continentheight(terraincontinentheight), hillheight(terrainhillheight),
           mountainheight(terrainmountainheight), erosionheight(terrainerosionheight),
           detailheight(terraindetailheight), landmasklow(terrainlandmasklow),
           landmaskhigh(terrainlandmaskhigh), mountainmasklow(terrainmountainmasklow),
-          mountainmaskhigh(terrainmountainmaskhigh), sealevel(terrainsealevel)
+          mountainmaskhigh(terrainmountainmaskhigh), deserttemperature(terraindeserttemperature),
+          desertmoisture(terraindesertmoisture), forestmoisture(terrainforestmoisture),
+          sealevel(terrainsealevel), snowheight(terrainsnowheight), biomeblend(terrainbiomeblend)
     {
     }
 };
@@ -265,7 +280,8 @@ struct terraincubetype
 
 static vector<terraincubetype *> terraincubetypes;
 static int worldgrasstexture = DEFAULT_GEOM, worldgrasssidetexture = DEFAULT_GEOM,
-           worlddirttexture = DEFAULT_GEOM, worldstonetexture = DEFAULT_GEOM;
+           worlddirttexture = DEFAULT_GEOM, worldstonetexture = DEFAULT_GEOM,
+           worldsandtexture = DEFAULT_GEOM, worldsnowtexture = DEFAULT_GEOM;
 
 static terraincubetype *findterraincube(const char *name)
 {
@@ -276,7 +292,8 @@ static terraincubetype *findterraincube(const char *name)
 void terrainreset()
 {
     terraincubetypes.deletecontents();
-    worldgrasstexture = worldgrasssidetexture = worlddirttexture = worldstonetexture = DEFAULT_GEOM;
+    worldgrasstexture = worldgrasssidetexture = worlddirttexture = worldstonetexture =
+        worldsandtexture = worldsnowtexture = DEFAULT_GEOM;
 }
 
 COMMAND(terrainreset, "");
@@ -312,10 +329,11 @@ static bool loadterrain()
     }
 
     terraincubetype *grass = findterraincube("Grass"), *dirt = findterraincube("Dirt"),
-                    *stone = findterraincube("Stone");
-    if(!grass || !dirt || !stone)
+                    *stone = findterraincube("Stone"), *sand = findterraincube("Sand"),
+                    *snow = findterraincube("Snow");
+    if(!grass || !dirt || !stone || !sand || !snow)
     {
-        conoutf(CON_ERROR, "terrain.cfg must define Grass, Dirt, and Stone cubes");
+        conoutf(CON_ERROR, "terrain.cfg must define Grass, Dirt, Stone, Sand, and Snow cubes");
         return false;
     }
 
@@ -343,6 +361,8 @@ static bool loadterrain()
     worldgrasssidetexture = grass->sideslot;
     worlddirttexture = dirt->slot;
     worldstonetexture = stone->slot;
+    worldsandtexture = sand->slot;
+    worldsnowtexture = snow->slot;
     conoutf(CON_DEBUG, "loaded %d terrain cube definitions", terraincubetypes.length());
     return true;
 }
@@ -361,7 +381,7 @@ struct worldchunk
 
 struct worldchunkjob
 {
-    int x, y, seed, grasstexture, grasssidetexture, dirttexture, stonetexture;
+    int x, y, seed, grasstexture, grasssidetexture, dirttexture, stonetexture, sandtexture, snowtexture;
     terrainsettings terrain;
     int families, loaderror;
     uint epoch;
@@ -373,6 +393,7 @@ struct worldchunkjob
         : x(x), y(y), seed(activeworldseed),
           grasstexture(worldgrasstexture), grasssidetexture(worldgrasssidetexture),
           dirttexture(worlddirttexture), stonetexture(worldstonetexture),
+          sandtexture(worldsandtexture), snowtexture(worldsnowtexture),
           families(0), loaderror(0), epoch(epoch), loaded(false), root(NULL)
     {
         filename[0] = '\0';
@@ -864,20 +885,28 @@ struct worldgencontext
 {
     FastNoiseLite continentwarp, featurewarp;
     FastNoiseLite continent, mountains, erosion, hills, detail;
+    FastNoiseLite temperature, moisture, weirdness, biomeblend;
     terrainsettings terrain;
     int heightmap[WORLD_CHUNK_BLOCKS * WORLD_CHUNK_BLOCKS];
-    int grasstexture, grasssidetexture, dirttexture, stonetexture;
+    uchar biomemap[WORLD_CHUNK_BLOCKS * WORLD_CHUNK_BLOCKS];
+    int grasstexture, grasssidetexture, dirttexture, stonetexture, sandtexture, snowtexture;
     bool prepared;
     int families;
 
     worldgencontext(int seed, int grasstexture, int grasssidetexture, int dirttexture, int stonetexture,
-                    bool prepared, const terrainsettings &terrain)
+                    int sandtexture, int snowtexture, bool prepared, const terrainsettings &terrain)
         : terrain(terrain), grasstexture(grasstexture), grasssidetexture(grasssidetexture),
-          dirttexture(dirttexture), stonetexture(stonetexture), prepared(prepared), families(0)
+          dirttexture(dirttexture), stonetexture(stonetexture), sandtexture(sandtexture),
+          snowtexture(snowtexture), prepared(prepared), families(0)
     {
         setupworldwarp(continentwarp, seed ^ 0x6C8E9CF5, terrain.continentwarpfreq, terrain.continentwarpamp);
         setupworldwarp(featurewarp, seed ^ 0x35A4F2D1, terrain.featurewarpfreq, terrain.featurewarpamp);
         setupworldnoise(continent, mountains, erosion, hills, detail, seed, terrain);
+        setupworldnoiselayer(temperature, seed ^ 0x51D7348B, terrain.temperaturefreq, 3);
+        setupworldnoiselayer(moisture, seed ^ 0x2F6E2B1D, terrain.moisturefreq, 3);
+        setupworldnoiselayer(weirdness, seed ^ 0x749A7C15, terrain.weirdnessfreq, 3);
+        setupworldnoiselayer(biomeblend, seed ^ 0x13C6E91F,
+                             terrain.biomeblend > 0 ? 1.0f / terrain.biomeblend : 1.0f, 1);
     }
 };
 
@@ -911,7 +940,8 @@ static void setworldcubematerial(cube &c, int material)
     c.material = material;
 }
 
-enum { WORLD_EMPTY, WORLD_STONE, WORLD_DIRT, WORLD_GRASS, WORLD_WATER, WORLD_MIXED };
+enum { WORLD_EMPTY, WORLD_STONE, WORLD_DIRT, WORLD_GRASS, WORLD_SAND, WORLD_SNOW, WORLD_WATER, WORLD_MIXED };
+enum { BIOME_OCEAN, BIOME_SNOWY_MOUNTAIN, BIOME_DESERT, BIOME_FOREST, BIOME_PLAINS };
 
 static float worldterrainsmoothstep(float low, float high, float value)
 {
@@ -949,10 +979,60 @@ static int generateworldterrainheight(const worldgencontext &ctx, int chunkx, in
     return clamp(int(floor(height + 0.5f)), WORLD_MIN_HEIGHT + 1, WORLD_MAX_HEIGHT - 1) * WORLD_BLOCK_SIZE;
 }
 
+static int generateworldbiome(const worldgencontext &ctx, int chunkx, int chunky, int blockx, int blocky,
+                              int height)
+{
+    if(height < ctx.terrain.sealevel * WORLD_BLOCK_SIZE) return BIOME_OCEAN;
+
+    const float noisex = float(chunkx) * WORLD_CHUNK_BLOCKS + blockx + 10000.5f,
+                noisey = float(chunky) * WORLD_CHUNK_BLOCKS + blocky - 10000.5f,
+                weirdness = ctx.weirdness.GetNoise(noisex, noisey),
+                temperature = ctx.temperature.GetNoise(noisex, noisey)
+                            + weirdness * ctx.terrain.weirdnessstrength,
+                moisture = ctx.moisture.GetNoise(noisex, noisey)
+                         - weirdness * ctx.terrain.weirdnessstrength,
+                heightblocks = height / float(WORLD_BLOCK_SIZE);
+
+    if(ctx.terrain.biomeblend <= 0)
+    {
+        if(heightblocks > ctx.terrain.snowheight) return BIOME_SNOWY_MOUNTAIN;
+        if(temperature > ctx.terrain.deserttemperature && moisture < ctx.terrain.desertmoisture)
+            return BIOME_DESERT;
+        if(moisture > ctx.terrain.forestmoisture) return BIOME_FOREST;
+        return BIOME_PLAINS;
+    }
+
+    const float blendblocks = ctx.terrain.biomeblend,
+                temperatureblend = max(blendblocks * ctx.terrain.temperaturefreq * 2.0f, 0.001f),
+                moistureblend = max(blendblocks * ctx.terrain.moisturefreq * 2.0f, 0.001f),
+                selector = clamp((ctx.biomeblend.GetNoise(noisex, noisey) + 1.0f) * 0.5f, 0.0f, 1.0f),
+                snowweight = worldterrainsmoothstep(ctx.terrain.snowheight - blendblocks * 0.5f,
+                                                    ctx.terrain.snowheight + blendblocks * 0.5f,
+                                                    heightblocks),
+                hotweight = worldterrainsmoothstep(ctx.terrain.deserttemperature - temperatureblend,
+                                                   ctx.terrain.deserttemperature + temperatureblend,
+                                                   temperature),
+                dryweight = 1.0f - worldterrainsmoothstep(ctx.terrain.desertmoisture - moistureblend,
+                                                         ctx.terrain.desertmoisture + moistureblend,
+                                                         moisture),
+                forestweight = worldterrainsmoothstep(ctx.terrain.forestmoisture - moistureblend,
+                                                      ctx.terrain.forestmoisture + moistureblend,
+                                                      moisture);
+    if(snowweight > selector) return BIOME_SNOWY_MOUNTAIN;
+    if(hotweight * dryweight > selector) return BIOME_DESERT;
+    if(forestweight > selector) return BIOME_FOREST;
+    return BIOME_PLAINS;
+}
+
 static void generateworldheightmap(worldgencontext &ctx, int chunkx, int chunky)
 {
     loop(y, WORLD_CHUNK_BLOCKS) loop(x, WORLD_CHUNK_BLOCKS)
-        ctx.heightmap[y * WORLD_CHUNK_BLOCKS + x] = generateworldterrainheight(ctx, chunkx, chunky, x, y);
+    {
+        const int index = y * WORLD_CHUNK_BLOCKS + x,
+                  height = generateworldterrainheight(ctx, chunkx, chunky, x, y);
+        ctx.heightmap[index] = height;
+        ctx.biomemap[index] = generateworldbiome(ctx, chunkx, chunky, x, y, height);
+    }
 }
 
 static int worldterrainheight(const worldgencontext &ctx, int localx, int localy)
@@ -960,7 +1040,12 @@ static int worldterrainheight(const worldgencontext &ctx, int localx, int localy
     return ctx.heightmap[localy / WORLD_BLOCK_SIZE * WORLD_CHUNK_BLOCKS + localx / WORLD_BLOCK_SIZE];
 }
 
-static int worldcolumncubetype(const worldgencontext &ctx, int z, int size, int height)
+static int worldterrainbiome(const worldgencontext &ctx, int localx, int localy)
+{
+    return ctx.biomemap[localy / WORLD_BLOCK_SIZE * WORLD_CHUNK_BLOCKS + localx / WORLD_BLOCK_SIZE];
+}
+
+static int worldcolumncubetype(const worldgencontext &ctx, int z, int size, int height, int biome)
 {
     const int surface = WORLD_GROUND_HEIGHT + height,
               watertop = WORLD_GROUND_HEIGHT + ctx.terrain.sealevel * WORLD_BLOCK_SIZE,
@@ -970,7 +1055,13 @@ static int worldcolumncubetype(const worldgencontext &ctx, int z, int size, int 
     if(z >= max(surface, watertop)) return WORLD_EMPTY;
     if(surface < watertop && z >= surface && z + size <= watertop) return WORLD_WATER;
     if(z + size <= dirtbottom) return WORLD_STONE;
+    if(biome == BIOME_DESERT || biome == BIOME_OCEAN)
+    {
+        if(z >= dirtbottom && z + size <= surface) return WORLD_SAND;
+        return WORLD_MIXED;
+    }
     if(z >= dirtbottom && z + size <= grassbottom) return WORLD_DIRT;
+    if(biome == BIOME_SNOWY_MOUNTAIN && z >= grassbottom && z + size <= surface) return WORLD_SNOW;
     if(z >= grassbottom && z + size <= surface) return WORLD_GRASS;
     return WORLD_MIXED;
 }
@@ -986,7 +1077,8 @@ static int worldcubetype(const worldgencontext &ctx, const ivec &o, int size)
     for(int y = o.y; y < o.y + size; y += WORLD_BLOCK_SIZE)
     for(int x = o.x; x < o.x + size; x += WORLD_BLOCK_SIZE)
     {
-        int columntype = worldcolumncubetype(ctx, o.z, size, worldterrainheight(ctx, x, y));
+        int columntype = worldcolumncubetype(ctx, o.z, size, worldterrainheight(ctx, x, y),
+                                            worldterrainbiome(ctx, x, y));
         if(columntype == WORLD_MIXED || (type >= 0 && type != columntype)) return WORLD_MIXED;
         type = columntype;
     }
@@ -1011,6 +1103,14 @@ static void generateworldcube(worldgencontext &ctx, cube &c, const ivec &o, int 
 
         case WORLD_GRASS:
             setworldcubetexture(c, ctx.grasssidetexture, ctx.grasstexture);
+            return;
+
+        case WORLD_SAND:
+            setworldcubetexture(c, ctx.sandtexture);
+            return;
+
+        case WORLD_SNOW:
+            setworldcubetexture(c, ctx.snowtexture);
             return;
 
         case WORLD_WATER:
@@ -1042,7 +1142,8 @@ static cube *generateworldchunk(int chunkx, int chunky)
 {
     const terrainsettings terrain;
     worldgencontext ctx(activeworldseed, worldgrasstexture, worldgrasssidetexture,
-                        worlddirttexture, worldstonetexture, false, terrain);
+                        worlddirttexture, worldstonetexture, worldsandtexture, worldsnowtexture,
+                        false, terrain);
     return generateworldchunk(chunkx, chunky, ctx);
 }
 
@@ -1660,7 +1761,8 @@ static cube *prepareworldchunk(worldchunkjob &job)
     }
 
     worldgencontext ctx(job.seed, job.grasstexture, job.grasssidetexture,
-                        job.dirttexture, job.stonetexture, true, job.terrain);
+                        job.dirttexture, job.stonetexture, job.sandtexture, job.snowtexture,
+                        true, job.terrain);
     cube *root = generateworldchunk(job.x, job.y, ctx);
     job.families = ctx.families;
     job.loaded = false;
@@ -1995,7 +2097,13 @@ static bool saveworldconfig()
         "terraincontinentwarpamp %.9g\n"
         "terrainfeaturewarpfreq %.9g\n"
         "terrainfeaturewarpamp %.9g\n"
+        "terraintemperaturefreq %.9g\n"
+        "terrainmoisturefreq %.9g\n"
+        "terrainweirdnessfreq %.9g\n"
+        "terrainweirdnessstrength %.9g\n"
         "terrainsealevel %d\n"
+        "terrainsnowheight %d\n"
+        "terrainbiomeblend %d\n"
         "terraincontinentheight %.9g\n"
         "terrainhillheight %.9g\n"
         "terrainmountainheight %.9g\n"
@@ -2004,14 +2112,20 @@ static bool saveworldconfig()
         "terrainlandmasklow %.9g\n"
         "terrainlandmaskhigh %.9g\n"
         "terrainmountainmasklow %.9g\n"
-        "terrainmountainmaskhigh %.9g\n",
+        "terrainmountainmaskhigh %.9g\n"
+        "terraindeserttemperature %.9g\n"
+        "terraindesertmoisture %.9g\n"
+        "terrainforestmoisture %.9g\n",
         WORLD_GROUND_HEIGHT, WORLD_CHUNK_BLOCKS, WORLD_GRID_POWER, WORLD_BLOCK_SIZE, activeworldseed,
         WORLD_MIN_HEIGHT, WORLD_MAX_HEIGHT,
         terraincontinentfreq, terrainmountainfreq, terrainerosionfreq, terrainhillfreq, terraindetailfreq,
         terraincontinentwarpfreq, terraincontinentwarpamp, terrainfeaturewarpfreq, terrainfeaturewarpamp,
-        terrainsealevel, terraincontinentheight, terrainhillheight, terrainmountainheight,
+        terraintemperaturefreq, terrainmoisturefreq, terrainweirdnessfreq, terrainweirdnessstrength,
+        terrainsealevel, terrainsnowheight, terrainbiomeblend,
+        terraincontinentheight, terrainhillheight, terrainmountainheight,
         terrainerosionheight, terraindetailheight, terrainlandmasklow, terrainlandmaskhigh,
-        terrainmountainmasklow, terrainmountainmaskhigh
+        terrainmountainmasklow, terrainmountainmaskhigh, terraindeserttemperature,
+        terraindesertmoisture, terrainforestmoisture
     );
     delete f;
 
