@@ -148,11 +148,13 @@ enum
     WORLD_CHUNK_SIZE = WORLD_BLOCK_SIZE * WORLD_CHUNK_BLOCKS,
     WORLD_MIN_HEIGHT = -256,
     WORLD_MAX_HEIGHT = 256,
-    WORLD_MAP_SIZE = WORLD_MAX_HEIGHT - WORLD_MIN_HEIGHT,
-    WORLD_CHUNK_SCALE = WORLD_GRID_POWER + 6,
+    WORLD_HEIGHT_BLOCKS = WORLD_MAX_HEIGHT - WORLD_MIN_HEIGHT,
+    WORLD_MAP_SIZE = WORLD_HEIGHT_BLOCKS * WORLD_BLOCK_SIZE,
+    WORLD_CHUNK_SCALE = WORLD_GRID_POWER + 9,
     WORLD_CHUNK_MAP_SIZE = 1 << WORLD_CHUNK_SCALE,
     WORLD_CHUNK_ROOT_SIZE = WORLD_CHUNK_MAP_SIZE >> 1,
-    WORLD_GROUND_HEIGHT = -WORLD_MIN_HEIGHT,
+    WORLD_CHUNK_SLICES = WORLD_MAP_SIZE / WORLD_CHUNK_SIZE,
+    WORLD_GROUND_HEIGHT = -WORLD_MIN_HEIGHT * WORLD_BLOCK_SIZE,
     WORLD_DIRT_DEPTH = 4 * WORLD_BLOCK_SIZE,
     WORLD_MAX_CHUNKS_PER_SIDE = 64
 };
@@ -380,17 +382,28 @@ static ivec worldchunkorigin(const worldchunk &chunk, int z = 0)
                 (chunk.y - worldfirstchunky) * WORLD_CHUNK_SIZE, z);
 }
 
+static cube &lookupworldchunkcube(worldchunk &chunk, int z)
+{
+    ivec pos(0, 0, z);
+    int scale = WORLD_CHUNK_SCALE - 1;
+    cube *c = &chunk.root[octastep(pos.x, pos.y, pos.z, scale)];
+    while(!(WORLD_CHUNK_SIZE >> scale))
+    {
+        if(!c->children) subdividecube(*c);
+        --scale;
+        c = &c->children[octastep(pos.x, pos.y, pos.z, scale)];
+    }
+    return *c;
+}
+
 static void syncmountedworldchunk(worldchunk &chunk)
 {
     if(!chunk.mounted || !chunk.root || !worldroot) return;
-    loopi(8)
+    loopi(WORLD_CHUNK_SLICES)
     {
-        ivec offset(i, ivec(0, 0, 0), WORLD_CHUNK_ROOT_SIZE);
-        if(offset.x >= WORLD_CHUNK_SIZE || offset.y >= WORLD_CHUNK_SIZE || offset.z >= WORLD_MAP_SIZE)
-            continue;
-        ivec origin = worldchunkorigin(chunk);
-        origin.add(offset);
-        pasteworldcube(lookupcube(origin, WORLD_CHUNK_ROOT_SIZE), chunk.root[i]);
+        int z = i * WORLD_CHUNK_SIZE;
+        pasteworldcube(lookupcube(worldchunkorigin(chunk, z), WORLD_CHUNK_SIZE),
+                       lookupworldchunkcube(chunk, z));
     }
 }
 
@@ -402,30 +415,23 @@ static void syncmountedworldchunks()
 
 static void mountworldchunk(worldchunk &chunk)
 {
-    loopi(8)
+    loopi(WORLD_CHUNK_SLICES)
     {
-        ivec offset(i, ivec(0, 0, 0), WORLD_CHUNK_ROOT_SIZE);
-        if(offset.x >= WORLD_CHUNK_SIZE || offset.y >= WORLD_CHUNK_SIZE || offset.z >= WORLD_MAP_SIZE)
-            continue;
-        ivec origin = worldchunkorigin(chunk);
-        origin.add(offset);
-        moveworldcube(chunk.root[i], lookupcube(origin, WORLD_CHUNK_ROOT_SIZE));
+        int z = i * WORLD_CHUNK_SIZE;
+        moveworldcube(lookupworldchunkcube(chunk, z),
+                      lookupcube(worldchunkorigin(chunk, z), WORLD_CHUNK_SIZE));
     }
     chunk.mounted = true;
 }
 
 static void unmountworldchunk(worldchunk &chunk)
 {
-    loopi(8)
+    loopi(WORLD_CHUNK_SLICES)
     {
-        ivec offset(i, ivec(0, 0, 0), WORLD_CHUNK_ROOT_SIZE);
-        if(offset.x >= WORLD_CHUNK_SIZE || offset.y >= WORLD_CHUNK_SIZE || offset.z >= WORLD_MAP_SIZE)
-            continue;
-        ivec origin = worldchunkorigin(chunk);
-        origin.add(offset);
-        cube &c = lookupcube(origin, WORLD_CHUNK_ROOT_SIZE);
+        int z = i * WORLD_CHUNK_SIZE;
+        cube &c = lookupcube(worldchunkorigin(chunk, z), WORLD_CHUNK_SIZE);
         detachworldcubegeometry(c);
-        moveworldcube(c, chunk.root[i]);
+        moveworldcube(c, lookupworldchunkcube(chunk, z));
     }
     chunk.mounted = false;
 }
