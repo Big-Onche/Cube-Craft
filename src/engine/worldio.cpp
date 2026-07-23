@@ -204,6 +204,10 @@ FVAR(terrainmountainmaskhigh, -1.0f, 0.65f, 1.0f);
 FVAR(terraindeserttemperature, -1.0f, 0.4f, 1.0f);
 FVAR(terraindesertmoisture, -1.0f, -0.25f, 1.0f);
 FVAR(terrainforestmoisture, -1.0f, 0.35f, 1.0f);
+FVAR(terrainforesttreedensity, 0.0f, 0.1f, 0.25f);
+FVAR(terrainplainstreedensity, 0.0f, 0.0015f, 0.25f);
+VAR(terrainpinestartheight, WORLD_MIN_HEIGHT + 1, 25, WORLD_MAX_HEIGHT - 1);
+VAR(terrainpinefullheight, WORLD_MIN_HEIGHT + 1, 45, WORLD_MAX_HEIGHT - 1);
 
 static int activeworldseed = 1337;
 
@@ -215,9 +219,11 @@ struct terrainsettings
     float continentheight, hillheight, mountainheight, erosionheight, detailheight;
     float landmasklow, landmaskhigh, mountainmasklow, mountainmaskhigh;
     float deserttemperature, desertmoisture, forestmoisture;
+    float foresttreedensity, plainstreedensity;
     int sealevel, snowheight, mountainstonelow, mountainstonehigh;
     int biomeblend, coastwidth, coastvariation;
     int beachminheight, beachmaxheight;
+    int pinestartheight, pinefullheight;
 
     terrainsettings()
         : continentfreq(terraincontinentfreq), mountainfreq(terrainmountainfreq),
@@ -233,11 +239,13 @@ struct terrainsettings
           landmaskhigh(terrainlandmaskhigh), mountainmasklow(terrainmountainmasklow),
           mountainmaskhigh(terrainmountainmaskhigh), deserttemperature(terraindeserttemperature),
           desertmoisture(terraindesertmoisture), forestmoisture(terrainforestmoisture),
+          foresttreedensity(terrainforesttreedensity), plainstreedensity(terrainplainstreedensity),
           sealevel(terrainsealevel), snowheight(terrainsnowheight),
           mountainstonelow(terrainmountainstonelow), mountainstonehigh(terrainmountainstonehigh),
           biomeblend(terrainbiomeblend),
           coastwidth(terraincoastwidth), coastvariation(terraincoastvariation),
-          beachminheight(terrainbeachminheight), beachmaxheight(terrainbeachmaxheight)
+          beachminheight(terrainbeachminheight), beachmaxheight(terrainbeachmaxheight),
+          pinestartheight(terrainpinestartheight), pinefullheight(terrainpinefullheight)
     {
     }
 };
@@ -295,7 +303,8 @@ struct terraincubetype
 static vector<terraincubetype *> terraincubetypes;
 static int worldgrasstexture = DEFAULT_GEOM, worldgrasssidetexture = DEFAULT_GEOM,
            worlddirttexture = DEFAULT_GEOM, worldstonetexture = DEFAULT_GEOM,
-           worldsandtexture = DEFAULT_GEOM, worldsnowtexture = DEFAULT_GEOM;
+           worldsandtexture = DEFAULT_GEOM, worldsnowtexture = DEFAULT_GEOM,
+           worldwoodtexture = DEFAULT_GEOM, worldleaftexture = DEFAULT_GEOM;
 
 static terraincubetype *findterraincube(const char *name)
 {
@@ -307,7 +316,7 @@ void terrainreset()
 {
     terraincubetypes.deletecontents();
     worldgrasstexture = worldgrasssidetexture = worlddirttexture = worldstonetexture =
-        worldsandtexture = worldsnowtexture = DEFAULT_GEOM;
+        worldsandtexture = worldsnowtexture = worldwoodtexture = worldleaftexture = DEFAULT_GEOM;
 }
 
 COMMAND(terrainreset, "");
@@ -344,10 +353,11 @@ static bool loadterrain()
 
     terraincubetype *grass = findterraincube("Grass"), *dirt = findterraincube("Dirt"),
                     *stone = findterraincube("Stone"), *sand = findterraincube("Sand"),
-                    *snow = findterraincube("Snow");
-    if(!grass || !dirt || !stone || !sand || !snow)
+                    *snow = findterraincube("Snow"), *wood = findterraincube("Wood"),
+                    *leaves = findterraincube("Leaves");
+    if(!grass || !dirt || !stone || !sand || !snow || !wood || !leaves)
     {
-        conoutf(CON_ERROR, "terrain.cfg must define Grass, Dirt, Stone, Sand, and Snow cubes");
+        conoutf(CON_ERROR, "terrain.cfg must define Grass, Dirt, Stone, Sand, Snow, Wood, and Leaves cubes");
         return false;
     }
 
@@ -377,6 +387,8 @@ static bool loadterrain()
     worldstonetexture = stone->slot;
     worldsandtexture = sand->slot;
     worldsnowtexture = snow->slot;
+    worldwoodtexture = wood->slot;
+    worldleaftexture = leaves->slot;
     conoutf(CON_DEBUG, "loaded %d terrain cube definitions", terraincubetypes.length());
     return true;
 }
@@ -395,7 +407,8 @@ struct worldchunk
 
 struct worldchunkjob
 {
-    int x, y, seed, grasstexture, grasssidetexture, dirttexture, stonetexture, sandtexture, snowtexture;
+    int x, y, seed, grasstexture, grasssidetexture, dirttexture, stonetexture, sandtexture, snowtexture,
+        woodtexture, leaftexture;
     terrainsettings terrain;
     int families, loaderror;
     uint epoch;
@@ -408,6 +421,7 @@ struct worldchunkjob
           grasstexture(worldgrasstexture), grasssidetexture(worldgrasssidetexture),
           dirttexture(worlddirttexture), stonetexture(worldstonetexture),
           sandtexture(worldsandtexture), snowtexture(worldsnowtexture),
+          woodtexture(worldwoodtexture), leaftexture(worldleaftexture),
           families(0), loaderror(0), epoch(epoch), loaded(false), root(NULL)
     {
         filename[0] = '\0';
@@ -905,15 +919,18 @@ struct worldgencontext
     uchar biomemap[WORLD_CHUNK_BLOCKS * WORLD_CHUNK_BLOCKS];
     uchar coastmap[WORLD_CHUNK_BLOCKS * WORLD_CHUNK_BLOCKS];
     uchar rockmap[WORLD_CHUNK_BLOCKS * WORLD_CHUNK_BLOCKS];
-    int grasstexture, grasssidetexture, dirttexture, stonetexture, sandtexture, snowtexture;
+    int seed, grasstexture, grasssidetexture, dirttexture, stonetexture, sandtexture, snowtexture,
+        woodtexture, leaftexture;
     bool prepared;
     int families;
 
     worldgencontext(int seed, int grasstexture, int grasssidetexture, int dirttexture, int stonetexture,
-                    int sandtexture, int snowtexture, bool prepared, const terrainsettings &terrain)
-        : terrain(terrain), grasstexture(grasstexture), grasssidetexture(grasssidetexture),
+                    int sandtexture, int snowtexture, int woodtexture, int leaftexture,
+                    bool prepared, const terrainsettings &terrain)
+        : terrain(terrain), seed(seed), grasstexture(grasstexture), grasssidetexture(grasssidetexture),
           dirttexture(dirttexture), stonetexture(stonetexture), sandtexture(sandtexture),
-          snowtexture(snowtexture), prepared(prepared), families(0)
+          snowtexture(snowtexture), woodtexture(woodtexture), leaftexture(leaftexture),
+          prepared(prepared), families(0)
     {
         setupworldwarp(continentwarp, seed ^ 0x6C8E9CF5, terrain.continentwarpfreq, terrain.continentwarpamp);
         setupworldwarp(featurewarp, seed ^ 0x35A4F2D1, terrain.featurewarpfreq, terrain.featurewarpamp);
@@ -1260,12 +1277,168 @@ static void generateworldcube(worldgencontext &ctx, cube &c, const ivec &o, int 
     loopi(8) generateworldcube(ctx, c.children[i], ivec(i, o, childsize), childsize);
 }
 
+static uint hashworldtree(uint seed, int chunkx, int chunky, int blockx, int blocky, uint salt)
+{
+    const uint worldx = uint(chunkx) * uint(WORLD_CHUNK_BLOCKS) + uint(blockx),
+               worldy = uint(chunky) * uint(WORLD_CHUNK_BLOCKS) + uint(blocky);
+    uint hash = seed ^ salt;
+    hash ^= worldx * 0x9E3779B9U;
+    hash ^= worldy * 0x85EBCA6BU;
+    hash ^= hash >> 16;
+    hash *= 0x7FEB352DU;
+    hash ^= hash >> 15;
+    hash *= 0x846CA68BU;
+    hash ^= hash >> 16;
+    return hash;
+}
+
+static float worldtreeunit(uint hash)
+{
+    return float(hash & 0x00FFFFFFU) / float(0x01000000U);
+}
+
+static void addworldtreeblock(vector<ivec> &blocks, int blockx, int blocky, int blockz)
+{
+    if(blockx < 0 || blockx >= WORLD_CHUNK_BLOCKS ||
+       blocky < 0 || blocky >= WORLD_CHUNK_BLOCKS ||
+       blockz < 0 || blockz >= WORLD_HEIGHT_BLOCKS) return;
+    blocks.add(ivec(blockx * WORLD_BLOCK_SIZE, blocky * WORLD_BLOCK_SIZE, blockz * WORLD_BLOCK_SIZE));
+}
+
+static void addworldregulartree(vector<ivec> &wood, vector<ivec> &leaves, int blockx, int blocky,
+                                int basez, int height, uint shapehash)
+{
+    loop(z, height) addworldtreeblock(wood, blockx, blocky, basez + z);
+
+    for(int z = height - 2; z <= height; ++z)
+    {
+        const int radius = z == height ? 1 : 2;
+        for(int y = -radius; y <= radius; ++y) for(int x = -radius; x <= radius; ++x)
+        {
+            if(radius == 2 && abs(x) == 2 && abs(y) == 2 &&
+               (hashworldtree(shapehash, x, y, z, height, 0xA511E9B3U) & 1U)) continue;
+            addworldtreeblock(leaves, blockx + x, blocky + y, basez + z);
+        }
+    }
+}
+
+static void addworldpinetree(vector<ivec> &wood, vector<ivec> &leaves, int blockx, int blocky,
+                             int basez, int height)
+{
+    loop(z, height) addworldtreeblock(wood, blockx, blocky, basez + z);
+    addworldtreeblock(leaves, blockx, blocky, basez + height);
+
+    for(int z = 2; z < height; ++z)
+    {
+        const int fromtop = height - z,
+                  radius = min(3, 1 + fromtop / 3);
+        for(int y = -radius; y <= radius; ++y) for(int x = -radius; x <= radius; ++x)
+        {
+            if(abs(x) + abs(y) > radius + 1) continue;
+            addworldtreeblock(leaves, blockx + x, blocky + y, basez + z);
+        }
+    }
+}
+
+static void subdivideworldgencube(worldgencontext &ctx, cube &c)
+{
+    if(c.children) return;
+    cube parent = c;
+    c.children = allocworldgenfamily(ctx);
+    loopi(8)
+    {
+        c.children[i] = parent;
+        c.children[i].children = NULL;
+        c.children[i].ext = NULL;
+        c.children[i].visible = 0;
+        c.children[i].merged = 0;
+    }
+}
+
+static cube &lookupworldgenblock(worldgencontext &ctx, cube *root, const ivec &position)
+{
+    cube *family = root;
+    ivec origin(0, 0, 0);
+    int size = WORLD_CHUNK_ROOT_SIZE;
+    for(;;)
+    {
+        const int index = (position.x >= origin.x + size ? 1 : 0)
+                        | (position.y >= origin.y + size ? 2 : 0)
+                        | (position.z >= origin.z + size ? 4 : 0);
+        cube &c = family[index];
+        if(size == WORLD_BLOCK_SIZE) return c;
+        subdivideworldgencube(ctx, c);
+        origin = ivec(index, origin, size);
+        family = c.children;
+        size >>= 1;
+    }
+}
+
+static void placeworldtrees(worldgencontext &ctx, cube *root, int chunkx, int chunky)
+{
+    vector<ivec> wood, leaves;
+    const int halo = 3,
+              beachmin = (ctx.terrain.sealevel
+                        + min(ctx.terrain.beachminheight, ctx.terrain.beachmaxheight)) * WORLD_BLOCK_SIZE,
+              beachmax = (ctx.terrain.sealevel
+                        + max(ctx.terrain.beachminheight, ctx.terrain.beachmaxheight)) * WORLD_BLOCK_SIZE;
+
+    for(int y = -halo; y < WORLD_CHUNK_BLOCKS + halo; ++y)
+    for(int x = -halo; x < WORLD_CHUNK_BLOCKS + halo; ++x)
+    {
+        const bool inside = x >= 0 && x < WORLD_CHUNK_BLOCKS &&
+                            y >= 0 && y < WORLD_CHUNK_BLOCKS;
+        const int index = inside ? y * WORLD_CHUNK_BLOCKS + x : 0,
+                  height = inside ? ctx.heightmap[index]
+                                  : generateworldterrainheight(ctx, chunkx, chunky, x, y),
+                  biome = inside ? ctx.biomemap[index]
+                                 : generateworldbiome(ctx, chunkx, chunky, x, y, height);
+        if(biome != BIOME_FOREST && biome != BIOME_PLAINS) continue;
+        if(inside ? ctx.rockmap[index] != 0
+                  : generateworldrock(ctx, chunkx, chunky, x, y, height)) continue;
+        if(ctx.terrain.coastwidth > 0 && height >= beachmin && height <= beachmax) continue;
+
+        const float density = biome == BIOME_FOREST
+                            ? ctx.terrain.foresttreedensity
+                            : ctx.terrain.plainstreedensity;
+        const uint spawn = hashworldtree(uint(ctx.seed), chunkx, chunky, x, y, 0xD1B54A35U);
+        if(worldtreeunit(spawn) >= density) continue;
+
+        const float heightblocks = height / float(WORLD_BLOCK_SIZE),
+                    pinelow = float(min(ctx.terrain.pinestartheight, ctx.terrain.pinefullheight)),
+                    pinehigh = float(max(ctx.terrain.pinestartheight, ctx.terrain.pinefullheight)),
+                    pinechance = worldterrainsmoothstep(pinelow, pinehigh, heightblocks);
+        const uint shape = hashworldtree(uint(ctx.seed), chunkx, chunky, x, y, 0x94D049BBU);
+        const bool pine = worldtreeunit(shape) < pinechance;
+        const int treeheight = pine ? 6 + int((shape >> 24) & 3U)
+                                    : 4 + int((shape >> 24) % 3U),
+                  basez = WORLD_GROUND_HEIGHT / WORLD_BLOCK_SIZE + height / WORLD_BLOCK_SIZE;
+        if(basez + treeheight >= WORLD_HEIGHT_BLOCKS) continue;
+
+        if(pine) addworldpinetree(wood, leaves, x, y, basez, treeheight);
+        else addworldregulartree(wood, leaves, x, y, basez, treeheight, shape);
+    }
+
+    loopv(leaves)
+    {
+        cube &c = lookupworldgenblock(ctx, root, leaves[i]);
+        if(isempty(c) && c.material == MAT_AIR) setworldcubetexture(c, ctx.leaftexture);
+    }
+    loopv(wood)
+    {
+        cube &c = lookupworldgenblock(ctx, root, wood[i]);
+        if((isempty(c) && c.material == MAT_AIR) || c.texture[0] == ctx.leaftexture)
+            setworldcubetexture(c, ctx.woodtexture);
+    }
+}
+
 static cube *generateworldchunk(int chunkx, int chunky, worldgencontext &ctx)
 {
     generateworldheightmap(ctx, chunkx, chunky);
     cube *root = allocworldgenfamily(ctx);
     const int rootsize = WORLD_CHUNK_ROOT_SIZE;
     loopi(8) generateworldcube(ctx, root[i], ivec(i, ivec(0, 0, 0), rootsize), rootsize);
+    placeworldtrees(ctx, root, chunkx, chunky);
     return root;
 }
 
@@ -1274,7 +1447,7 @@ static cube *generateworldchunk(int chunkx, int chunky)
     const terrainsettings terrain;
     worldgencontext ctx(activeworldseed, worldgrasstexture, worldgrasssidetexture,
                         worlddirttexture, worldstonetexture, worldsandtexture, worldsnowtexture,
-                        false, terrain);
+                        worldwoodtexture, worldleaftexture, false, terrain);
     return generateworldchunk(chunkx, chunky, ctx);
 }
 
@@ -1893,7 +2066,7 @@ static cube *prepareworldchunk(worldchunkjob &job)
 
     worldgencontext ctx(job.seed, job.grasstexture, job.grasssidetexture,
                         job.dirttexture, job.stonetexture, job.sandtexture, job.snowtexture,
-                        true, job.terrain);
+                        job.woodtexture, job.leaftexture, true, job.terrain);
     cube *root = generateworldchunk(job.x, job.y, ctx);
     job.families = ctx.families;
     job.loaded = false;
@@ -2253,7 +2426,11 @@ static bool saveworldconfig()
         "terrainmountainmaskhigh %.9g\n"
         "terraindeserttemperature %.9g\n"
         "terraindesertmoisture %.9g\n"
-        "terrainforestmoisture %.9g\n",
+        "terrainforestmoisture %.9g\n"
+        "terrainforesttreedensity %.9g\n"
+        "terrainplainstreedensity %.9g\n"
+        "terrainpinestartheight %d\n"
+        "terrainpinefullheight %d\n",
         WORLD_GROUND_HEIGHT, WORLD_CHUNK_BLOCKS, WORLD_GRID_POWER, WORLD_BLOCK_SIZE, activeworldseed,
         WORLD_MIN_HEIGHT, WORLD_MAX_HEIGHT,
         terraincontinentfreq, terrainmountainfreq, terrainerosionfreq, terrainhillfreq, terraindetailfreq,
@@ -2266,7 +2443,9 @@ static bool saveworldconfig()
         terraincontinentheight, terrainhillheight, terrainmountainheight,
         terrainerosionheight, terraindetailheight, terrainlandmasklow, terrainlandmaskhigh,
         terrainmountainmasklow, terrainmountainmaskhigh, terraindeserttemperature,
-        terraindesertmoisture, terrainforestmoisture
+        terraindesertmoisture, terrainforestmoisture,
+        terrainforesttreedensity, terrainplainstreedensity,
+        terrainpinestartheight, terrainpinefullheight
     );
     delete f;
 
