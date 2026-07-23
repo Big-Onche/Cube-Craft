@@ -167,25 +167,65 @@ enum
 VARP(maxchunkdist, 0, 2, WORLD_MAX_CHUNK_DIST);
 VARP(worldseed, 0, 1337, INT_MAX);
 
+FVAR(terraincontinentfreq, 0.000001f, 0.0005f, 1.0f);
+FVAR(terrainmountainfreq, 0.000001f, 0.002f, 1.0f);
+FVAR(terrainerosionfreq, 0.000001f, 0.003f, 1.0f);
+FVAR(terrainhillfreq, 0.000001f, 0.01f, 1.0f);
+FVAR(terraindetailfreq, 0.000001f, 0.04f, 1.0f);
+
+VAR(terrainsealevel, WORLD_MIN_HEIGHT + 1, 0, WORLD_MAX_HEIGHT - 1);
+FVAR(terraincontinentheight, 0.0f, 35.0f, float(WORLD_HEIGHT_BLOCKS));
+FVAR(terrainhillheight, 0.0f, 10.0f, float(WORLD_HEIGHT_BLOCKS));
+FVAR(terrainmountainheight, 0.0f, 80.0f, float(WORLD_HEIGHT_BLOCKS));
+FVAR(terrainerosionheight, 0.0f, 15.0f, float(WORLD_HEIGHT_BLOCKS));
+FVAR(terraindetailheight, 0.0f, 2.0f, float(WORLD_HEIGHT_BLOCKS));
+
+FVAR(terrainlandmasklow, -1.0f, -0.2f, 1.0f);
+FVAR(terrainlandmaskhigh, -1.0f, 0.1f, 1.0f);
+FVAR(terrainmountainmasklow, -1.0f, 0.15f, 1.0f);
+FVAR(terrainmountainmaskhigh, -1.0f, 0.65f, 1.0f);
+
 static int activeworldseed = 1337;
 
-static void setupworldnoise(FastNoiseLite &continent, FastNoiseLite &detail, int seed)
+struct terrainsettings
 {
-    continent.SetSeed(seed);
-    continent.SetNoiseType(FastNoiseLite::NoiseType_OpenSimplex2S);
-    continent.SetFrequency(0.004f);
-    continent.SetFractalType(FastNoiseLite::FractalType_FBm);
-    continent.SetFractalOctaves(3);
-    continent.SetFractalLacunarity(2.0f);
-    continent.SetFractalGain(0.5f);
+    float continentfreq, mountainfreq, erosionfreq, hillfreq, detailfreq;
+    float continentheight, hillheight, mountainheight, erosionheight, detailheight;
+    float landmasklow, landmaskhigh, mountainmasklow, mountainmaskhigh;
+    int sealevel;
 
-    detail.SetSeed(seed ^ 0x5BD1E995);
-    detail.SetNoiseType(FastNoiseLite::NoiseType_OpenSimplex2S);
-    detail.SetFrequency(0.018f);
-    detail.SetFractalType(FastNoiseLite::FractalType_FBm);
-    detail.SetFractalOctaves(4);
-    detail.SetFractalLacunarity(2.0f);
-    detail.SetFractalGain(0.5f);
+    terrainsettings()
+        : continentfreq(terraincontinentfreq), mountainfreq(terrainmountainfreq),
+          erosionfreq(terrainerosionfreq), hillfreq(terrainhillfreq), detailfreq(terraindetailfreq),
+          continentheight(terraincontinentheight), hillheight(terrainhillheight),
+          mountainheight(terrainmountainheight), erosionheight(terrainerosionheight),
+          detailheight(terraindetailheight), landmasklow(terrainlandmasklow),
+          landmaskhigh(terrainlandmaskhigh), mountainmasklow(terrainmountainmasklow),
+          mountainmaskhigh(terrainmountainmaskhigh), sealevel(terrainsealevel)
+    {
+    }
+};
+
+static void setupworldnoiselayer(FastNoiseLite &noise, int seed, float frequency, int octaves)
+{
+    noise.SetSeed(seed);
+    noise.SetNoiseType(FastNoiseLite::NoiseType_OpenSimplex2S);
+    noise.SetFrequency(frequency);
+    noise.SetFractalType(FastNoiseLite::FractalType_FBm);
+    noise.SetFractalOctaves(octaves);
+    noise.SetFractalLacunarity(2.0f);
+    noise.SetFractalGain(0.5f);
+}
+
+static void setupworldnoise(FastNoiseLite &continent, FastNoiseLite &mountains, FastNoiseLite &erosion,
+                            FastNoiseLite &hills, FastNoiseLite &detail, int seed,
+                            const terrainsettings &settings)
+{
+    setupworldnoiselayer(continent, seed, settings.continentfreq, 4);
+    setupworldnoiselayer(mountains, seed ^ 0x68E31DA4, settings.mountainfreq, 3);
+    setupworldnoiselayer(erosion, seed ^ 0x1B56C4E9, settings.erosionfreq, 3);
+    setupworldnoiselayer(hills, seed ^ 0x4A39B70D, settings.hillfreq, 3);
+    setupworldnoiselayer(detail, seed ^ 0x2C1B3C6D, settings.detailfreq, 2);
 }
 
 static void loadworldseed(int seed)
@@ -307,6 +347,7 @@ struct worldchunk
 struct worldchunkjob
 {
     int x, y, seed, grasstexture, grasssidetexture, dirttexture, stonetexture;
+    terrainsettings terrain;
     int families, loaderror;
     uint epoch;
     bool loaded;
@@ -806,16 +847,19 @@ void updateworldchunks(bool force)
 
 struct worldgencontext
 {
-    FastNoiseLite continent, detail;
+    FastNoiseLite continent, mountains, erosion, hills, detail;
+    terrainsettings terrain;
+    int heightmap[WORLD_CHUNK_BLOCKS * WORLD_CHUNK_BLOCKS];
     int grasstexture, grasssidetexture, dirttexture, stonetexture;
     bool prepared;
     int families;
 
-    worldgencontext(int seed, int grasstexture, int grasssidetexture, int dirttexture, int stonetexture, bool prepared)
-        : grasstexture(grasstexture), grasssidetexture(grasssidetexture),
+    worldgencontext(int seed, int grasstexture, int grasssidetexture, int dirttexture, int stonetexture,
+                    bool prepared, const terrainsettings &terrain)
+        : terrain(terrain), grasstexture(grasstexture), grasssidetexture(grasssidetexture),
           dirttexture(dirttexture), stonetexture(stonetexture), prepared(prepared), families(0)
     {
-        setupworldnoise(continent, detail, seed);
+        setupworldnoise(continent, mountains, erosion, hills, detail, seed, terrain);
     }
 };
 
@@ -851,22 +895,52 @@ static void setworldcubematerial(cube &c, int material)
 
 enum { WORLD_EMPTY, WORLD_STONE, WORLD_DIRT, WORLD_GRASS, WORLD_WATER, WORLD_MIXED };
 
-static int worldterrainheight(const worldgencontext &ctx, int chunkx, int chunky, int localx, int localy)
+static float worldterrainsmoothstep(float low, float high, float value)
 {
-    const float blockx = float(chunkx) * WORLD_CHUNK_BLOCKS + localx / WORLD_BLOCK_SIZE + 10000.5f,
-                blocky = float(chunky) * WORLD_CHUNK_BLOCKS + localy / WORLD_BLOCK_SIZE - 10000.5f,
-                continental = ctx.continent.GetNoise(blockx, blocky),
-                detail = ctx.detail.GetNoise(blockx, blocky);
-    float hillmask = clamp((continental - 0.05f) / 0.5f, 0.0f, 1.0f);
-    hillmask = hillmask * hillmask * (3.0f - 2.0f * hillmask);
-    const float height = continental * 9.0f - 0.5f + detail * (1.75f + 8.0f * hillmask);
-    return clamp(int(floor(height + 0.5f)), -14, 14) * WORLD_BLOCK_SIZE;
+    if(high <= low) return value >= high ? 1.0f : 0.0f;
+    float t = clamp((value - low) / (high - low), 0.0f, 1.0f);
+    return t * t * (3.0f - 2.0f * t);
 }
 
-static int worldcolumncubetype(int z, int size, int height)
+static int generateworldterrainheight(const worldgencontext &ctx, int chunkx, int chunky, int blockx, int blocky)
+{
+    const float noisex = float(chunkx) * WORLD_CHUNK_BLOCKS + blockx + 10000.5f,
+                noisey = float(chunky) * WORLD_CHUNK_BLOCKS + blocky - 10000.5f,
+                continental = ctx.continent.GetNoise(noisex, noisey),
+                mountains = ctx.mountains.GetNoise(noisex, noisey),
+                erosion = ctx.erosion.GetNoise(noisex, noisey),
+                hills = ctx.hills.GetNoise(noisex, noisey),
+                detail = ctx.detail.GetNoise(noisex, noisey);
+    const float landmask = worldterrainsmoothstep(ctx.terrain.landmasklow, ctx.terrain.landmaskhigh, continental),
+                mountainmask = worldterrainsmoothstep(ctx.terrain.mountainmasklow,
+                                                      ctx.terrain.mountainmaskhigh, continental);
+    float ridge = 1.0f - fabs(mountains);
+    ridge = ridge * ridge * ridge;
+
+    const float height = ctx.terrain.sealevel
+                       + continental * ctx.terrain.continentheight
+                       + landmask * hills * ctx.terrain.hillheight
+                       + mountainmask * ridge * ctx.terrain.mountainheight
+                       - erosion * mountainmask * ctx.terrain.erosionheight
+                       + detail * ctx.terrain.detailheight;
+    return clamp(int(floor(height + 0.5f)), WORLD_MIN_HEIGHT + 1, WORLD_MAX_HEIGHT - 1) * WORLD_BLOCK_SIZE;
+}
+
+static void generateworldheightmap(worldgencontext &ctx, int chunkx, int chunky)
+{
+    loop(y, WORLD_CHUNK_BLOCKS) loop(x, WORLD_CHUNK_BLOCKS)
+        ctx.heightmap[y * WORLD_CHUNK_BLOCKS + x] = generateworldterrainheight(ctx, chunkx, chunky, x, y);
+}
+
+static int worldterrainheight(const worldgencontext &ctx, int localx, int localy)
+{
+    return ctx.heightmap[localy / WORLD_BLOCK_SIZE * WORLD_CHUNK_BLOCKS + localx / WORLD_BLOCK_SIZE];
+}
+
+static int worldcolumncubetype(const worldgencontext &ctx, int z, int size, int height)
 {
     const int surface = WORLD_GROUND_HEIGHT + height,
-              watertop = WORLD_GROUND_HEIGHT,
+              watertop = WORLD_GROUND_HEIGHT + ctx.terrain.sealevel * WORLD_BLOCK_SIZE,
               dirtbottom = surface - WORLD_BLOCK_SIZE - WORLD_DIRT_DEPTH,
               grassbottom = surface - WORLD_BLOCK_SIZE;
 
@@ -878,7 +952,7 @@ static int worldcolumncubetype(int z, int size, int height)
     return WORLD_MIXED;
 }
 
-static int worldcubetype(const worldgencontext &ctx, const ivec &o, int size, int chunkx, int chunky)
+static int worldcubetype(const worldgencontext &ctx, const ivec &o, int size)
 {
     if(o.x >= WORLD_CHUNK_SIZE || o.y >= WORLD_CHUNK_SIZE || o.z >= WORLD_MAP_SIZE)
         return WORLD_EMPTY;
@@ -889,16 +963,16 @@ static int worldcubetype(const worldgencontext &ctx, const ivec &o, int size, in
     for(int y = o.y; y < o.y + size; y += WORLD_BLOCK_SIZE)
     for(int x = o.x; x < o.x + size; x += WORLD_BLOCK_SIZE)
     {
-        int columntype = worldcolumncubetype(o.z, size, worldterrainheight(ctx, chunkx, chunky, x, y));
+        int columntype = worldcolumncubetype(ctx, o.z, size, worldterrainheight(ctx, x, y));
         if(columntype == WORLD_MIXED || (type >= 0 && type != columntype)) return WORLD_MIXED;
         type = columntype;
     }
     return type;
 }
 
-static void generateworldcube(worldgencontext &ctx, cube &c, const ivec &o, int size, int chunkx, int chunky)
+static void generateworldcube(worldgencontext &ctx, cube &c, const ivec &o, int size)
 {
-    switch(worldcubetype(ctx, o, size, chunkx, chunky))
+    switch(worldcubetype(ctx, o, size))
     {
         case WORLD_EMPTY:
             setworldcubematerial(c, MAT_AIR);
@@ -929,21 +1003,23 @@ static void generateworldcube(worldgencontext &ctx, cube &c, const ivec &o, int 
 
     c.children = allocworldgenfamily(ctx);
     const int childsize = size >> 1;
-    loopi(8) generateworldcube(ctx, c.children[i], ivec(i, o, childsize), childsize, chunkx, chunky);
+    loopi(8) generateworldcube(ctx, c.children[i], ivec(i, o, childsize), childsize);
 }
 
 static cube *generateworldchunk(int chunkx, int chunky, worldgencontext &ctx)
 {
+    generateworldheightmap(ctx, chunkx, chunky);
     cube *root = allocworldgenfamily(ctx);
     const int rootsize = WORLD_CHUNK_ROOT_SIZE;
-    loopi(8) generateworldcube(ctx, root[i], ivec(i, ivec(0, 0, 0), rootsize), rootsize, chunkx, chunky);
+    loopi(8) generateworldcube(ctx, root[i], ivec(i, ivec(0, 0, 0), rootsize), rootsize);
     return root;
 }
 
 static cube *generateworldchunk(int chunkx, int chunky)
 {
+    const terrainsettings terrain;
     worldgencontext ctx(activeworldseed, worldgrasstexture, worldgrasssidetexture,
-                        worlddirttexture, worldstonetexture, false);
+                        worlddirttexture, worldstonetexture, false, terrain);
     return generateworldchunk(chunkx, chunky, ctx);
 }
 
@@ -1561,7 +1637,7 @@ static cube *prepareworldchunk(worldchunkjob &job)
     }
 
     worldgencontext ctx(job.seed, job.grasstexture, job.grasssidetexture,
-                        job.dirttexture, job.stonetexture, true);
+                        job.dirttexture, job.stonetexture, true, job.terrain);
     cube *root = generateworldchunk(job.x, job.y, ctx);
     job.families = ctx.families;
     job.loaded = false;
@@ -1886,9 +1962,28 @@ static bool saveworldconfig()
         "worldminheight = %d\n"
         "worldmaxheight = %d\n"
         "worldinfinite = 1\n\n"
-        "terrainload\n",
+        "terrainload\n\n"
+        "terraincontinentfreq %.9g\n"
+        "terrainmountainfreq %.9g\n"
+        "terrainerosionfreq %.9g\n"
+        "terrainhillfreq %.9g\n"
+        "terraindetailfreq %.9g\n"
+        "terrainsealevel %d\n"
+        "terraincontinentheight %.9g\n"
+        "terrainhillheight %.9g\n"
+        "terrainmountainheight %.9g\n"
+        "terrainerosionheight %.9g\n"
+        "terraindetailheight %.9g\n"
+        "terrainlandmasklow %.9g\n"
+        "terrainlandmaskhigh %.9g\n"
+        "terrainmountainmasklow %.9g\n"
+        "terrainmountainmaskhigh %.9g\n",
         WORLD_GROUND_HEIGHT, WORLD_CHUNK_BLOCKS, WORLD_GRID_POWER, WORLD_BLOCK_SIZE, activeworldseed,
-        WORLD_MIN_HEIGHT, WORLD_MAX_HEIGHT
+        WORLD_MIN_HEIGHT, WORLD_MAX_HEIGHT,
+        terraincontinentfreq, terrainmountainfreq, terrainerosionfreq, terrainhillfreq, terraindetailfreq,
+        terrainsealevel, terraincontinentheight, terrainhillheight, terrainmountainheight,
+        terrainerosionheight, terraindetailheight, terrainlandmasklow, terrainlandmaskhigh,
+        terrainmountainmasklow, terrainmountainmaskhigh
     );
     delete f;
 
