@@ -160,7 +160,7 @@ enum
     WORLD_RUNTIME_SIZE = 1 << WORLD_RUNTIME_SCALE,
     WORLD_RUNTIME_CHUNKS = WORLD_RUNTIME_SIZE / WORLD_CHUNK_SIZE,
     WORLD_RUNTIME_CENTER = WORLD_RUNTIME_CHUNKS / 2,
-    WORLD_MAX_CHUNK_DIST = WORLD_RUNTIME_CENTER - 1
+    WORLD_MAX_CHUNK_DIST = WORLD_RUNTIME_CENTER - 2
 };
 
 VARP(maxchunkdist, 0, 2, WORLD_MAX_CHUNK_DIST);
@@ -461,7 +461,10 @@ static int findworldchunk(int x, int y)
 
 static bool worldchunkinview(const worldchunk &chunk, int chunkx, int chunky)
 {
-    return abs(chunk.x - chunkx) <= maxchunkdist && abs(chunk.y - chunky) <= maxchunkdist;
+    long long dx = (long long)chunk.x - chunkx, dy = (long long)chunk.y - chunky;
+    if(dx < 0) dx = -dx;
+    if(dy < 0) dy = -dy;
+    return dx <= maxchunkdist && dy <= maxchunkdist;
 }
 
 static int acquireworldchunk(int x, int y, int &generated)
@@ -579,8 +582,8 @@ void updateworldchunks(bool force)
     if(!force && chunkx == lastplayerchunkx && chunky == lastplayerchunky && maxchunkdist == lastchunkdist)
         return;
 
-    bool rebase = localchunkx - maxchunkdist < 0 || localchunkx + maxchunkdist >= WORLD_RUNTIME_CHUNKS ||
-                  localchunky - maxchunkdist < 0 || localchunky + maxchunkdist >= WORLD_RUNTIME_CHUNKS;
+    bool rebase = localchunkx - maxchunkdist <= 0 || localchunkx + maxchunkdist >= WORLD_RUNTIME_CHUNKS - 1 ||
+                  localchunky - maxchunkdist <= 0 || localchunky + maxchunkdist >= WORLD_RUNTIME_CHUNKS - 1;
     if(rebase) rebaseworldchunks(chunkx, chunky);
     rebuildworldchunks(chunkx, chunky, force || rebase, true);
 }
@@ -603,8 +606,8 @@ enum { WORLD_EMPTY, WORLD_STONE, WORLD_DIRT, WORLD_GRASS, WORLD_WATER, WORLD_MIX
 
 static int worldterrainheight(int chunkx, int chunky, int localx, int localy)
 {
-    const float blockx = float(chunkx * WORLD_CHUNK_BLOCKS + localx / WORLD_BLOCK_SIZE) + 10000.5f,
-                blocky = float(chunky * WORLD_CHUNK_BLOCKS + localy / WORLD_BLOCK_SIZE) - 10000.5f,
+    const float blockx = float(chunkx) * WORLD_CHUNK_BLOCKS + localx / WORLD_BLOCK_SIZE + 10000.5f,
+                blocky = float(chunky) * WORLD_CHUNK_BLOCKS + localy / WORLD_BLOCK_SIZE - 10000.5f,
                 continental = worldcontinentnoise.GetNoise(blockx, blocky),
                 detail = worlddetailnoise.GetNoise(blockx, blocky);
     float hillmask = clamp((continental - 0.05f) / 0.5f, 0.0f, 1.0f);
@@ -1507,13 +1510,17 @@ static void createworld(const char *requestedname)
 ICOMMAND(newworld, "ssN", (char *arg1, char *arg2, int *numargs),
 {
     const char *name = NULL;
-    if(*numargs > 1) name = arg2;
-    else if(*numargs > 0)
+    if(*numargs > 0)
     {
         char *end = NULL;
         strtol(arg1, &end, 10);
-        if(end == arg1 || *end) name = arg1;
-        else conoutf(CON_WARN, "newworld size is no longer used; the world expands on demand");
+        bool legacysize = end != arg1 && !*end;
+        if(legacysize)
+        {
+            conoutf(CON_WARN, "newworld size is no longer used; the world expands on demand");
+            if(*numargs > 1) name = arg2;
+        }
+        else name = arg1;
     }
     createworld(name);
 });
