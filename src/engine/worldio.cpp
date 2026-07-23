@@ -172,6 +172,10 @@ FVAR(terrainmountainfreq, 0.000001f, 0.002f, 1.0f);
 FVAR(terrainerosionfreq, 0.000001f, 0.003f, 1.0f);
 FVAR(terrainhillfreq, 0.000001f, 0.01f, 1.0f);
 FVAR(terraindetailfreq, 0.000001f, 0.04f, 1.0f);
+FVAR(terraincontinentwarpfreq, 0.000001f, 0.001f, 1.0f);
+FVAR(terraincontinentwarpamp, 0.0f, 40.0f, float(WORLD_HEIGHT_BLOCKS * 4));
+FVAR(terrainfeaturewarpfreq, 0.000001f, 0.001f, 1.0f);
+FVAR(terrainfeaturewarpamp, 0.0f, 120.0f, float(WORLD_HEIGHT_BLOCKS * 4));
 
 VAR(terrainsealevel, WORLD_MIN_HEIGHT + 1, 0, WORLD_MAX_HEIGHT - 1);
 FVAR(terraincontinentheight, 0.0f, 35.0f, float(WORLD_HEIGHT_BLOCKS));
@@ -190,6 +194,7 @@ static int activeworldseed = 1337;
 struct terrainsettings
 {
     float continentfreq, mountainfreq, erosionfreq, hillfreq, detailfreq;
+    float continentwarpfreq, continentwarpamp, featurewarpfreq, featurewarpamp;
     float continentheight, hillheight, mountainheight, erosionheight, detailheight;
     float landmasklow, landmaskhigh, mountainmasklow, mountainmaskhigh;
     int sealevel;
@@ -197,6 +202,8 @@ struct terrainsettings
     terrainsettings()
         : continentfreq(terraincontinentfreq), mountainfreq(terrainmountainfreq),
           erosionfreq(terrainerosionfreq), hillfreq(terrainhillfreq), detailfreq(terraindetailfreq),
+          continentwarpfreq(terraincontinentwarpfreq), continentwarpamp(terraincontinentwarpamp),
+          featurewarpfreq(terrainfeaturewarpfreq), featurewarpamp(terrainfeaturewarpamp),
           continentheight(terraincontinentheight), hillheight(terrainhillheight),
           mountainheight(terrainmountainheight), erosionheight(terrainerosionheight),
           detailheight(terraindetailheight), landmasklow(terrainlandmasklow),
@@ -215,6 +222,14 @@ static void setupworldnoiselayer(FastNoiseLite &noise, int seed, float frequency
     noise.SetFractalOctaves(octaves);
     noise.SetFractalLacunarity(2.0f);
     noise.SetFractalGain(0.5f);
+}
+
+static void setupworldwarp(FastNoiseLite &warp, int seed, float frequency, float amplitude)
+{
+    warp.SetSeed(seed);
+    warp.SetDomainWarpType(FastNoiseLite::DomainWarpType_OpenSimplex2);
+    warp.SetFrequency(frequency);
+    warp.SetDomainWarpAmp(amplitude);
 }
 
 static void setupworldnoise(FastNoiseLite &continent, FastNoiseLite &mountains, FastNoiseLite &erosion,
@@ -847,6 +862,7 @@ void updateworldchunks(bool force)
 
 struct worldgencontext
 {
+    FastNoiseLite continentwarp, featurewarp;
     FastNoiseLite continent, mountains, erosion, hills, detail;
     terrainsettings terrain;
     int heightmap[WORLD_CHUNK_BLOCKS * WORLD_CHUNK_BLOCKS];
@@ -859,6 +875,8 @@ struct worldgencontext
         : terrain(terrain), grasstexture(grasstexture), grasssidetexture(grasssidetexture),
           dirttexture(dirttexture), stonetexture(stonetexture), prepared(prepared), families(0)
     {
+        setupworldwarp(continentwarp, seed ^ 0x6C8E9CF5, terrain.continentwarpfreq, terrain.continentwarpamp);
+        setupworldwarp(featurewarp, seed ^ 0x35A4F2D1, terrain.featurewarpfreq, terrain.featurewarpamp);
         setupworldnoise(continent, mountains, erosion, hills, detail, seed, terrain);
     }
 };
@@ -905,10 +923,15 @@ static float worldterrainsmoothstep(float low, float high, float value)
 static int generateworldterrainheight(const worldgencontext &ctx, int chunkx, int chunky, int blockx, int blocky)
 {
     const float noisex = float(chunkx) * WORLD_CHUNK_BLOCKS + blockx + 10000.5f,
-                noisey = float(chunky) * WORLD_CHUNK_BLOCKS + blocky - 10000.5f,
-                continental = ctx.continent.GetNoise(noisex, noisey),
-                mountains = ctx.mountains.GetNoise(noisex, noisey),
-                erosion = ctx.erosion.GetNoise(noisex, noisey),
+                noisey = float(chunky) * WORLD_CHUNK_BLOCKS + blocky - 10000.5f;
+    float continentx = noisex, contingenty = noisey,
+          featurex = noisex, featurey = noisey;
+    ctx.continentwarp.DomainWarp(continentx, contingenty);
+    ctx.featurewarp.DomainWarp(featurex, featurey);
+
+    const float continental = ctx.continent.GetNoise(continentx, contingenty),
+                mountains = ctx.mountains.GetNoise(featurex, featurey),
+                erosion = ctx.erosion.GetNoise(featurex, featurey),
                 hills = ctx.hills.GetNoise(noisex, noisey),
                 detail = ctx.detail.GetNoise(noisex, noisey);
     const float landmask = worldterrainsmoothstep(ctx.terrain.landmasklow, ctx.terrain.landmaskhigh, continental),
@@ -1968,6 +1991,10 @@ static bool saveworldconfig()
         "terrainerosionfreq %.9g\n"
         "terrainhillfreq %.9g\n"
         "terraindetailfreq %.9g\n"
+        "terraincontinentwarpfreq %.9g\n"
+        "terraincontinentwarpamp %.9g\n"
+        "terrainfeaturewarpfreq %.9g\n"
+        "terrainfeaturewarpamp %.9g\n"
         "terrainsealevel %d\n"
         "terraincontinentheight %.9g\n"
         "terrainhillheight %.9g\n"
@@ -1981,6 +2008,7 @@ static bool saveworldconfig()
         WORLD_GROUND_HEIGHT, WORLD_CHUNK_BLOCKS, WORLD_GRID_POWER, WORLD_BLOCK_SIZE, activeworldseed,
         WORLD_MIN_HEIGHT, WORLD_MAX_HEIGHT,
         terraincontinentfreq, terrainmountainfreq, terrainerosionfreq, terrainhillfreq, terraindetailfreq,
+        terraincontinentwarpfreq, terraincontinentwarpamp, terrainfeaturewarpfreq, terrainfeaturewarpamp,
         terrainsealevel, terraincontinentheight, terrainhillheight, terrainmountainheight,
         terrainerosionheight, terraindetailheight, terrainlandmasklow, terrainlandmaskhigh,
         terrainmountainmasklow, terrainmountainmaskhigh
