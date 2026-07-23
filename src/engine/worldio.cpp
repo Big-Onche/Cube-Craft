@@ -180,9 +180,12 @@ FVAR(terraintemperaturefreq, 0.000001f, 0.0004f, 1.0f);
 FVAR(terrainmoisturefreq, 0.000001f, 0.0006f, 1.0f);
 FVAR(terrainweirdnessfreq, 0.000001f, 0.001f, 1.0f);
 FVAR(terrainweirdnessstrength, 0.0f, 0.15f, 1.0f);
+FVAR(terrainmountainstonefreq, 0.000001f, 0.08f, 1.0f);
 
 VAR(terrainsealevel, WORLD_MIN_HEIGHT + 1, 0, WORLD_MAX_HEIGHT - 1);
 VAR(terrainsnowheight, WORLD_MIN_HEIGHT + 1, 70, WORLD_MAX_HEIGHT - 1);
+VAR(terrainmountainstonelow, WORLD_MIN_HEIGHT + 1, 35, WORLD_MAX_HEIGHT - 1);
+VAR(terrainmountainstonehigh, WORLD_MIN_HEIGHT + 1, 45, WORLD_MAX_HEIGHT - 1);
 VAR(terrainbiomeblend, 0, 16, 64);
 VAR(terraincoastwidth, 0, 8, 32);
 VAR(terraincoastvariation, 0, 4, 16);
@@ -208,11 +211,12 @@ struct terrainsettings
 {
     float continentfreq, mountainfreq, erosionfreq, hillfreq, detailfreq;
     float continentwarpfreq, continentwarpamp, featurewarpfreq, featurewarpamp;
-    float temperaturefreq, moisturefreq, weirdnessfreq, weirdnessstrength;
+    float temperaturefreq, moisturefreq, weirdnessfreq, weirdnessstrength, mountainstonefreq;
     float continentheight, hillheight, mountainheight, erosionheight, detailheight;
     float landmasklow, landmaskhigh, mountainmasklow, mountainmaskhigh;
     float deserttemperature, desertmoisture, forestmoisture;
-    int sealevel, snowheight, biomeblend, coastwidth, coastvariation;
+    int sealevel, snowheight, mountainstonelow, mountainstonehigh;
+    int biomeblend, coastwidth, coastvariation;
     int beachminheight, beachmaxheight;
 
     terrainsettings()
@@ -222,13 +226,16 @@ struct terrainsettings
           featurewarpfreq(terrainfeaturewarpfreq), featurewarpamp(terrainfeaturewarpamp),
           temperaturefreq(terraintemperaturefreq), moisturefreq(terrainmoisturefreq),
           weirdnessfreq(terrainweirdnessfreq), weirdnessstrength(terrainweirdnessstrength),
+          mountainstonefreq(terrainmountainstonefreq),
           continentheight(terraincontinentheight), hillheight(terrainhillheight),
           mountainheight(terrainmountainheight), erosionheight(terrainerosionheight),
           detailheight(terraindetailheight), landmasklow(terrainlandmasklow),
           landmaskhigh(terrainlandmaskhigh), mountainmasklow(terrainmountainmasklow),
           mountainmaskhigh(terrainmountainmaskhigh), deserttemperature(terraindeserttemperature),
           desertmoisture(terraindesertmoisture), forestmoisture(terrainforestmoisture),
-          sealevel(terrainsealevel), snowheight(terrainsnowheight), biomeblend(terrainbiomeblend),
+          sealevel(terrainsealevel), snowheight(terrainsnowheight),
+          mountainstonelow(terrainmountainstonelow), mountainstonehigh(terrainmountainstonehigh),
+          biomeblend(terrainbiomeblend),
           coastwidth(terraincoastwidth), coastvariation(terraincoastvariation),
           beachminheight(terrainbeachminheight), beachmaxheight(terrainbeachmaxheight)
     {
@@ -892,11 +899,12 @@ struct worldgencontext
 {
     FastNoiseLite continentwarp, featurewarp;
     FastNoiseLite continent, mountains, erosion, hills, detail;
-    FastNoiseLite temperature, moisture, weirdness, biomeblend;
+    FastNoiseLite temperature, moisture, weirdness, biomeblend, rockiness;
     terrainsettings terrain;
     int heightmap[WORLD_CHUNK_BLOCKS * WORLD_CHUNK_BLOCKS];
     uchar biomemap[WORLD_CHUNK_BLOCKS * WORLD_CHUNK_BLOCKS];
     uchar coastmap[WORLD_CHUNK_BLOCKS * WORLD_CHUNK_BLOCKS];
+    uchar rockmap[WORLD_CHUNK_BLOCKS * WORLD_CHUNK_BLOCKS];
     int grasstexture, grasssidetexture, dirttexture, stonetexture, sandtexture, snowtexture;
     bool prepared;
     int families;
@@ -915,6 +923,7 @@ struct worldgencontext
         setupworldnoiselayer(weirdness, seed ^ 0x749A7C15, terrain.weirdnessfreq, 3);
         setupworldnoiselayer(biomeblend, seed ^ 0x13C6E91F,
                              terrain.biomeblend > 0 ? 1.0f / terrain.biomeblend : 1.0f, 1);
+        setupworldnoiselayer(rockiness, seed ^ 0x5E4A19C3, terrain.mountainstonefreq, 2);
     }
 };
 
@@ -1097,6 +1106,22 @@ static int generateworldbiome(const worldgencontext &ctx, int chunkx, int chunky
     return BIOME_PLAINS;
 }
 
+static bool generateworldrock(const worldgencontext &ctx, int chunkx, int chunky, int blockx, int blocky,
+                              int height)
+{
+    const float low = min(ctx.terrain.mountainstonelow, ctx.terrain.mountainstonehigh),
+                high = max(ctx.terrain.mountainstonelow, ctx.terrain.mountainstonehigh),
+                heightblocks = height / float(WORLD_BLOCK_SIZE);
+    if(heightblocks <= low) return false;
+    if(heightblocks >= high) return true;
+
+    const float noisex = float(chunkx) * WORLD_CHUNK_BLOCKS + blockx + 10000.5f,
+                noisey = float(chunky) * WORLD_CHUNK_BLOCKS + blocky - 10000.5f,
+                rockweight = worldterrainsmoothstep(low, high, heightblocks),
+                selector = clamp(ctx.rockiness.GetNoise(noisex, noisey) * 1.25f + 0.5f, 0.0f, 1.0f);
+    return rockweight > selector;
+}
+
 static void generateworldheightmap(worldgencontext &ctx, int chunkx, int chunky)
 {
     loop(y, WORLD_CHUNK_BLOCKS) loop(x, WORLD_CHUNK_BLOCKS)
@@ -1109,6 +1134,7 @@ static void generateworldheightmap(worldgencontext &ctx, int chunkx, int chunky)
     {
         const int index = y * WORLD_CHUNK_BLOCKS + x;
         ctx.biomemap[index] = generateworldbiome(ctx, chunkx, chunky, x, y, ctx.heightmap[index]);
+        ctx.rockmap[index] = generateworldrock(ctx, chunkx, chunky, x, y, ctx.heightmap[index]);
     }
 }
 
@@ -1127,7 +1153,13 @@ static bool worldterraincoast(const worldgencontext &ctx, int localx, int localy
     return ctx.coastmap[localy / WORLD_BLOCK_SIZE * WORLD_CHUNK_BLOCKS + localx / WORLD_BLOCK_SIZE] != 0;
 }
 
-static int worldcolumncubetype(const worldgencontext &ctx, int z, int size, int height, int biome, bool coast)
+static bool worldterrainrock(const worldgencontext &ctx, int localx, int localy)
+{
+    return ctx.rockmap[localy / WORLD_BLOCK_SIZE * WORLD_CHUNK_BLOCKS + localx / WORLD_BLOCK_SIZE] != 0;
+}
+
+static int worldcolumncubetype(const worldgencontext &ctx, int z, int size, int height,
+                               int biome, bool coast, bool rock)
 {
     const int surface = WORLD_GROUND_HEIGHT + height,
               watertop = WORLD_GROUND_HEIGHT + ctx.terrain.sealevel * WORLD_BLOCK_SIZE,
@@ -1142,6 +1174,12 @@ static int worldcolumncubetype(const worldgencontext &ctx, int z, int size, int 
     if(z >= max(surface, watertop)) return WORLD_EMPTY;
     if(surface < watertop && z >= surface && z + size <= watertop) return WORLD_WATER;
     if(z + size <= dirtbottom) return WORLD_STONE;
+    if(rock)
+    {
+        if(biome == BIOME_SNOWY_MOUNTAIN && z >= grassbottom && z + size <= surface) return WORLD_SNOW;
+        if(z >= dirtbottom && z + size <= surface) return WORLD_STONE;
+        return WORLD_MIXED;
+    }
     if(beach || biome == BIOME_DESERT)
     {
         if(z >= dirtbottom && z + size <= surface) return WORLD_SAND;
@@ -1170,7 +1208,8 @@ static int worldcubetype(const worldgencontext &ctx, const ivec &o, int size)
     for(int x = o.x; x < o.x + size; x += WORLD_BLOCK_SIZE)
     {
         int columntype = worldcolumncubetype(ctx, o.z, size, worldterrainheight(ctx, x, y),
-                                            worldterrainbiome(ctx, x, y), worldterraincoast(ctx, x, y));
+                                            worldterrainbiome(ctx, x, y), worldterraincoast(ctx, x, y),
+                                            worldterrainrock(ctx, x, y));
         if(columntype == WORLD_MIXED || (type >= 0 && type != columntype)) return WORLD_MIXED;
         type = columntype;
     }
@@ -2193,8 +2232,11 @@ static bool saveworldconfig()
         "terrainmoisturefreq %.9g\n"
         "terrainweirdnessfreq %.9g\n"
         "terrainweirdnessstrength %.9g\n"
+        "terrainmountainstonefreq %.9g\n"
         "terrainsealevel %d\n"
         "terrainsnowheight %d\n"
+        "terrainmountainstonelow %d\n"
+        "terrainmountainstonehigh %d\n"
         "terrainbiomeblend %d\n"
         "terraincoastwidth %d\n"
         "terraincoastvariation %d\n"
@@ -2217,7 +2259,9 @@ static bool saveworldconfig()
         terraincontinentfreq, terrainmountainfreq, terrainerosionfreq, terrainhillfreq, terraindetailfreq,
         terraincontinentwarpfreq, terraincontinentwarpamp, terrainfeaturewarpfreq, terrainfeaturewarpamp,
         terraintemperaturefreq, terrainmoisturefreq, terrainweirdnessfreq, terrainweirdnessstrength,
-        terrainsealevel, terrainsnowheight, terrainbiomeblend, terraincoastwidth, terraincoastvariation,
+        terrainmountainstonefreq, terrainsealevel, terrainsnowheight,
+        terrainmountainstonelow, terrainmountainstonehigh,
+        terrainbiomeblend, terraincoastwidth, terraincoastvariation,
         terrainbeachminheight, terrainbeachmaxheight,
         terraincontinentheight, terrainhillheight, terrainmountainheight,
         terrainerosionheight, terraindetailheight, terrainlandmasklow, terrainlandmaskhigh,
