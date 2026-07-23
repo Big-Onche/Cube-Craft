@@ -153,11 +153,13 @@ namespace game
 
     void updateworld()
     {
+        updateworldchunks();
         physicsframe();
         if(player1)
         {
             player1->state = editmode ? CS_EDITING : CS_ALIVE;
             moveplayer(player1, 10, true);
+            updateworldchunks();
         }
         gets2c();
         c2sinfo();

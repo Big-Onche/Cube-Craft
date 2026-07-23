@@ -230,6 +230,7 @@ extern void findents(int low, int high, bool notspawned, const vec &pos, const v
 extern void mpeditent(int i, const vec &o, int type, int attr1, int attr2, int attr3, int attr4, int attr5, bool local);
 extern vec getselpos();
 extern int getworldsize();
+extern void updateworldchunks(bool force = false);
 extern int getmapversion();
 extern void renderentcone(const extentity &e, const vec &dir, float radius, float angle);
 extern void renderentarrow(const extentity &e, const vec &dir, float radius);
@@ -542,4 +543,3 @@ extern void freepubkey(void *pubkey);
 extern void *genchallenge(void *pubkey, const void *seed, int seedlen, vector<char> &challengestr);
 extern void freechallenge(void *answer);
 extern bool checkchallenge(const char *answerstr, void *correct);
-

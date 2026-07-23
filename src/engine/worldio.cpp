@@ -155,18 +155,24 @@ enum
     WORLD_MAX_CHUNKS_PER_SIDE = 64
 };
 
+VARP(maxchunkdist, 0, 2, WORLD_MAX_CHUNKS_PER_SIDE);
+
 struct worldchunk
 {
     int x, y;
     cube *root;
+    bool mounted;
 
-    worldchunk(int x, int y, cube *root) : x(x), y(y), root(root) {}
+    worldchunk(int x, int y, cube *root) : x(x), y(y), root(root), mounted(false) {}
 };
 
 static vector<worldchunk> worldchunks;
 static string worldfolder = "";
 static int activeworldchunk = -1;
 static int worldchunksperaxis = 0;
+static int worldfirstchunkx = 0, worldfirstchunky = 0;
+static int lastplayerchunkx = INT_MIN, lastplayerchunky = INT_MIN, lastchunkdist = -1;
+static bool rebuildingworldchunks = false;
 
 void clearworldchunks()
 {
@@ -176,6 +182,109 @@ void clearworldchunks()
     worldfolder[0] = '\0';
     activeworldchunk = -1;
     worldchunksperaxis = 0;
+    worldfirstchunkx = worldfirstchunky = 0;
+    lastplayerchunkx = lastplayerchunky = INT_MIN;
+    lastchunkdist = -1;
+    rebuildingworldchunks = false;
+}
+
+static void copyworldcube(const cube &src, cube &dst)
+{
+    dst = src;
+    dst.visible = 0;
+    dst.merged = 0;
+    dst.ext = NULL;
+    if(src.children)
+    {
+        dst.children = newcubes(F_EMPTY);
+        loopi(8) copyworldcube(src.children[i], dst.children[i]);
+    }
+}
+
+static void pasteworldcube(const cube &src, cube &dst)
+{
+    discardchildren(dst);
+    copyworldcube(src, dst);
+}
+
+static ivec worldchunkorigin(const worldchunk &chunk, int z = 0)
+{
+    return ivec((chunk.x - worldfirstchunkx) * WORLD_CHUNK_SIZE,
+                (chunk.y - worldfirstchunky) * WORLD_CHUNK_SIZE, z);
+}
+
+static void syncmountedworldchunks()
+{
+    if(worldchunks.empty() || !worldroot) return;
+    loopv(worldchunks)
+    {
+        worldchunk &chunk = worldchunks[i];
+        if(!chunk.mounted) continue;
+        ivec origin = worldchunkorigin(chunk);
+        pasteworldcube(lookupcube(origin, WORLD_CHUNK_SIZE), chunk.root[0]);
+        origin.z = WORLD_CHUNK_SIZE;
+        pasteworldcube(lookupcube(origin, WORLD_CHUNK_SIZE), chunk.root[4]);
+    }
+}
+
+static void mountworldchunk(worldchunk &chunk)
+{
+    ivec origin = worldchunkorigin(chunk);
+    pasteworldcube(chunk.root[0], lookupcube(origin, WORLD_CHUNK_SIZE));
+    origin.z = WORLD_CHUNK_SIZE;
+    pasteworldcube(chunk.root[4], lookupcube(origin, WORLD_CHUNK_SIZE));
+    chunk.mounted = true;
+}
+
+static int worldmapscale(int chunksx, int chunksy)
+{
+    int scale = 9, span = max(int(WORLD_MAP_SIZE), max(chunksx, chunksy) * WORLD_CHUNK_SIZE);
+    while((1 << scale) < span) ++scale;
+    return scale;
+}
+
+static void rebuildworldchunks(int chunkx, int chunky, bool load, bool changed)
+{
+    rebuildingworldchunks = true;
+    syncmountedworldchunks();
+    freeocta(worldroot);
+    worldroot = newcubes(F_EMPTY);
+
+    int mounted = 0;
+    loopv(worldchunks)
+    {
+        worldchunk &chunk = worldchunks[i];
+        chunk.mounted = false;
+        if(abs(chunk.x - chunkx) <= maxchunkdist && abs(chunk.y - chunky) <= maxchunkdist)
+        {
+            mountworldchunk(chunk);
+            mounted++;
+        }
+    }
+
+    lastplayerchunkx = chunkx;
+    lastplayerchunky = chunky;
+    lastchunkdist = maxchunkdist;
+    validatec(worldroot, worldsize >> 1);
+    if(changed) allchanged(load);
+    rebuildingworldchunks = false;
+    conoutf(CON_DEBUG, "mounted %d chunks around %d_%d (maxchunkdist %d)",
+            mounted, chunkx, chunky, maxchunkdist);
+}
+
+void updateworldchunks(bool force)
+{
+    if(worldchunks.empty() || rebuildingworldchunks || !worldroot) return;
+
+    int chunkx = worldfirstchunkx, chunky = worldfirstchunky;
+    if(player)
+    {
+        chunkx += int(floor(player->o.x / WORLD_CHUNK_SIZE));
+        chunky += int(floor(player->o.y / WORLD_CHUNK_SIZE));
+    }
+    if(!force && chunkx == lastplayerchunkx && chunky == lastplayerchunky && maxchunkdist == lastchunkdist)
+        return;
+    rebuildworldchunks(chunkx, chunky, force, true);
 }
 
 static void setworldcubetexture(cube &c, int texture, int toptexture = -1)
@@ -242,15 +351,25 @@ static cube *generateworldchunk()
     return root;
 }
 
-static bool chunkbasename(const char *name)
+static bool chunkcoords(const char *name, int &x, int &y)
 {
     if(!name || !*name) return false;
     char *end = NULL;
-    strtol(name, &end, 10);
+    long parsedx = strtol(name, &end, 10);
     if(end == name || *end != '_') return false;
     const char *second = end + 1;
-    strtol(second, &end, 10);
-    return end != second && !*end;
+    long parsedy = strtol(second, &end, 10);
+    if(end == second || *end || parsedx < INT_MIN || parsedx > INT_MAX || parsedy < INT_MIN || parsedy > INT_MAX)
+        return false;
+    x = int(parsedx);
+    y = int(parsedy);
+    return true;
+}
+
+static bool chunkbasename(const char *name)
+{
+    int x, y;
+    return chunkcoords(name, x, y);
 }
 
 static void chooseworldfolder(const char *requested)
@@ -578,6 +697,163 @@ cube *loadchildren(stream *f, const ivec &co, int size, bool &failed)
     return c;
 }
 
+static bool skipworldchunkvslots(stream *f, int remaining)
+{
+    while(remaining > 0)
+    {
+        int changed = f->getlil<int>();
+        if(changed < 0)
+        {
+            if(-changed > remaining) return false;
+            remaining += changed;
+            continue;
+        }
+
+        f->getlil<int>(); // previous variant
+        remaining--;
+        if(changed & (1 << VSLOT_SHPARAM))
+        {
+            int params = f->getlil<ushort>();
+            loopi(params)
+            {
+                int len = f->getlil<ushort>();
+                f->seek(len + 4 * sizeof(float), SEEK_CUR);
+            }
+        }
+        if(changed & (1 << VSLOT_SCALE)) f->seek(sizeof(float), SEEK_CUR);
+        if(changed & (1 << VSLOT_ROTATION)) f->seek(sizeof(int), SEEK_CUR);
+        if(changed & (1 << VSLOT_OFFSET)) f->seek(2 * sizeof(int), SEEK_CUR);
+        if(changed & (1 << VSLOT_SCROLL)) f->seek(2 * sizeof(float), SEEK_CUR);
+        if(changed & (1 << VSLOT_LAYER)) f->seek(sizeof(int), SEEK_CUR);
+        if(changed & (1 << VSLOT_ALPHA)) f->seek(2 * sizeof(float), SEEK_CUR);
+        if(changed & (1 << VSLOT_COLOR)) f->seek(3 * sizeof(float), SEEK_CUR);
+        if(changed & (1 << VSLOT_REFRACT)) f->seek(4 * sizeof(float), SEEK_CUR);
+        if(changed & (1 << VSLOT_DETAIL)) f->seek(sizeof(int), SEEK_CUR);
+    }
+    return true;
+}
+
+static cube *loadworldchunkroot(const char *mname)
+{
+    string name;
+    validmapname(name, mname);
+    defformatstring(filename, "media/map/%s.ogz", name);
+    path(filename);
+    stream *f = opengzfile(filename, "rb");
+    if(!f) return NULL;
+
+    mapheader hdr;
+    octaheader ohdr;
+    memset(&ohdr, 0, sizeof(ohdr));
+    if(!loadmapheader(f, filename, hdr, ohdr) || hdr.worldsize != WORLD_MAP_SIZE || hdr.numvslots < 0)
+    {
+        delete f;
+        return NULL;
+    }
+
+    loopi(hdr.numvars)
+    {
+        int type = f->getchar(), len = f->getlil<ushort>();
+        f->seek(len, SEEK_CUR);
+        switch(type)
+        {
+            case ID_VAR: f->seek(sizeof(int), SEEK_CUR); break;
+            case ID_FVAR: f->seek(sizeof(float), SEEK_CUR); break;
+            case ID_SVAR:
+            {
+                int slen = f->getlil<ushort>();
+                f->seek(slen, SEEK_CUR);
+                break;
+            }
+            default: delete f; return NULL;
+        }
+    }
+
+    int gamelen = f->getchar();
+    if(gamelen < 0) { delete f; return NULL; }
+    f->seek(gamelen + 1, SEEK_CUR);
+    int eif = f->getlil<ushort>(), extrasize = f->getlil<ushort>();
+    f->seek(extrasize, SEEK_CUR);
+
+    int nummru = f->getlil<ushort>();
+    f->seek(nummru * sizeof(ushort), SEEK_CUR);
+    f->seek(hdr.numents * (sizeof(entity) + eif), SEEK_CUR);
+    if(!skipworldchunkvslots(f, hdr.numvslots)) { delete f; return NULL; }
+
+    int oldmapversion = mapversion;
+    mapversion = hdr.version;
+    bool failed = false;
+    cube *root = loadchildren(f, ivec(0, 0, 0), WORLD_MAP_SIZE >> 1, failed);
+    mapversion = oldmapversion;
+    delete f;
+    if(failed)
+    {
+        freeocta(root);
+        return NULL;
+    }
+    validatec(root, WORLD_MAP_SIZE >> 1);
+    return root;
+}
+
+static bool loadworldchunks(const char *mname)
+{
+    string mapname;
+    validmapname(mapname, mname, NULL, "");
+    loopi(strlen(mapname)) if(mapname[i] == '\\') mapname[i] = '/';
+    char *slash = strrchr(mapname, '/');
+    int currentx, currenty;
+    if(!slash || !chunkcoords(slash + 1, currentx, currenty)) return false;
+    *slash = '\0';
+
+    cube *currentroot = worldroot;
+    worldroot = NULL;
+    copystring(worldfolder, mapname);
+    activeworldchunk = 0;
+    worldchunks.add(worldchunk(currentx, currenty, currentroot));
+
+    int minx = currentx, maxx = currentx, miny = currenty, maxy = currenty;
+    defformatstring(dirname, "media/map/%s", worldfolder);
+    vector<char *> files;
+    listfiles(dirname, "ogz", files);
+    files.sort();
+    files.uniquedeletearrays();
+    loopv(files)
+    {
+        int x, y;
+        if(!chunkcoords(files[i], x, y) || (x == currentx && y == currenty)) continue;
+        if(worldchunks.length() >= WORLD_MAX_CHUNKS_PER_SIDE * WORLD_MAX_CHUNKS_PER_SIDE) break;
+        defformatstring(chunkname, "%s/%s", worldfolder, files[i]);
+        cube *root = loadworldchunkroot(chunkname);
+        if(!root)
+        {
+            conoutf(CON_WARN, "could not load world chunk %s", chunkname);
+            continue;
+        }
+        worldchunks.add(worldchunk(x, y, root));
+        minx = min(minx, x); maxx = max(maxx, x);
+        miny = min(miny, y); maxy = max(maxy, y);
+    }
+    files.deletearrays();
+
+    worldfirstchunkx = minx;
+    worldfirstchunky = miny;
+    int chunksx = maxx - minx + 1, chunksy = maxy - miny + 1;
+    worldchunksperaxis = max(chunksx, chunksy);
+    const int scale = worldmapscale(chunksx, chunksy);
+    setvar("mapscale", scale, true, false);
+    setvar("mapsize", 1 << scale, true, false);
+    worldroot = newcubes(F_EMPTY);
+    if(player)
+    {
+        player->o = vec((currentx - worldfirstchunkx) * WORLD_CHUNK_SIZE + WORLD_CHUNK_SIZE / 2,
+                        (currenty - worldfirstchunky) * WORLD_CHUNK_SIZE + WORLD_CHUNK_SIZE / 2,
+                        WORLD_GROUND_HEIGHT + player->eyeheight + 1);
+    }
+    rebuildworldchunks(currentx, currenty, true, false);
+    conoutf("loaded %d chunks for world %s", worldchunks.length(), worldfolder);
+    return true;
+}
+
 VAR(dbgvars, 0, 0, 1);
 
 void savevslot(stream *f, VSlot &vs, int prev)
@@ -892,29 +1168,33 @@ static void createworld(int chunksperaxis, const char *requestedname)
     if(!emptymap(9, true, activechunkname)) return;
     copystring(worldfolder, chosenfolder);
     worldchunksperaxis = chunksperaxis;
+    worldfirstchunkx = worldfirstchunky = -(chunksperaxis / 2);
     setupworldtextures();
 
     freeocta(worldroot);
-    worldroot = generateworldchunk();
+    worldroot = NULL;
     activeworldchunk = worldchunks.length();
-    worldchunks.add(worldchunk(0, 0, worldroot));
+    worldchunks.add(worldchunk(0, 0, generateworldchunk()));
 
-    const int firstcoord = -(chunksperaxis / 2);
-    for(int y = firstcoord; y < firstcoord + chunksperaxis; ++y)
-    for(int x = firstcoord; x < firstcoord + chunksperaxis; ++x)
+    for(int y = worldfirstchunky; y < worldfirstchunky + chunksperaxis; ++y)
+    for(int x = worldfirstchunkx; x < worldfirstchunkx + chunksperaxis; ++x)
     {
         if(!x && !y) continue;
         worldchunks.add(worldchunk(x, y, generateworldchunk()));
     }
 
-    validatec(worldroot, WORLD_MAP_SIZE >> 1);
-    allchanged(true);
+    const int scale = worldmapscale(chunksperaxis, chunksperaxis);
+    setvar("mapscale", scale, true, false);
+    setvar("mapsize", 1 << scale, true, false);
+    worldroot = newcubes(F_EMPTY);
     if(player)
     {
-        player->o = vec(WORLD_CHUNK_SIZE / 2, WORLD_CHUNK_SIZE / 2,
+        player->o = vec((0 - worldfirstchunkx) * WORLD_CHUNK_SIZE + WORLD_CHUNK_SIZE / 2,
+                        (0 - worldfirstchunky) * WORLD_CHUNK_SIZE + WORLD_CHUNK_SIZE / 2,
                         WORLD_GROUND_HEIGHT + player->eyeheight + 1);
-        entinmap(player);
     }
+    updateworldchunks(true);
+    if(player) entinmap(player);
 
     conoutf("generated world %s: %d x %d chunks (%d total)",
             worldfolder, chunksperaxis, chunksperaxis, worldchunks.length());
@@ -936,7 +1216,11 @@ void saveworld()
 
     if(!saveworldconfig()) return;
 
-    cube *activeroot = worldchunks[activeworldchunk].root;
+    syncmountedworldchunks();
+    cube *runtimeroot = worldroot;
+    const int runtimescale = worldscale, runtimesize = worldsize;
+    setvar("mapscale", 9, true, false);
+    setvar("mapsize", WORLD_MAP_SIZE, true, false);
     int saved = 0;
     loopv(worldchunks)
     {
@@ -945,7 +1229,9 @@ void saveworld()
         worldchunkname(name, sizeof(name), worldchunks[i]);
         if(save_world(name, true)) saved++;
     }
-    worldroot = activeroot;
+    worldroot = runtimeroot;
+    setvar("mapscale", runtimescale, true, false);
+    setvar("mapsize", runtimesize, true, false);
 
     string name;
     worldchunkname(name, sizeof(name), worldchunks[activeworldchunk]);
@@ -1152,6 +1438,8 @@ bool load_world(const char *mname, const char *cname)        // still supports a
     execfile(cfgname, false);
     identflags &= ~IDF_OVERRIDDEN;
 
+    if(!cname && hdr.worldsize == WORLD_MAP_SIZE) loadworldchunks(mname);
+
     preloadusedmapmodels(true);
 
     game::preload();
@@ -1168,6 +1456,15 @@ bool load_world(const char *mname, const char *cname)        // still supports a
     if(maptitle[0] && strcmp(maptitle, "Untitled Map by Unknown")) conoutf(CON_ECHO, "%s", maptitle);
 
     startmap(cname ? cname : mname);
+
+    if(!worldchunks.empty() && player && worldchunks.inrange(activeworldchunk))
+    {
+        const worldchunk &chunk = worldchunks[activeworldchunk];
+        player->o = vec((chunk.x - worldfirstchunkx) * WORLD_CHUNK_SIZE + WORLD_CHUNK_SIZE / 2,
+                        (chunk.y - worldfirstchunky) * WORLD_CHUNK_SIZE + WORLD_CHUNK_SIZE / 2,
+                        WORLD_GROUND_HEIGHT + player->eyeheight + 1);
+        entinmap(player);
+    }
 
     return true;
 }
