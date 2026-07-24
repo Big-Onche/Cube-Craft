@@ -1131,50 +1131,230 @@ static void freepreparedworldchunk(cube *root)
     delete[] root;
 }
 
-static bool sameworldchunkleaf(const cube &a, const cube &b)
+static int worldmidedge(const ivec &a, const ivec &b, int xd, int yd, bool &perfect)
 {
-    bool empty = isempty(a), solid = isentirelysolid(a);
-    if((!empty && !solid) || empty != isempty(b) || solid != isentirelysolid(b))
-        return false;
-    if(a.children || b.children || a.ext || b.ext || a.merged || b.merged ||
-       a.material != b.material ||
-       a.faces[0] != b.faces[0] || a.faces[1] != b.faces[1] || a.faces[2] != b.faces[2])
-        return false;
-
-    // Textures on empty/material-only cubes are not rendered. Cave carving
-    // inherits the old solid texture, so comparing it would prevent otherwise
-    // identical air siblings from collapsing across terrain strata.
-    if(isempty(a) && isempty(b)) return true;
-    loopi(6) if(a.texture[i] != b.texture[i]) return false;
-    return true;
+    int ax = a[xd], ay = a[yd], bx = b[xd], by = b[yd];
+    if(ay == by) return ay;
+    if(ax == bx) { perfect = false; return ay; }
+    bool crossx = (ax < 8 && bx > 8) || (ax > 8 && bx < 8),
+         crossy = (ay < 8 && by > 8) || (ay > 8 && by < 8);
+    if(crossy && !crossx) { worldmidedge(a, b, yd, xd, perfect); return 8; }
+    if(ax <= 8 && bx <= 8) return ax > bx ? ay : by;
+    if(ax >= 8 && bx >= 8) return ax < bx ? ay : by;
+    int risex = (by - ay) * (8 - ax) * 256,
+        s = risex / (bx - ax),
+        y = s / 256 + ay;
+    if((abs(s) & 0xFF) || (crossy && y != 8) || y < 0 || y > 16) perfect = false;
+    return crossy ? 8 : clamp(y, 0, 16);
 }
 
-static int remipworldchunk(cube &c, bool prepared, int &families)
+static inline bool worldcrosscenter(const ivec &a, const ivec &b, int xd, int yd)
 {
-    if(!c.children) return 0;
+    int ax = a[xd], ay = a[yd], bx = b[xd], by = b[yd];
+    return (((ax <= 8 && bx <= 8) || (ax >= 8 && bx >= 8)) &&
+            ((ay <= 8 && by <= 8) || (ay >= 8 && by >= 8))) ||
+           (ax + bx == 16 && ay + by == 16);
+}
 
-    int merged = 0;
+// Worker-safe counterpart of subdividecube(). Temporary candidate children
+// are deliberately detached from allocnodes and renderer-owned cubeext state.
+static bool subdivideworldmip(const cube &c, cube *children)
+{
+    if(isempty(c) || isentirelysolid(c))
+    {
+        loopi(8)
+        {
+            resetworldcube(children[i]);
+            if(isentirelysolid(c)) solidfaces(children[i]);
+            children[i].material = c.material;
+            loopj(6) children[i].texture[j] = c.texture[j];
+        }
+        return true;
+    }
+
+    loopi(8)
+    {
+        resetworldcube(children[i]);
+        solidfaces(children[i]);
+        children[i].material = c.material;
+    }
+    bool perfect = true;
+    ivec v[8];
+    loopi(8)
+    {
+        cube &source = const_cast<cube &>(c);
+        v[i].x = edgeget(cubeedge(source, 0, (i >> R[0]) & 1, (i >> C[0]) & 1), (i >> D[0]) & 1);
+        v[i].y = edgeget(cubeedge(source, 1, (i >> R[1]) & 1, (i >> C[1]) & 1), (i >> D[1]) & 1);
+        v[i].z = edgeget(cubeedge(source, 2, (i >> R[2]) & 1, (i >> C[2]) & 1), (i >> D[2]) & 1);
+        v[i].mul(2);
+    }
+
+    loopj(6)
+    {
+        int d = dimension(j), z = dimcoord(j);
+        const ivec &v00 = v[octaindex(d, 0, 0, z)],
+                   &v10 = v[octaindex(d, 1, 0, z)],
+                   &v01 = v[octaindex(d, 0, 1, z)],
+                   &v11 = v[octaindex(d, 1, 1, z)];
+        int e[3][3];
+        e[0][0] = v00[d];
+        e[0][2] = v01[d];
+        e[2][0] = v10[d];
+        e[2][2] = v11[d];
+        e[0][1] = worldmidedge(v00, v01, C[d], d, perfect);
+        e[1][0] = worldmidedge(v00, v10, R[d], d, perfect);
+        e[1][2] = worldmidedge(v11, v01, R[d], d, perfect);
+        e[2][1] = worldmidedge(v11, v10, C[d], d, perfect);
+        bool p1 = perfect, p2 = perfect;
+        int c1 = worldmidedge(v00, v11, R[d], d, p1),
+            c2 = worldmidedge(v01, v10, R[d], d, p2);
+        if(z ? c1 > c2 : c1 < c2)
+        {
+            e[1][1] = c1;
+            perfect = p1 && (c1 == c2 || worldcrosscenter(v00, v11, C[d], R[d]));
+        }
+        else
+        {
+            e[1][1] = c2;
+            perfect = p2 && (c1 == c2 || worldcrosscenter(v01, v10, C[d], R[d]));
+        }
+
+        loopi(8)
+        {
+            children[i].texture[j] = c.texture[j];
+            int rd = (i >> R[d]) & 1, cd = (i >> C[d]) & 1, dd = (i >> D[d]) & 1;
+            edgeset(cubeedge(children[i], d, 0, 0), z, clamp(e[rd][cd] - dd * 8, 0, 8));
+            edgeset(cubeedge(children[i], d, 1, 0), z, clamp(e[1 + rd][cd] - dd * 8, 0, 8));
+            edgeset(cubeedge(children[i], d, 0, 1), z, clamp(e[rd][1 + cd] - dd * 8, 0, 8));
+            edgeset(cubeedge(children[i], d, 1, 1), z, clamp(e[1 + rd][1 + cd] - dd * 8, 0, 8));
+        }
+    }
+
+    // validatec() normally performs this leaf validation, but it may touch the
+    // global allocator. Candidate children never contain descendants.
+    loopi(8) loopj(3)
+    {
+        uint f = children[i].faces[j], e0 = f & 0x0F0F0F0FU, e1 = (f >> 4) & 0x0F0F0F0FU;
+        if(e0 == e1 || ((e1 + 0x07070707U) | (e1 - e0)) & 0xF0F0F0F0U)
+        {
+            emptyfaces(children[i]);
+            break;
+        }
+    }
+    return perfect;
+}
+
+static const cube *lookupworldmipneighbour(cube *root, int orient, const ivec &co, int size,
+                                          ivec &origin, int &neighboursize)
+{
+    ivec position = co;
+    int dim = dimension(orient);
+    if(dimcoord(orient)) position[dim] += size;
+    else position[dim] -= size;
+    if(position[dim] < 0 || position[dim] >= WORLD_CHUNK_MAP_SIZE) return NULL;
+
+    int scale = WORLD_CHUNK_SCALE - 1;
+    const cube *neighbour = &root[octastep(position.x, position.y, position.z, scale)];
+    while(!(size >> scale) && neighbour->children)
+    {
+        --scale;
+        neighbour = &neighbour->children[octastep(position.x, position.y, position.z, scale)];
+    }
+    origin = ivec(position).mask(~0U << scale);
+    neighboursize = 1 << scale;
+    return neighbour;
+}
+
+static bool remipworldchunk(cube &c, const ivec &co, int size, cube *root,
+                            bool prepared, int &families, int &merged)
+{
     cube *children = c.children;
-    loopi(8) merged += remipworldchunk(children[i], prepared, families);
+    if(!children) return true;
 
-    loopi(8) if(!sameworldchunkleaf(children[0], children[i])) return merged;
+    bool perfect = true;
+    loopi(8) if(!remipworldchunk(children[i], ivec(i, co, size), size >> 1, root,
+                                 prepared, families, merged))
+        perfect = false;
 
-    cube mip = children[0];
-    mip.children = NULL;
-    mip.ext = NULL;
-    mip.visible = 0;
-    mip.merged = 0;
+    solidfaces(c);
+    loopi(6) c.texture[i] = getmippedtexture(c, i);
+    if(!perfect || (size << 1) > 0x1000) return false;
+
+    ushort material = MAT_AIR;
+    loopi(8)
+    {
+        material = children[i].material;
+        if((material & MATF_CLIP) == MAT_NOCLIP || material & MAT_ALPHA)
+        {
+            if(i > 0) return false;
+            while(++i < 8) if(children[i].material != material) return false;
+            break;
+        }
+        else if(!isentirelysolid(children[i]))
+        {
+            while(++i < 8)
+            {
+                int othermaterial = children[i].material;
+                if(isentirelysolid(children[i])
+                    ? (othermaterial & MATF_CLIP) == MAT_NOCLIP || othermaterial & MAT_ALPHA
+                    : material != othermaterial)
+                    return false;
+            }
+            break;
+        }
+    }
+
+    cube candidate = c;
+    candidate.ext = NULL;
+    forcemip(candidate);
+    candidate.children = NULL;
+    cube reconstructed[8];
+    if(!subdivideworldmip(candidate, reconstructed)) return false;
+
+    uchar visible[6] = { 0, 0, 0, 0, 0, 0 };
+    loopi(8)
+    {
+        if(children[i].faces[0] != reconstructed[i].faces[0] ||
+           children[i].faces[1] != reconstructed[i].faces[1] ||
+           children[i].faces[2] != reconstructed[i].faces[2])
+            return false;
+        if(isempty(children[i]) && isempty(reconstructed[i])) continue;
+
+        ivec childorigin(i, co, size);
+        loopj(6)
+        {
+            ivec neighbourorigin;
+            int neighboursize;
+            const cube *neighbour = lookupworldmipneighbour(root, j, childorigin, size,
+                                                            neighbourorigin, neighboursize);
+            if(neighbour && !visiblefaceagainst(children[i], j, childorigin, size,
+                                                *neighbour, neighbourorigin, neighboursize,
+                                                MAT_AIR, (material & MAT_ALPHA) ^ MAT_ALPHA, MAT_ALPHA))
+                continue;
+            if(children[i].texture[j] != candidate.texture[j]) return false;
+            visible[j] |= 1 << i;
+        }
+    }
+
     delete[] children;
     if(prepared) families--;
     else allocnodes--;
-    c = mip;
-    return merged + 1;
+    c.children = NULL;
+    loopi(3) c.faces[i] = candidate.faces[i];
+    c.material = material;
+    c.visible = 0;
+    loopi(6) if(visible[i]) c.visible |= 1 << i;
+    if(c.visible) c.visible |= 0x40;
+    c.merged = 0;
+    merged++;
+    return true;
 }
 
 static int remipworldchunk(cube *root, bool prepared, int &families)
 {
     int merged = 0;
-    loopi(8) merged += remipworldchunk(root[i], prepared, families);
+    loopi(8) remipworldchunk(root[i], ivec(i, ivec(0, 0, 0), WORLD_CHUNK_ROOT_SIZE),
+                             WORLD_CHUNK_ROOT_SIZE >> 1, root, prepared, families, merged);
     return merged;
 }
 

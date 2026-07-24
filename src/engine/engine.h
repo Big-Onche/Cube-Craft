@@ -232,6 +232,9 @@ extern void genclipbounds(const cube &c, const ivec &co, int size, clipplanes &p
 extern int genclipplane(const cube &c, int i, vec *v, plane *clip);
 extern void genclipplanes(const cube &c, const ivec &co, int size, clipplanes &p, bool collide = true, bool noclip = false);
 extern bool visibleface(const cube &c, int orient, const ivec &co, int size, ushort mat = MAT_AIR, ushort nmat = MAT_AIR, ushort matmask = MATF_VOLUME);
+extern bool visiblefaceagainst(const cube &c, int orient, const ivec &co, int size,
+                               const cube &o, const ivec &no, int nsize,
+                               ushort mat = MAT_AIR, ushort nmat = MAT_AIR, ushort matmask = MATF_VOLUME);
 extern int classifyface(const cube &c, int orient, const ivec &co, int size);
 extern int visibletris(const cube &c, int orient, const ivec &co, int size, ushort vmat = MAT_AIR, ushort nmat = MAT_ALPHA, ushort matmask = MAT_ALPHA);
 extern int visibleorient(const cube &c, int orient);

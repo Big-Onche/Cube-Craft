@@ -996,6 +996,48 @@ bool visibleface(const cube &c, int orient, const ivec &co, int size, ushort mat
     return !occludesface(o, opp, no, nsize, vo, size, mat, nmat, matmask, cf, numc);
 }
 
+bool visiblefaceagainst(const cube &c, int orient, const ivec &co, int size,
+                        const cube &o, const ivec &no, int nsize,
+                        ushort mat, ushort nmat, ushort matmask)
+{
+    if(mat != MAT_AIR)
+    {
+        if(mat != MAT_CLIP && faceedges(c, orient) == F_SOLID && touchingface(c, orient)) return false;
+    }
+    else
+    {
+        if(collapsedface(c, orient)) return false;
+        if(!touchingface(c, orient)) return true;
+    }
+
+    int opp = opposite(orient);
+    if(nsize > size || (nsize == size && !o.children))
+    {
+        if(o.material)
+        {
+            if(nmat != MAT_AIR && (o.material & matmask) == nmat) return true;
+            if(mat != MAT_AIR && ((o.material & matmask) == mat ||
+               (isliquid(mat) && isclipped(o.material & MATF_VOLUME))))
+                return false;
+        }
+        if(isentirelysolid(o)) return false;
+        if(isempty(o) || notouchingface(o, opp)) return true;
+        if(touchingface(o, opp) && faceedges(o, opp) == F_SOLID) return false;
+
+        ivec vo = ivec(co).mask(0xFFF), neighbourorigin = ivec(no).mask(0xFFF);
+        ivec2 cf[4], of[4];
+        int numc = genfacevecs(c, orient, vo, size, mat != MAT_AIR, cf),
+            numo = genfacevecs(o, opp, neighbourorigin, nsize, false, of);
+        return numo < 3 || !insideface(cf, numc, of, numo);
+    }
+
+    ivec vo = ivec(co).mask(0xFFF), neighbourorigin = ivec(no).mask(0xFFF);
+    ivec2 cf[4];
+    int numc = genfacevecs(c, orient, vo, size, mat != MAT_AIR, cf);
+    return !occludesface(o, opp, neighbourorigin, nsize, vo, size,
+                         mat, nmat, matmask, cf, numc);
+}
+
 int classifyface(const cube &c, int orient, const ivec &co, int size)
 {
     int vismask = 2, forcevis = 0;
@@ -1884,4 +1926,3 @@ void calcmerges()
     genmergeprogress = 0;
     genmerges();
 }
-
