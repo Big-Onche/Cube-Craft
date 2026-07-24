@@ -397,6 +397,7 @@ extern void cancelsel();
 extern void rendertexturepanel(int w, int h);
 extern void addundo(undoblock *u);
 extern void commitchanges(bool force = false);
+extern void markworldchunksdirty(const ivec &bbmin, const ivec &bbmax);
 extern void changed(const ivec &bbmin, const ivec &bbmax, bool commit = true);
 extern void changed(const block3 &sel, bool commit = true);
 extern void rendereditcursor();

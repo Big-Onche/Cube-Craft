@@ -447,10 +447,10 @@ struct worldchunk
     int x, y;
     cube *root;
     uint mountedsections;
-    bool loading;
+    bool loading, saved, dirty;
 
-    worldchunk(int x, int y, cube *root, bool loading = false)
-        : x(x), y(y), root(root), mountedsections(0), loading(loading) {}
+    worldchunk(int x, int y, cube *root, bool loading = false, bool saved = false)
+        : x(x), y(y), root(root), mountedsections(0), loading(loading), saved(saved), dirty(false) {}
 };
 
 struct worldchunkjob
@@ -483,6 +483,7 @@ static int activeworldchunk = -1;
 static int worldfirstchunkx = 0, worldfirstchunky = 0;
 static int lastplayerchunkx = INT_MIN, lastplayerchunky = INT_MIN, lastchunkdist = -1;
 static bool rebuildingworldchunks = false;
+static bool suppressworldchunkdirty = false;
 static vector<SDL_Thread *> worldchunkworkers;
 static SDL_mutex *worldchunkmutex = NULL;
 static SDL_cond *worldchunkcond = NULL;
@@ -615,6 +616,22 @@ static bool worldchunkfullymounted(const worldchunk &chunk)
     return chunk.mountedsections == allworldchunksections();
 }
 
+void markworldchunksdirty(const ivec &bbmin, const ivec &bbmax)
+{
+    if(suppressworldchunkdirty || worldchunks.empty()) return;
+    loopv(worldchunks)
+    {
+        worldchunk &chunk = worldchunks[i];
+        if(!worldchunkmounted(chunk)) continue;
+        ivec origin = worldchunkorigin(chunk);
+        if(bbmax.x <= origin.x || bbmin.x >= origin.x + WORLD_CHUNK_SIZE ||
+           bbmax.y <= origin.y || bbmin.y >= origin.y + WORLD_CHUNK_SIZE ||
+           bbmax.z <= 0 || bbmin.z >= WORLD_MAP_SIZE)
+            continue;
+        chunk.dirty = true;
+    }
+}
+
 static void syncmountedworldchunk(worldchunk &chunk)
 {
     if(!worldchunkmounted(chunk) || !chunk.root || !worldroot) return;
@@ -633,7 +650,8 @@ static void syncmountedworldchunk(worldchunk &chunk)
 static void syncmountedworldchunks()
 {
     if(worldchunks.empty() || !worldroot) return;
-    loopv(worldchunks) syncmountedworldchunk(worldchunks[i]);
+    loopv(worldchunks) if(!worldchunks[i].saved || worldchunks[i].dirty)
+        syncmountedworldchunk(worldchunks[i]);
 }
 
 static bool mountworldchunksection(worldchunk &chunk, int section)
@@ -677,7 +695,10 @@ static void invalidateworldchunk(const worldchunk &chunk)
     ivec bbmin = worldchunkorigin(chunk), bbmax = bbmin;
     bbmin.sub(1).max(0);
     bbmax.add(ivec(WORLD_CHUNK_SIZE, WORLD_CHUNK_SIZE, WORLD_MAP_SIZE)).add(1).min(worldsize);
+    bool oldsuppress = suppressworldchunkdirty;
+    suppressworldchunkdirty = true;
     changed(bbmin, bbmax, false);
+    suppressworldchunkdirty = oldsuppress;
 }
 
 static void invalidateworldchunksection(const worldchunk &chunk, int section)
@@ -685,7 +706,10 @@ static void invalidateworldchunksection(const worldchunk &chunk, int section)
     ivec bbmin = worldchunkorigin(chunk, section * WORLD_SECTION_SIZE), bbmax = bbmin;
     bbmin.sub(1).max(0);
     bbmax.add(ivec(WORLD_CHUNK_SIZE, WORLD_CHUNK_SIZE, WORLD_SECTION_SIZE)).add(1).min(worldsize);
+    bool oldsuppress = suppressworldchunkdirty;
+    suppressworldchunkdirty = true;
     changed(bbmin, bbmax, false);
+    suppressworldchunkdirty = oldsuppress;
 }
 
 static int findworldchunk(int x, int y)
@@ -808,12 +832,13 @@ static int acquireworldchunksync(int x, int y, int &generated)
     // A direct fileexists() on the relative media path misses saved chunks
     // when the game was launched with -u, causing them to be regenerated.
     cube *root = loadworldchunkroot(chunkname);
+    bool loaded = root != NULL;
     if(!root)
     {
         root = generateworldchunk(x, y);
         generated++;
     }
-    worldchunks.add(worldchunk(x, y, root));
+    worldchunks.add(worldchunk(x, y, root, false, loaded));
     return worldchunks.length() - 1;
 }
 
@@ -903,6 +928,8 @@ static int processworldchunkresults()
         worldchunk &chunk = worldchunks[index];
         chunk.root = job->root;
         chunk.loading = false;
+        chunk.saved = job->loaded;
+        chunk.dirty = false;
         allocnodes += job->families;
         // Procedural chunks are valid by construction and have already been
         // remipped by the worker. Avoid walking their entire cave octree again
@@ -2731,7 +2758,7 @@ static bool loadworldchunks(const char *mname)
     worldroot = NULL;
     copystring(worldfolder, mapname);
     activeworldchunk = 0;
-    worldchunks.add(worldchunk(currentx, currenty, currentroot));
+    worldchunks.add(worldchunk(currentx, currenty, currentroot, false, true));
     loadinitialworldchunks(currentx, currenty);
 
     worldfirstchunkx = currentx - WORLD_RUNTIME_CENTER;
@@ -3122,7 +3149,9 @@ static bool saveworldconfig()
     );
     delete f;
 
-    loopv(worldchunks) if(!saveworldchunkconfig(worldchunks[i])) return false;
+    loopv(worldchunks) if((!worldchunks[i].saved || worldchunks[i].dirty) &&
+                          !saveworldchunkconfig(worldchunks[i]))
+        return false;
 
     return true;
 }
@@ -3299,24 +3328,37 @@ void saveworld()
     const int runtimescale = worldscale, runtimesize = worldsize;
     setvar("mapscale", WORLD_CHUNK_SCALE, true, false);
     setvar("mapsize", WORLD_CHUNK_MAP_SIZE, true, false);
-    int saved = 0, ready = 0;
+    int written = 0, unchanged = 0, failed = 0, ready = 0;
     loopv(worldchunks)
     {
-        if(!worldchunks[i].root || worldchunks[i].loading) continue;
+        worldchunk &chunk = worldchunks[i];
+        if(!chunk.root || chunk.loading) continue;
         ready++;
-        worldroot = worldchunks[i].root;
+        if(chunk.saved && !chunk.dirty)
+        {
+            unchanged++;
+            continue;
+        }
+
+        worldroot = chunk.root;
         string name;
-        worldchunkname(name, sizeof(name), worldchunks[i]);
-        if(save_world(name, true)) saved++;
+        worldchunkname(name, sizeof(name), chunk);
+        if(save_world(name, true))
+        {
+            chunk.saved = true;
+            chunk.dirty = false;
+            written++;
+        }
+        else failed++;
     }
     worldroot = runtimeroot;
     setvar("mapscale", runtimescale, true, false);
     setvar("mapsize", runtimesize, true, false);
 
-    if(saved != ready)
+    if(failed)
     {
-        conoutf(CON_ERROR, "saved only %d of %d chunks for world %s; keeping all chunks in memory for retry",
-                saved, ready, worldfolder);
+        conoutf(CON_ERROR, "failed to save %d of %d changed chunks for world %s; keeping all chunks in memory for retry",
+                failed, written + failed, worldfolder);
         return;
     }
 
@@ -3347,8 +3389,8 @@ void saveworld()
         worldchunkname(name, sizeof(name), worldchunks[activeworldchunk]);
         setmapfilenames(name);
     }
-    conoutf("saved %d of %d ready chunks for world %s; released %d cached chunks",
-            saved, ready, worldfolder, released);
+    conoutf("saved world %s: %d chunks written, %d unchanged, %d ready; released %d cached chunks",
+            worldfolder, written, unchanged, ready, released);
 }
 
 COMMAND(saveworld, "");
