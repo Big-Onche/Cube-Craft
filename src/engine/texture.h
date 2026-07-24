@@ -572,6 +572,7 @@ struct Texture
         COMPRESSED = 1<<10,
         ALPHA      = 1<<11,
         MIRROR     = 1<<12,
+        GEOMETRY   = 1<<13,
         FLAGS      = 0xFF00
     };
 
@@ -863,4 +864,3 @@ extern VSlot dummyvslot;
 extern DecalSlot dummydecalslot;
 extern vector<Slot *> slots;
 extern vector<VSlot *> vslots;
-

@@ -688,9 +688,11 @@ VARFP(reducefilter, 0, 1, 1, initwarning("texture quality", INIT_LOAD));
 VARFP(texreduce, 0, 0, 12, initwarning("texture quality", INIT_LOAD));
 VARFP(texcompress, 0, 1536, 1<<12, initwarning("texture quality", INIT_LOAD));
 VARFP(texcompressquality, -1, -1, 1, setuptexcompress());
-VARF(trilinear, 0, 0, 1, initwarning("texture filtering", INIT_LOAD));
-VARF(bilinear, 0, 0, 1, initwarning("texture filtering", INIT_LOAD));
+VARF(trilinear, 0, 1, 1, initwarning("texture filtering", INIT_LOAD));
+VARF(bilinear, 0, 1, 1, initwarning("texture filtering", INIT_LOAD));
 VARFP(aniso, 0, 0, 16, initwarning("texture filtering", INIT_LOAD));
+void updategeometryfilter();
+VARFP(worldmodelfilter, 0, 0, 1, updategeometryfilter());
 
 extern int usetexcompress;
 
@@ -950,20 +952,27 @@ const GLint *swizzlemask(GLenum format)
     return NULL;
 }
 
+static void settexfilter(GLenum target, int filter, bool geometry = false)
+{
+    bool linear = !geometry || worldmodelfilter;
+    if(target==GL_TEXTURE_2D && hasAF && filter > 1)
+        glTexParameteri(target, GL_TEXTURE_MAX_ANISOTROPY_EXT, linear && min(aniso, hwmaxaniso) > 0 ? min(aniso, hwmaxaniso) : 1);
+    glTexParameteri(target, GL_TEXTURE_MAG_FILTER, filter && bilinear && linear ? GL_LINEAR : GL_NEAREST);
+    glTexParameteri(target, GL_TEXTURE_MIN_FILTER,
+        filter > 1 ?
+            (trilinear && linear ?
+                (bilinear ? GL_LINEAR_MIPMAP_LINEAR : GL_NEAREST_MIPMAP_LINEAR) :
+                (bilinear && linear ? GL_LINEAR_MIPMAP_NEAREST : GL_NEAREST_MIPMAP_NEAREST)) :
+            (filter && bilinear && linear ? GL_LINEAR : GL_NEAREST));
+}
+
 void setuptexparameters(int tnum, const void *pixels, int clamp, int filter, GLenum format, GLenum target, bool swizzle)
 {
     glBindTexture(target, tnum);
     glTexParameteri(target, GL_TEXTURE_WRAP_S, clamp&1 ? GL_CLAMP_TO_EDGE : (clamp&0x100 ? GL_MIRRORED_REPEAT : GL_REPEAT));
     glTexParameteri(target, GL_TEXTURE_WRAP_T, clamp&2 ? GL_CLAMP_TO_EDGE : (clamp&0x200 ? GL_MIRRORED_REPEAT : GL_REPEAT));
     if(target==GL_TEXTURE_3D) glTexParameteri(target, GL_TEXTURE_WRAP_R, clamp&4 ? GL_CLAMP_TO_EDGE : (clamp&0x400 ? GL_MIRRORED_REPEAT : GL_REPEAT));
-    if(target==GL_TEXTURE_2D && hasAF && min(aniso, hwmaxaniso) > 0 && filter > 1) glTexParameteri(target, GL_TEXTURE_MAX_ANISOTROPY_EXT, min(aniso, hwmaxaniso));
-    glTexParameteri(target, GL_TEXTURE_MAG_FILTER, filter && bilinear ? GL_LINEAR : GL_NEAREST);
-    glTexParameteri(target, GL_TEXTURE_MIN_FILTER,
-        filter > 1 ?
-            (trilinear ?
-                (bilinear ? GL_LINEAR_MIPMAP_LINEAR : GL_NEAREST_MIPMAP_LINEAR) :
-                (bilinear ? GL_LINEAR_MIPMAP_NEAREST : GL_NEAREST_MIPMAP_NEAREST)) :
-            (filter && bilinear ? GL_LINEAR : GL_NEAREST));
+    settexfilter(target, filter);
     if(swizzle && hasTRG && hasTSW)
     {
         const GLint *mask = swizzlemask(format);
@@ -1214,7 +1223,7 @@ bool floatformat(GLenum format)
     }
 }
 
-static Texture *newtexture(Texture *t, const char *rname, ImageData &s, int clamp = 0, bool mipit = true, bool canreduce = false, bool transient = false, int compress = 0)
+static Texture *newtexture(Texture *t, const char *rname, ImageData &s, int clamp = 0, bool mipit = true, bool canreduce = false, bool transient = false, int compress = 0, bool geometry = false)
 {
     if(!t)
     {
@@ -1225,7 +1234,9 @@ static Texture *newtexture(Texture *t, const char *rname, ImageData &s, int clam
 
     t->clamp = clamp;
     t->mipmap = mipit;
+    t->canreduce = canreduce;
     t->type = Texture::IMAGE;
+    if(geometry) t->type |= Texture::GEOMETRY;
     if(transient) t->type |= Texture::TRANSIENT;
     if(clamp&0x300) t->type |= Texture::MIRROR;
     if(!s.data)
@@ -1287,7 +1298,27 @@ static Texture *newtexture(Texture *t, const char *rname, ImageData &s, int clam
         GLenum component = compressedformat(format, t->w, t->h, compress);
         createtexture(t->id, t->w, t->h, s.data, clamp, filter, component, GL_TEXTURE_2D, t->xs, t->ys, s.pitch, false, format, swizzle);
     }
+    if(geometry) settexfilter(GL_TEXTURE_2D, filter, true);
     return t;
+}
+
+void updategeometryfilter()
+{
+    GLint oldtex = 0;
+    bool changed = false;
+    enumerate(textures, Texture, tex,
+    {
+        if(!tex.id || !(tex.type&Texture::GEOMETRY)) continue;
+        if(!changed)
+        {
+            glGetIntegerv(GL_TEXTURE_BINDING_2D, &oldtex);
+            changed = true;
+        }
+        glBindTexture(GL_TEXTURE_2D, tex.id);
+        int filter = !tex.canreduce || reducefilter ? (tex.mipmap ? 2 : 1) : 0;
+        settexfilter(GL_TEXTURE_2D, filter, true);
+    });
+    if(changed) glBindTexture(GL_TEXTURE_2D, oldtex);
 }
 
 #if SDL_BYTEORDER == SDL_BIG_ENDIAN
@@ -1728,15 +1759,17 @@ uchar *loadalphamask(Texture *t)
     return t->alphamask;
 }
 
-Texture *textureload(const char *name, int clamp, bool mipit, bool msg)
+Texture *textureload(const char *name, int clamp, bool mipit, bool msg, bool geometry)
 {
-    string tname;
+    string tname, tkey;
     copystring(tname, name);
-    Texture *t = textures.access(path(tname));
+    if(geometry) formatstring(tkey, "<geometry>%s", tname);
+    else copystring(tkey, tname);
+    Texture *t = textures.access(path(tkey));
     if(t) return t;
     int compress = 0;
     ImageData s;
-    if(texturedata(s, tname, msg, &compress, &clamp)) return newtexture(NULL, tname, s, clamp, mipit, false, false, compress);
+    if(texturedata(s, tname, msg, &compress, &clamp)) return newtexture(NULL, tkey, s, clamp, mipit, false, false, compress, geometry);
     return notexture;
 }
 
@@ -2625,6 +2658,8 @@ static void addname(vector<char> &key, Slot &slot, Slot::Tex &t, bool combined =
 void Slot::load(int index, Slot::Tex &t)
 {
     vector<char> key;
+    const char *geometryprefix = "<geometry>";
+    key.put(geometryprefix, strlen(geometryprefix));
     addname(key, *this, t, false, shouldpremul(t.type) ? "<premul>" : NULL);
     Slot::Tex *combine = NULL;
     loopv(sts)
@@ -2669,7 +2704,7 @@ void Slot::load(int index, Slot::Tex &t)
             break;
     }
     if(!ts.compressed && shouldpremul(t.type)) texpremul(ts);
-    t.t = newtexture(NULL, key.getbuf(), ts, wrap, true, true, true, compress);
+    t.t = newtexture(NULL, key.getbuf(), ts, wrap, true, true, true, compress, true);
 }
 
 void Slot::load()
@@ -3269,7 +3304,8 @@ bool reloadtexture(Texture &tex)
         {
             int compress = 0;
             ImageData s;
-            if(!texturedata(s, tex.name, true, &compress) || !newtexture(&tex, NULL, s, tex.clamp, tex.mipmap, false, false, compress)) return false;
+            bool geometry = (tex.type&Texture::GEOMETRY)!=0;
+            if(!texturedata(s, tex.name, true, &compress) || !newtexture(&tex, NULL, s, tex.clamp, tex.mipmap, false, false, compress, geometry)) return false;
             break;
         }
 
@@ -4063,4 +4099,3 @@ COMMAND(flipnormalmapy, "ss");
 COMMAND(mergenormalmaps, "ss");
 COMMAND(normalizenormalmap, "ss");
 COMMAND(removealphachannel, "ss");
-

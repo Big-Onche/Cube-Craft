@@ -1099,7 +1099,7 @@ ICOMMAND(findanims, "s", (char *name),
 
 void loadskin(const char *dir, const char *altdir, Texture *&skin, Texture *&masks) // model skin sharing
 {
-#define ifnoload(tex, path) if((tex = textureload(path, 0, true, false))==notexture)
+#define ifnoload(tex, path) if((tex = textureload(path, 0, true, false, true))==notexture)
 #define tryload(tex, prefix, cmd, name) \
     ifnoload(tex, makerelpath(mdir, name ".jpg", prefix, cmd)) \
     { \
@@ -1138,4 +1138,3 @@ void setbbfrommodel(dynent *d, const char *mdl)
         d->eyeheight += zrad;
     }
 }
-

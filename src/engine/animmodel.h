@@ -1807,10 +1807,10 @@ template<class MDL, class MESH> struct modelcommands
     static void setskin(char *meshname, char *tex, char *masks, float *envmapmax, float *envmapmin)
     {
         loopskins(meshname, s,
-            s.tex = textureload(makerelpath(MDL::dir, tex), 0, true, false);
+            s.tex = textureload(makerelpath(MDL::dir, tex), 0, true, false, true);
             if(*masks)
             {
-                s.masks = textureload(makerelpath(MDL::dir, masks), 0, true, false);
+                s.masks = textureload(makerelpath(MDL::dir, masks), 0, true, false, true);
                 s.envmapmax = *envmapmax;
                 s.envmapmin = *envmapmin;
             }
@@ -1867,14 +1867,14 @@ template<class MDL, class MESH> struct modelcommands
 
     static void setbumpmap(char *meshname, char *normalmapfile)
     {
-        Texture *normalmaptex = textureload(makerelpath(MDL::dir, normalmapfile), 0, true, false);
+        Texture *normalmaptex = textureload(makerelpath(MDL::dir, normalmapfile), 0, true, false, true);
         loopskins(meshname, s, s.normalmap = normalmaptex);
     }
 
     static void setdecal(char *meshname, char *decal)
     {
         loopskins(meshname, s,
-            s.decal = textureload(makerelpath(MDL::dir, decal), 0, true, false);
+            s.decal = textureload(makerelpath(MDL::dir, decal), 0, true, false, true);
         );
     }
 

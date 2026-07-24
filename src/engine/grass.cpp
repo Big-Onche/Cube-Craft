@@ -210,7 +210,7 @@ static void gengrassquads(vtxarray *va)
         if(!s.grasstex)
         {
             if(!s.grass) continue;
-            s.grasstex = textureload(s.grass, 2);
+            s.grasstex = textureload(s.grass, 2, true, true, true);
         }
 
         grassgroup *group = NULL;
@@ -349,4 +349,3 @@ void cleanupgrass()
 
     cleargrassshaders();
 }
-

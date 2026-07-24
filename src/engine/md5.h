@@ -109,7 +109,7 @@ struct md5 : skelloader<md5>
                         part *p = loading->parts.last();
                         p->initskins(notexture, notexture, group->meshes.length());
                         skin &s = p->skins.last();
-                        s.tex = textureload(makerelpath(dir, texname), 0, true, false);
+                        s.tex = textureload(makerelpath(dir, texname), 0, true, false, true);
                         delete[] texname;
                     }
                 }
@@ -426,4 +426,3 @@ struct md5 : skelloader<md5>
 };
 
 skelcommands<md5> md5commands;
-
