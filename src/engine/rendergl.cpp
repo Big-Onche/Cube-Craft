@@ -1496,11 +1496,12 @@ void recomputecamera()
     setviewcell(camera1->o);
 }
 
-float calcfrustumboundsphere(float nearplane, float farplane,  const vec &pos, const vec &view, vec &center)
+float calcfrustumboundsphere(float nearplane, float farplane, const vec &pos, const vec &view, vec &center, vec *centeroffset)
 {
     if(drawtex == DRAWTEX_MINIMAP)
     {
         center = minimapcenter;
+        if(centeroffset) *centeroffset = vec(center).sub(pos);
         return minimapradius.magnitude();
     }
 
@@ -1508,12 +1509,16 @@ float calcfrustumboundsphere(float nearplane, float farplane,  const vec &pos, c
           cdist = ((nearplane + farplane)/2)*(1 + width*width + height*height);
     if(cdist <= farplane)
     {
-        center = vec(view).mul(cdist).add(pos);
+        vec offset = vec(view).mul(cdist);
+        center = vec(offset).add(pos);
+        if(centeroffset) *centeroffset = offset;
         return vec(width*nearplane, height*nearplane, cdist-nearplane).magnitude();
     }
     else
     {
-        center = vec(view).mul(farplane).add(pos);
+        vec offset = vec(view).mul(farplane);
+        center = vec(offset).add(pos);
+        if(centeroffset) *centeroffset = offset;
         return vec(width*farplane, height*farplane, 0).magnitude();
     }
 }
@@ -1862,7 +1867,7 @@ void debugquad(float x, float y, float w, float h, float tx, float ty, float tw,
     HUDQUAD(x, y, x+w, y+h, tx, ty+th, tx+tw, ty);
 }
 
-VARR(fog, 16, 4000, 1000024);
+VARR(fog, 16, 8000, 1000024);
 CVARR(fogcolour, 0x8099B3);
 VAR(fogoverlay, 0, 1, 1);
 

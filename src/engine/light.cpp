@@ -1,6 +1,6 @@
 #include "engine.h"
 
-CVAR1R(ambient, 0x191919);
+CVAR1R(ambient, 0x505050);
 FVARR(ambientscale, 0, 1, 16);
 
 CVAR1R(skylight, 0);
