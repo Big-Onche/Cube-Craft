@@ -166,7 +166,7 @@ enum
     WORLD_SECTION_COLUMNS = WORLD_CHUNK_SIZE / WORLD_SECTION_SIZE,
     WORLD_SECTION_TILES = WORLD_SECTION_COLUMNS * WORLD_SECTION_COLUMNS,
     WORLD_MAX_PREPARED_CHUNKS = 8,
-    WORLD_MAX_TILE_CHANGES = 16
+    WORLD_MAX_COLUMN_CHANGES = 64
 };
 
 VARP(maxchunkdist, 2, 3, WORLD_MAX_CHUNK_DIST);
@@ -506,15 +506,15 @@ static int worldchunkaheadx = 0, worldchunkaheady = 0;
 static double lastworldchunkposx = 0, lastworldchunkposy = 0;
 static float worldchunkvelocityx = 0, worldchunkvelocityy = 0;
 static int lastworldchunkmotion = -1;
-static float worldchunktilemillis = 0.5f;
-static int worldchunkunloadcycle = 0;
+static float worldchunkcolumnmillis = 0.25f;
 
-VARP(asyncchunkloads, 1, 1, 4);
+VARP(asyncchunkloads, 2, 4, 4);
 VARP(chunkthreads, 0, 0, 16);
-VARP(chunkcachedist, 0, 2, 8);
-VARP(chunkpendinglimit, 4, 16, 64);
+VARP(chunkcachedist, 0, 0, 0);
+VARP(chunkpendinglimit, 4, 8, 8);
 VARP(chunklookahead, 0, 2, 8);
-VARP(chunkpublishbudget, 1, 2, 8);
+VARP(chunkpublishbudget, 4, 6, 33);
+VARP(chunkcleanupbudget, 1, 6, 33);
 
 static cube *generateworldchunk(int chunkx, int chunky);
 static cube *loadworldchunkroot(const char *mname);
@@ -623,8 +623,7 @@ void clearworldchunks()
     lastworldchunkmotion = -1;
     worldchunkvelocityx = worldchunkvelocityy = 0;
     worldchunkfocusx = worldchunkfocusy = worldchunkaheadx = worldchunkaheady = 0;
-    worldchunktilemillis = 0.5f;
-    worldchunkunloadcycle = 0;
+    worldchunkcolumnmillis = 0.25f;
     worlddebugcachemillis = -1;
     ++worldchunkepoch;
 }
@@ -793,12 +792,33 @@ static void unmountworldchunk(worldchunk &chunk)
         unmountworldchunktile(chunk, i, j);
 }
 
-static void invalidateworldchunktile(const worldchunk &chunk, int section, int tile)
+static bool worldchunkcolumnmounted(const worldchunk &chunk, int tile)
+{
+    const uint tilebit = 1U << tile;
+    loopi(WORLD_SECTION_LAYERS) if(!(chunk.mountedtiles[i] & tilebit)) return false;
+    return true;
+}
+
+static bool mountworldchunkcolumn(worldchunk &chunk, int tile)
+{
+    bool mounted = false;
+    loopi(WORLD_SECTION_LAYERS) if(mountworldchunktile(chunk, i, tile)) mounted = true;
+    return mounted;
+}
+
+static bool unmountworldchunkcolumn(worldchunk &chunk, int tile)
+{
+    bool unmounted = false;
+    loopi(WORLD_SECTION_LAYERS) if(unmountworldchunktile(chunk, i, tile)) unmounted = true;
+    return unmounted;
+}
+
+static void invalidateworldchunkcolumn(const worldchunk &chunk, int tile)
 {
     int x = tile % WORLD_SECTION_COLUMNS, y = tile / WORLD_SECTION_COLUMNS;
-    ivec bbmin = worldchunkorigin(chunk, section * WORLD_SECTION_SIZE);
+    ivec bbmin = worldchunkorigin(chunk);
     bbmin.add(ivec(x * WORLD_SECTION_SIZE, y * WORLD_SECTION_SIZE, 0));
-    ivec bbmax = ivec(bbmin).add(WORLD_SECTION_SIZE);
+    ivec bbmax = ivec(bbmin).add(ivec(WORLD_SECTION_SIZE, WORLD_SECTION_SIZE, WORLD_MAP_SIZE));
     bbmin.sub(1).max(0);
     bbmax.add(1).min(worldsize);
     bool oldsuppress = suppressworldchunkdirty;
@@ -828,8 +848,9 @@ static bool worldchunkinview(const worldchunk &chunk, int chunkx, int chunky)
 
 static bool worldchunkjobwanted(int x, int y, int chunkx, int chunky, int aheadx, int aheady)
 {
-    return worldchunkdistance(x, y, chunkx, chunky) <= maxchunkdist ||
-           worldchunkdistance(x, y, aheadx, aheady) <= maxchunkdist;
+    (void)aheadx;
+    (void)aheady;
+    return worldchunkdistance(x, y, chunkx, chunky) <= maxchunkdist;
 }
 
 static int worldchunkcoordinatescore(int x, int y)
@@ -883,6 +904,11 @@ static int worldchunkloader(void *)
             ZoneScopedN("Chunks/Worker job");
             ZoneTextF("%d_%d", job->x, job->y);
             if(!SDL_AtomicGet(&job->cancelled)) job->root = prepareworldchunk(*job);
+        }
+        if(SDL_AtomicGet(&job->cancelled) && job->root)
+        {
+            freepreparedworldchunk(job->root);
+            job->root = NULL;
         }
 
         SDL_LockMutex(worldchunkmutex);
@@ -1056,6 +1082,20 @@ static int worldchunkoutstandingjobs()
     return outstanding;
 }
 
+static int worldchunkreadybacklog(int chunkx, int chunky)
+{
+    int ready = 0;
+    loopv(worldchunks)
+    {
+        const worldchunk &chunk = worldchunks[i];
+        if(chunk.loading || !chunk.root || worldchunkfullymounted(chunk) ||
+           !worldchunkinview(chunk, chunkx, chunky))
+            continue;
+        ready++;
+    }
+    return ready;
+}
+
 static int queueworldchunkview(int chunkx, int chunky, int aheadx, int aheady)
 {
     if(!startworldchunkloader()) return 0;
@@ -1067,11 +1107,12 @@ static int queueworldchunkview(int chunkx, int chunky, int aheadx, int aheady)
     SDL_UnlockMutex(worldchunkmutex);
 
     int queued = 0, outstanding = worldchunkoutstandingjobs(),
-        minx = min(chunkx, aheadx) - maxchunkdist,
-        maxx = max(chunkx, aheadx) + maxchunkdist,
-        miny = min(chunky, aheady) - maxchunkdist,
-        maxy = max(chunky, aheady) + maxchunkdist;
-    while(outstanding < chunkpendinglimit)
+        ready = worldchunkreadybacklog(chunkx, chunky),
+        minx = chunkx - maxchunkdist,
+        maxx = chunkx + maxchunkdist,
+        miny = chunky - maxchunkdist,
+        maxy = chunky + maxchunkdist;
+    while(outstanding + ready < chunkpendinglimit)
     {
         int bestx = 0, besty = 0, bestscore = INT_MAX;
         bool found = false;
@@ -1106,6 +1147,7 @@ static int reprioritizeworldchunkqueue(int chunkx, int chunky, int aheadx, int a
     }
 
     int cancelled = 0;
+    vector<worldchunkjob *> stale;
     SDL_LockMutex(worldchunkmutex);
     worldchunkfocusx = chunkx;
     worldchunkfocusy = chunky;
@@ -1128,13 +1170,22 @@ static int reprioritizeworldchunkqueue(int chunkx, int chunky, int aheadx, int a
             cancelled++;
         }
     }
-    loopv(worldchunkresults)
+    for(int i = worldchunkresults.length() - 1; i >= 0; --i)
     {
         worldchunkjob *job = worldchunkresults[i];
         if(worldchunkjobwanted(job->x, job->y, chunkx, chunky, aheadx, aheady)) continue;
         SDL_AtomicSet(&job->cancelled, 1);
+        stale.add(worldchunkresults.remove(i));
+        cancelled++;
     }
+    if(!stale.empty()) SDL_CondBroadcast(worldchunkcond);
     SDL_UnlockMutex(worldchunkmutex);
+
+    loopv(stale)
+    {
+        freepreparedworldchunk(stale[i]->root);
+        delete stale[i];
+    }
 
     // A job already owned by a worker cannot be cancelled safely. Removing
     // its placeholder makes its eventual result self-discard instead of
@@ -1161,18 +1212,22 @@ static int processworldchunkresults()
         worldchunkjob *job = NULL;
         if(!worldchunkresults.empty())
         {
-            int best = 0, bestscore = worldchunkjobscore(*worldchunkresults[0]);
-            loopv(worldchunkresults) if(i)
+            int best = -1, bestscore = INT_MAX;
+            loopv(worldchunkresults)
             {
+                if(SDL_AtomicGet(&worldchunkresults[i]->cancelled) || !worldchunkresults[i]->root)
+                {
+                    best = i;
+                    break;
+                }
                 int score = worldchunkjobscore(*worldchunkresults[i]);
                 if(score < bestscore) { best = i; bestscore = score; }
             }
-            job = worldchunkresults.remove(best);
+            if(best >= 0) job = worldchunkresults.remove(best);
         }
         if(job) SDL_CondSignal(worldchunkcond);
         SDL_UnlockMutex(worldchunkmutex);
         if(!job) break;
-        handled++;
 
         int index = findworldchunk(job->x, job->y);
         bool current = index >= 0 && worldchunks[index].loading &&
@@ -1186,6 +1241,7 @@ static int processworldchunkresults()
             delete job;
             continue;
         }
+        handled++;
 
         worldchunk &chunk = worldchunks[index];
         chunk.root = job->root;
@@ -1211,15 +1267,12 @@ static int processworldchunkresults()
     return published;
 }
 
-static bool findworldchunkmounttile(int chunkx, int chunky, int &chunkindex, int &section, int &tile)
+static bool findworldchunkmountcolumn(int chunkx, int chunky, int &chunkindex, int &tile)
 {
-    const int playersection = clamp(player ? int(player->o.z) / WORLD_SECTION_SIZE
-                                           : WORLD_GROUND_HEIGHT / WORLD_SECTION_SIZE,
-                                    0, WORLD_SECTION_LAYERS - 1),
-              playertilex = player ? int(player->o.x) / WORLD_SECTION_SIZE : 0,
+    const int playertilex = player ? int(player->o.x) / WORLD_SECTION_SIZE : 0,
               playertiley = player ? int(player->o.y) / WORLD_SECTION_SIZE : 0;
     long long bestscore = LLONG_MAX;
-    chunkindex = section = tile = -1;
+    chunkindex = tile = -1;
     loopv(worldchunks)
     {
         const worldchunk &chunk = worldchunks[i];
@@ -1227,45 +1280,42 @@ static bool findworldchunkmounttile(int chunkx, int chunky, int &chunkindex, int
            !worldchunkinview(chunk, chunkx, chunky))
             continue;
         int chunkdist = worldchunkdistance(chunk.x, chunk.y, chunkx, chunky);
-        loopj(WORLD_SECTION_LAYERS) loopk(WORLD_SECTION_TILES)
+        loopj(WORLD_SECTION_TILES)
         {
-            if(chunk.mountedtiles[j] & (1U << k)) continue;
-            int x = k % WORLD_SECTION_COLUMNS, y = k / WORLD_SECTION_COLUMNS,
+            if(worldchunkcolumnmounted(chunk, j)) continue;
+            int x = j % WORLD_SECTION_COLUMNS, y = j / WORLD_SECTION_COLUMNS,
                 worldtilex = (chunk.x - worldfirstchunkx) * WORLD_SECTION_COLUMNS + x,
                 worldtiley = (chunk.y - worldfirstchunky) * WORLD_SECTION_COLUMNS + y,
-                dx = worldtilex - playertilex, dy = worldtiley - playertiley,
-                dz = abs(j - playersection);
+                dx = worldtilex - playertilex, dy = worldtiley - playertiley;
             long long score = (long long)chunkdist * 0x10000000
-                            + (long long)dz * 0x100000
                             + (long long)dx * dx + (long long)dy * dy;
             if(score >= bestscore) continue;
             bestscore = score;
             chunkindex = i;
-            section = j;
-            tile = k;
+            tile = j;
         }
     }
     return chunkindex >= 0;
 }
 
-static bool findworldchunkunloadtile(int chunkx, int chunky, int &chunkindex, int &section, int &tile)
+static bool findworldchunkunloadcolumn(int chunkx, int chunky, int &chunkindex, int &tile)
 {
     int bestdist = -1;
-    chunkindex = section = tile = -1;
+    chunkindex = tile = -1;
     loopv(worldchunks)
     {
         const worldchunk &chunk = worldchunks[i];
         if(!worldchunkmounted(chunk) || worldchunkinview(chunk, chunkx, chunky)) continue;
         int dist = worldchunkdistance(chunk.x, chunk.y, chunkx, chunky);
-        if(dist < bestdist) continue;
-        loopj(WORLD_SECTION_LAYERS) if(chunk.mountedtiles[j])
+        if(chunkindex >= 0 && dist <= bestdist) continue;
+        loopj(WORLD_SECTION_TILES)
         {
-            loopk(WORLD_SECTION_TILES) if(chunk.mountedtiles[j] & (1U << k))
+            uint tilebit = 1U << j;
+            loopk(WORLD_SECTION_LAYERS) if(chunk.mountedtiles[k] & tilebit)
             {
                 bestdist = dist;
                 chunkindex = i;
-                section = j;
-                tile = k;
+                tile = j;
                 break;
             }
             if(chunkindex == i) break;
@@ -1274,47 +1324,54 @@ static bool findworldchunkunloadtile(int chunkx, int chunky, int &chunkindex, in
     return chunkindex >= 0;
 }
 
-static int processworldchunktilechanges(int chunkx, int chunky)
+static int processworldchunkchanges(int chunkx, int chunky)
 {
-    Uint64 start = SDL_GetPerformanceCounter();
+    Uint64 start = SDL_GetPerformanceCounter(), phasestart = start;
     const Uint64 frequency = SDL_GetPerformanceFrequency();
-    int changedtiles = 0,
-        target = clamp(int(floorf(chunkpublishbudget / max(worldchunktilemillis, 0.05f))),
-                       1, int(WORLD_MAX_TILE_CHANGES));
+    int changedcolumns = 0, unloaded = 0,
+        unloadtarget = clamp(int(floorf(chunkcleanupbudget / max(worldchunkcolumnmillis, 0.05f))),
+                             int(WORLD_SECTION_TILES), int(WORLD_MAX_COLUMN_CHANGES));
 
-    // Retire one stale tile periodically even while the camera continuously
-    // exposes new terrain. Mounting retains the rest of the frame budget.
-    if((++worldchunkunloadcycle & 3) == 0)
+    // Cleanup has its own budget and always runs before publication. This
+    // prevents rapid movement from leaving a growing trail of live geometry.
+    while(unloaded < unloadtarget)
     {
-        int chunkindex, section, tile;
-        if(findworldchunkunloadtile(chunkx, chunky, chunkindex, section, tile) &&
-           unmountworldchunktile(worldchunks[chunkindex], section, tile))
-        {
-            invalidateworldchunktile(worldchunks[chunkindex], section, tile);
-            changedtiles++;
-        }
-    }
-
-    while(changedtiles < target)
-    {
-        double elapsed = (SDL_GetPerformanceCounter() - start) * 1000.0 / frequency;
-        if(changedtiles && elapsed + worldchunktilemillis > chunkpublishbudget) break;
-        int chunkindex, section, tile;
-        if(!findworldchunkmounttile(chunkx, chunky, chunkindex, section, tile)) break;
+        double elapsed = (SDL_GetPerformanceCounter() - phasestart) * 1000.0 / frequency;
+        if(unloaded && elapsed + worldchunkcolumnmillis > chunkcleanupbudget) break;
+        int chunkindex, tile;
+        if(!findworldchunkunloadcolumn(chunkx, chunky, chunkindex, tile)) break;
         worldchunk &chunk = worldchunks[chunkindex];
-        if(!mountworldchunktile(chunk, section, tile)) break;
-        invalidateworldchunktile(chunk, section, tile);
-        changedtiles++;
+        if(!unmountworldchunkcolumn(chunk, tile)) break;
+        invalidateworldchunkcolumn(chunk, tile);
+        unloaded++;
+        changedcolumns++;
     }
 
-    if(changedtiles)
+    phasestart = SDL_GetPerformanceCounter();
+    int mounted = 0,
+        mounttarget = clamp(int(floorf(chunkpublishbudget / max(worldchunkcolumnmillis, 0.05f))),
+                            1, int(WORLD_MAX_COLUMN_CHANGES));
+    while(mounted < mounttarget)
+    {
+        double elapsed = (SDL_GetPerformanceCounter() - phasestart) * 1000.0 / frequency;
+        if(mounted && elapsed + worldchunkcolumnmillis > chunkpublishbudget) break;
+        int chunkindex, tile;
+        if(!findworldchunkmountcolumn(chunkx, chunky, chunkindex, tile)) break;
+        worldchunk &chunk = worldchunks[chunkindex];
+        if(!mountworldchunkcolumn(chunk, tile)) break;
+        invalidateworldchunkcolumn(chunk, tile);
+        mounted++;
+        changedcolumns++;
+    }
+
+    if(changedcolumns)
     {
         commitchanges();
         float sample = max(float((SDL_GetPerformanceCounter() - start) * 1000.0 /
-                                 frequency) / changedtiles, 0.05f);
-        worldchunktilemillis = worldchunktilemillis * 0.8f + sample * 0.2f;
+                                 frequency) / changedcolumns, 0.05f);
+        worldchunkcolumnmillis = worldchunkcolumnmillis * 0.75f + sample * 0.25f;
     }
-    return changedtiles;
+    return changedcolumns;
 }
 
 static void processworldchunkupdates(int chunkx, int chunky, int aheadx, int aheady)
@@ -1324,8 +1381,9 @@ static void processworldchunkupdates(int chunkx, int chunky, int aheadx, int ahe
     reprioritizeworldchunkqueue(chunkx, chunky, aheadx, aheady);
     processworldchunkresults();
     queueworldchunkview(chunkx, chunky, aheadx, aheady);
-    if(!processworldchunktilechanges(chunkx, chunky))
-        pruneworldchunkcache(chunkx, chunky, 1);
+    processworldchunkchanges(chunkx, chunky);
+    pruneworldchunkcache(chunkx, chunky, INT_MAX);
+    activeworldchunk = findworldchunk(chunkx, chunky);
 }
 
 static void rebaseworldchunks(int chunkx, int chunky)
@@ -1353,39 +1411,36 @@ static void mountworldchunksafetyregion(int chunkx, int chunky)
     if(!player) return;
     int playertilex = int(player->o.x) / WORLD_SECTION_SIZE,
         playertiley = int(player->o.y) / WORLD_SECTION_SIZE,
-        playersection = clamp(int(player->o.z) / WORLD_SECTION_SIZE, 0, WORLD_SECTION_LAYERS - 1),
-        changedtiles = 0;
+        changedcolumns = 0;
     loopv(worldchunks)
     {
         worldchunk &chunk = worldchunks[i];
         if(chunk.loading || !chunk.root || !worldchunkinview(chunk, chunkx, chunky)) continue;
-        loopj(WORLD_SECTION_LAYERS)
+        loopj(WORLD_SECTION_TILES)
         {
-            if(abs(j - playersection) > 1) continue;
-            loopk(WORLD_SECTION_TILES)
-            {
-                int x = k % WORLD_SECTION_COLUMNS, y = k / WORLD_SECTION_COLUMNS,
-                    worldtilex = (chunk.x - worldfirstchunkx) * WORLD_SECTION_COLUMNS + x,
-                    worldtiley = (chunk.y - worldfirstchunky) * WORLD_SECTION_COLUMNS + y;
-                if(abs(worldtilex - playertilex) > 1 || abs(worldtiley - playertiley) > 1 ||
-                   !mountworldchunktile(chunk, j, k))
-                    continue;
-                invalidateworldchunktile(chunk, j, k);
-                changedtiles++;
-            }
+            int x = j % WORLD_SECTION_COLUMNS, y = j / WORLD_SECTION_COLUMNS,
+                worldtilex = (chunk.x - worldfirstchunkx) * WORLD_SECTION_COLUMNS + x,
+                worldtiley = (chunk.y - worldfirstchunky) * WORLD_SECTION_COLUMNS + y;
+            if(abs(worldtilex - playertilex) > 1 || abs(worldtiley - playertiley) > 1 ||
+               !mountworldchunkcolumn(chunk, j))
+                continue;
+            invalidateworldchunkcolumn(chunk, j);
+            changedcolumns++;
         }
     }
-    if(changedtiles) commitchanges();
+    if(changedcolumns) commitchanges();
 }
 
 static int pruneworldchunkcache(int chunkx, int chunky, int limit)
 {
+    Uint64 start = SDL_GetPerformanceCounter();
+    const Uint64 frequency = SDL_GetPerformanceFrequency();
     int released = 0, cachedist = maxchunkdist + chunkcachedist;
     for(int i = worldchunks.length() - 1; i >= 0; --i)
     {
         worldchunk &chunk = worldchunks[i];
         if(chunk.loading || worldchunkmounted(chunk) || chunk.dirty || !chunk.root ||
-           max(abs(chunk.x - chunkx), abs(chunk.y - chunky)) <= cachedist)
+           worldchunkdistance(chunk.x, chunk.y, chunkx, chunky) <= cachedist)
             continue;
         {
             ZoneScopedN("Chunks/Release cache");
@@ -1394,7 +1449,8 @@ static int pruneworldchunkcache(int chunkx, int chunky, int limit)
         }
         worldchunks.removeunordered(i);
         released++;
-        if(released >= limit) break;
+        double elapsed = (SDL_GetPerformanceCounter() - start) * 1000.0 / frequency;
+        if(released >= limit || elapsed >= chunkcleanupbudget) break;
     }
     return released;
 }
@@ -1443,7 +1499,7 @@ static void rebuildworldchunks(int chunkx, int chunky, int aheadx, int aheady, b
     rebuildingworldchunks = false;
     conoutf(CON_DEBUG, "chunk view %d_%d: +%d -%d, %d queued, %d cancelled, %d cached released, %d/%d mounted",
             chunkx, chunky, entering.length(), leaving.length(), queued, cancelled, released,
-             mounted, (2 * maxchunkdist + 1) * (2 * maxchunkdist + 1));
+            mounted, (2 * maxchunkdist + 1) * (2 * maxchunkdist + 1));
 }
 
 static void updateworldchunkprediction(int chunkx, int chunky, double absolutex, double absolutey)
