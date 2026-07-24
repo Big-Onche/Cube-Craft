@@ -804,9 +804,10 @@ static int acquireworldchunksync(int x, int y, int &generated)
     if(index >= 0) return index;
 
     defformatstring(chunkname, "%s/%d_%d", worldfolder, x, y);
-    defformatstring(chunkfile, "media/map/%s.ogz", chunkname);
-    path(chunkfile);
-    cube *root = fileexists(chunkfile, "r") ? loadworldchunkroot(chunkname) : NULL;
+    // loadworldchunkroot() resolves the configured home and package paths.
+    // A direct fileexists() on the relative media path misses saved chunks
+    // when the game was launched with -u, causing them to be regenerated.
+    cube *root = loadworldchunkroot(chunkname);
     if(!root)
     {
         root = generateworldchunk(x, y);
@@ -2108,7 +2109,7 @@ static bool chunkbasename(const char *name)
     return chunkcoords(name, x, y);
 }
 
-static void chooseworldfolder(const char *requested)
+static void normalizeworldfolder(char *folder, size_t len, const char *requested)
 {
     string name;
     validmapname(name, requested && *requested ? requested : game::getclientmap(), NULL, "untitled");
@@ -2116,7 +2117,12 @@ static void chooseworldfolder(const char *requested)
 
     char *slash = strrchr(name, '/');
     if(slash && chunkbasename(slash + 1)) *slash = '\0';
-    copystring(worldfolder, name[0] ? name : "untitled");
+    copystring(folder, name[0] ? name : "untitled", len);
+}
+
+static void chooseworldfolder(const char *requested)
+{
+    normalizeworldfolder(worldfolder, sizeof(worldfolder), requested);
 }
 
 static void worldchunkname(char *name, size_t len, const worldchunk &chunk)
@@ -3121,6 +3127,83 @@ static bool saveworldconfig()
     return true;
 }
 
+static bool worldchunkfileexists(const char *folder, int x, int y)
+{
+    defformatstring(name, "media/map/%s/%d_%d.ogz", folder, x, y);
+    stream *f = openfile(path(name), "rb");
+    if(!f) return false;
+    delete f;
+    return true;
+}
+
+static bool saveworldmetadata(int chunkx, int chunky)
+{
+    defformatstring(name, "media/map/%s/world.meta", worldfolder);
+    stream *f = openfile(path(name), "w");
+    if(!f)
+    {
+        conoutf(CON_WARN, "could not write world metadata to %s", name);
+        return false;
+    }
+    f->printf("CUBECRAFT_WORLD 1\n");
+    f->printf("entry %d %d\n", chunkx, chunky);
+    delete f;
+    return true;
+}
+
+static bool loadworldmetadata(const char *folder, int &chunkx, int &chunky)
+{
+    chunkx = chunky = 0;
+    defformatstring(name, "media/map/%s/world.meta", folder);
+    stream *f = openfile(path(name), "r");
+    if(f)
+    {
+        string line;
+        while(f->getline(line, sizeof(line)))
+        {
+            int x, y;
+            if(sscanf(line, "entry %d %d", &x, &y) == 2)
+            {
+                chunkx = x;
+                chunky = y;
+                break;
+            }
+        }
+        delete f;
+    }
+
+    if(worldchunkfileexists(folder, chunkx, chunky)) return true;
+    chunkx = chunky = 0;
+    return worldchunkfileexists(folder, 0, 0);
+}
+
+static int loadingworldchunks()
+{
+    int loading = 0;
+    loopv(worldchunks) if(worldchunks[i].loading) loading++;
+    return loading;
+}
+
+static bool finishworldchunkloads()
+{
+    int remaining = loadingworldchunks(), total = remaining;
+    while(remaining > 0)
+    {
+        if(worldchunkworkers.empty())
+        {
+            conoutf(CON_ERROR, "cannot finish %d queued chunks: the chunk worker pool is not running", remaining);
+            return false;
+        }
+
+        int prepared = processworldchunkresults();
+        remaining = loadingworldchunks();
+        renderprogress(total > 0 ? (total - remaining) / float(total) : 1,
+                       "finishing chunks before save...");
+        if(!prepared && remaining > 0) SDL_Delay(1);
+    }
+    return true;
+}
+
 static void createworld(const char *requestedname)
 {
     chooseworldfolder(requestedname);
@@ -3177,6 +3260,29 @@ ICOMMAND(newworld, "ssN", (char *arg1, char *arg2, int *numargs),
     createworld(name);
 });
 
+static void loadworldcommand(const char *requested)
+{
+    if(!requested || !*requested)
+    {
+        conoutf(CON_ERROR, "usage: loadworld <worldname>");
+        return;
+    }
+
+    string folder;
+    normalizeworldfolder(folder, sizeof(folder), requested);
+    int chunkx, chunky;
+    if(!loadworldmetadata(folder, chunkx, chunky))
+    {
+        conoutf(CON_ERROR, "could not find a saved world named %s", folder);
+        return;
+    }
+
+    defformatstring(entry, "%s/%d_%d", folder, chunkx, chunky);
+    game::changemap(entry);
+}
+
+ICOMMAND(loadworld, "s", (char *name), loadworldcommand(name));
+
 void saveworld()
 {
     if(worldchunks.empty() || activeworldchunk < 0)
@@ -3185,6 +3291,7 @@ void saveworld()
         return;
     }
 
+    if(!finishworldchunkloads()) return;
     if(!saveworldconfig()) return;
 
     syncmountedworldchunks();
@@ -3205,6 +3312,22 @@ void saveworld()
     worldroot = runtimeroot;
     setvar("mapscale", runtimescale, true, false);
     setvar("mapsize", runtimesize, true, false);
+
+    if(saved != ready)
+    {
+        conoutf(CON_ERROR, "saved only %d of %d chunks for world %s; keeping all chunks in memory for retry",
+                saved, ready, worldfolder);
+        return;
+    }
+
+    int entryx = 0, entryy = 0, entry = findworldchunk(lastplayerchunkx, lastplayerchunky);
+    if(!worldchunks.inrange(entry)) entry = activeworldchunk;
+    if(worldchunks.inrange(entry))
+    {
+        entryx = worldchunks[entry].x;
+        entryy = worldchunks[entry].y;
+    }
+    if(!saveworldmetadata(entryx, entryy)) return;
 
     int released = 0;
     for(int i = worldchunks.length() - 1; i >= 0; --i)
