@@ -1900,7 +1900,7 @@ FVAR(smcubeprec, 1e-3f, 1, 1e3f);
 FVAR(smspotprec, 1e-3f, 1, 1e3f);
 
 VARFP(smsize, 10, 12, 14, cleanupshadowatlas());
-VARFP(smdepthprec, 0, 0, 2, cleanupshadowatlas());
+VARFP(smdepthprec, 0, 2, 2, cleanupshadowatlas());
 VAR(smsidecull, 0, 1, 1);
 VAR(smviscull, 0, 1, 1);
 VAR(smborder, 0, 3, 16);
@@ -2144,10 +2144,18 @@ void cascadedshadowmap::getprojmatrix()
     updatesplitdist();
 
     // find z extent
-    float minz = lightview.project_bb(worldmin, worldmax), maxz = lightview.project_bb(worldmax, worldmin),
+    const float originz = lightview.dot(shadoworigin);
+    float minz = lightview.project_bb(worldmin, worldmax) - originz,
+          maxz = lightview.project_bb(worldmax, worldmin) - originz,
           zmargin = max((maxz - minz)*csmdepthmargin, 0.5f*(csmdepthrange - (maxz - minz)));
     minz -= zmargin;
     maxz += zmargin;
+
+    // Keep the atlas grid fixed in world space, but store its center relative
+    // to the render origin. Double precision here prevents the texel snap from
+    // changing phase when the mounted world coordinates are large.
+    const double modeloriginx = double(model.a.x)*shadoworigin.x + double(model.b.x)*shadoworigin.y + double(model.c.x)*shadoworigin.z,
+                 modeloriginy = double(model.a.y)*shadoworigin.x + double(model.b.y)*shadoworigin.y + double(model.c.y)*shadoworigin.z;
 
     // compute each split projection matrix
     loopi(csmsplits)
@@ -2160,20 +2168,24 @@ void cascadedshadowmap::getprojmatrix()
         float radius = calcfrustumboundsphere(split.nearplane, split.farplane, camera1->o, camdir, c);
 
         // compute the projected bounding box of the sphere
-        vec tc;
-        model.transform(c, tc);
         int border = smfilter > 2 ? smborder2 : smborder;
         const float pradius = ceil(radius * csmpradiustweak) + smalign, step = (2*pradius) / (sm.size - 2*border);
-        vec2 offset = vec2(tc).sub(pradius).div(step*(1+smalign));
-        offset.x = floor(offset.x)*(1+smalign);
-        offset.y = floor(offset.y)*(1+smalign);
-        split.center = vec(vec2(offset).mul(step).add(pradius), -0.5f*(minz + maxz));
+        const double tcx = double(model.a.x)*c.x + double(model.b.x)*c.y + double(model.c.x)*c.z,
+                     tcy = double(model.a.y)*c.x + double(model.b.y)*c.y + double(model.c.y)*c.z,
+                     alignstep = double(step)*(1+smalign),
+                     offsetx = floor((tcx - pradius)/alignstep)*(1+smalign),
+                     offsety = floor((tcy - pradius)/alignstep)*(1+smalign);
+        split.center = vec(float(offsetx*step + pradius - modeloriginx),
+                           float(offsety*step + pradius - modeloriginy),
+                           -0.5f*(minz + maxz));
         split.bounds = vec(pradius, pradius, 0.5f*(maxz - minz));
 
         // modify mvp with a scale and offset
         // now compute the update model view matrix for this split
         split.scale = vec(1/step, 1/step, -1/(maxz - minz));
-        split.offset = vec(border - offset.x, border - offset.y, -minz/(maxz - minz));
+        split.offset = vec(float(border - (offsetx - modeloriginx/step)),
+                           float(border - (offsety - modeloriginy/step)),
+                           -minz/(maxz - minz));
 
         split.proj.identity();
         split.proj.settranslation(2*split.offset.x/sm.size - 1, 2*split.offset.y/sm.size - 1, 2*split.offset.z - 1);
@@ -2188,6 +2200,7 @@ void cascadedshadowmap::gencullplanes()
         splitinfo &split = splits[i];
         matrix4 mvp;
         mvp.mul(split.proj, model);
+        mvp.translate(vec(shadoworigin).neg());
         vec4 px = mvp.rowx(), py = mvp.rowy(), pw = mvp.roww();
         split.cull[0] = plane(vec4(pw).add(px)).normalize(); // left plane
         split.cull[1] = plane(vec4(pw).sub(px)).normalize(); // right plane
@@ -2994,12 +3007,13 @@ static inline void setlightglobals(bool transparent = false)
 }
 
 static LocalShaderParam lightpos("lightpos"), lightcolor("lightcolor"), spotparams("spotparams"), shadowparams("shadowparams"), shadowoffset("shadowoffset");
-static vec4 lightposv[8], lightcolorv[8], spotparamsv[8], shadowparamsv[8];
+static vec4 lightposv[8], shadowlightposv[8], lightcolorv[8], spotparamsv[8], shadowparamsv[8];
 static vec2 shadowoffsetv[8];
 
 static inline void setlightparams(int i, const lightinfo &l)
 {
     lightposv[i] = vec4(l.o, 1).div(l.radius);
+    shadowlightposv[i] = vec4(vec(l.o).sub(camera1->o), 1).div(l.radius);
     lightcolorv[i] = vec4(vec(l.color).mul(2*ldrscaleb), l.nospec() ? 0 : 1);
     if(l.spot > 0) spotparamsv[i] = vec4(vec(l.dir).neg(), 1/(1 - cos360(l.spot)));
     if(l.shadowmap >= 0)
@@ -3032,7 +3046,7 @@ static inline void setlightshader(Shader *s, int n, bool baselight, bool shadowm
 {
     int variant = (shadowmap ? 1 : 0) + (baselight ? 0 : 2) + (spotlight ? 4 : 0) + (transparent ? 8 : (avatar ? 24 : (colorshadow ? 16 : 0)));
     s->setvariant(n - (variant&7 ? 1 : 0), variant);
-    lightpos.setv(lightposv, n);
+    lightpos.setv(shadowmap ? shadowlightposv : lightposv, n);
     lightcolor.setv(lightcolorv, n);
     if(spotlight) spotparams.setv(spotparamsv, n);
     if(shadowmap)
@@ -4420,10 +4434,12 @@ void rendercsmshadowmaps()
         glDepthMask(GL_TRUE);
     }
 
+    shadowmapping = SM_CASCADE;
+    shadoworigin = camera1->o;
+    GLOBALPARAM(shadoworigin, shadoworigin);
+
     csm.setup();
 
-    shadowmapping = SM_CASCADE;
-    shadoworigin = vec(0, 0, 0);
     shadowdir = csm.lightview;
     shadowbias = csm.lightview.project_bb(worldmin, worldmax);
     shadowradius = fabs(csm.lightview.project_bb(worldmax, worldmin));
@@ -4630,8 +4646,8 @@ void rendershadowmaps(int offset = 0)
 
             float invradius = 1.0f / l.radius, spotscale = invradius * cotan360(l.spot);
             matrix4 spotmatrix(vec(l.spotx).mul(spotscale), vec(l.spoty).mul(spotscale), vec(l.dir).mul(-invradius));
-            spotmatrix.translate(vec(l.o).neg());
             shadowmatrix.mul(smprojmatrix, spotmatrix);
+            GLOBALPARAM(shadoworigin, shadoworigin);
             GLOBALPARAM(shadowmatrix, shadowmatrix);
 
             glCullFace((l.dir.z >= 0) == !smcullside ? GL_FRONT : GL_BACK);
@@ -4668,8 +4684,8 @@ void rendershadowmaps(int offset = 0)
 
                 matrix4 cubematrix(cubeshadowviewmatrix[side]);
                 cubematrix.scale(1.0f/l.radius);
-                cubematrix.translate(vec(l.o).neg());
                 shadowmatrix.mul(smprojmatrix, cubematrix);
+                GLOBALPARAM(shadoworigin, shadoworigin);
                 GLOBALPARAM(shadowmatrix, shadowmatrix);
 
                 glCullFace((side & 1) ^ (side >> 2) ^ smcullside ? GL_FRONT : GL_BACK);
@@ -4688,8 +4704,8 @@ void rendershadowmaps(int offset = 0)
 
                     matrix4 cubematrix(cubeshadowviewmatrix[side]);
                     cubematrix.scale(1.0f/l.radius);
-                    cubematrix.translate(vec(l.o).neg());
                     shadowmatrix.mul(smprojmatrix, cubematrix);
+                    GLOBALPARAM(shadoworigin, shadoworigin);
                     GLOBALPARAM(shadowmatrix, shadowmatrix);
 
                     rendershadowtransparent(i, side, (side & 1) ^ (side >> 2) ^ smcullside);
@@ -5137,6 +5153,15 @@ void preparegbuffer(bool depthclear)
     GLOBALPARAMF(gdepthpackparams, -1.0f/farplane, -255.0f/farplane, -(255.0f*255.0f)/farplane);
     GLOBALPARAMF(gdepthunpackparams, -farplane, -farplane/255.0f, -farplane/(255.0f*255.0f));
     GLOBALPARAM(worldmatrix, worldmatrix);
+
+    matrix4 shadowview;
+    shadowview.identity();
+    shadowview.translate(vec(camera1->o).neg());
+    matrix4 shadowworldmatrix;
+    // Shadow lookups only need camera-relative positions. Reconstructing them
+    // directly avoids first rounding a large absolute world position.
+    shadowworldmatrix.muld(shadowview, worldmatrix);
+    GLOBALPARAM(shadowworldmatrix, shadowworldmatrix);
 
     GLOBALPARAMF(ldrscale, ldrscale);
     GLOBALPARAMF(hdrgamma, hdrgamma, 1.0f/hdrgamma);

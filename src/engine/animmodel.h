@@ -1017,7 +1017,15 @@ struct animmodel : model
             if(!(anim&ANIM_NORENDER))
             {
                 matrix4 modelmatrix;
-                modelmatrix.mul(shadowmapping ? shadowmatrix : camprojmatrix, matrixstack[matrixpos]);
+                if(shadowmapping > SM_REFLECT)
+                {
+                    // Shadow projection matrices consume render-origin-relative
+                    // coordinates, including for models whose meshes are local.
+                    matrix4 shadowmodelmatrix = matrixstack[matrixpos];
+                    shadowmodelmatrix.d.sub(vec4(shadoworigin, 0));
+                    modelmatrix.mul(shadowmatrix, shadowmodelmatrix);
+                }
+                else modelmatrix.mul(shadowmapping ? shadowmatrix : camprojmatrix, matrixstack[matrixpos]);
                 if(resize!=1) modelmatrix.scale(resize);
                 GLOBALPARAM(modelmatrix, modelmatrix);
 
@@ -1937,4 +1945,3 @@ template<class MDL, class MESH> struct modelcommands
         if(MDL::multiparted()) modelcommand(setlink, "link", "iisfff");
     }
 };
-
