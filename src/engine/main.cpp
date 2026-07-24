@@ -1261,6 +1261,8 @@ int main(int argc, char **argv)
 
     for(;;)
     {
+        FrameMark;
+        ZoneScopedN("Frame");
         static int frames = 0;
         int millis = getclockmillis();
         limitfps(millis, totalmillis);

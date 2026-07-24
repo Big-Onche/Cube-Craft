@@ -18,6 +18,10 @@
 #include <assert.h>
 #include <time.h>
 
+#ifdef TRACY_ENABLE
+#include <new>
+#endif
+
 #ifdef WIN32
   #define WIN32_LEAN_AND_MEAN
   #ifdef _WIN32_WINNT
@@ -65,5 +69,6 @@
 #include "iengine.h"
 #include "igame.h"
 
-#endif
+#include "../include/tracy/public/tracy/Tracy.hpp"
 
+#endif
