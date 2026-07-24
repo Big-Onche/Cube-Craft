@@ -118,33 +118,13 @@ static inline float vadist(vtxarray *va, const vec &p)
     return p.dist_to_bb(va->bbmin, va->bbmax);
 }
 
-#define VASORTSIZE 64
-
-static vtxarray *vasort[VASORTSIZE];
+static vector<vtxarray *> visiblevasorted;
 
 static inline void addvisibleva(vtxarray *va)
 {
     visiblevas++;
-    float dist = vadist(va, camera1->o);
-    va->distance = int(dist); /*cv.dist(camera1->o) - va->size*SQRT3/2*/
-
-    // Streaming worlds use a large, fixed runtime octree that can be many
-    // times wider than the actual view distance. Binning against worldsize
-    // collapses nearly every visible VA into the first bucket and makes this
-    // insertion sort approach O(n^2) in open views. Spread the work across
-    // the buckets using the distance that can actually be rendered.
-    float sortdist = max(min(float(worldsize), vfcDfog), 1.0f);
-    int hash = clamp(int(dist*VASORTSIZE/sortdist), 0, VASORTSIZE-1);
-    vtxarray **prev = &vasort[hash], *cur = vasort[hash];
-
-    while(cur && va->distance >= cur->distance)
-    {
-        prev = &cur->next;
-        cur = cur->next;
-    }
-
-    va->next = cur;
-    *prev = va;
+    va->distance = int(vadist(va, camera1->o));
+    visiblevasorted.add(va);
 }
 
 static inline bool livecullva(vtxarray &va)
@@ -168,16 +148,18 @@ static inline bool livecullva(vtxarray &va)
     return true;
 }
 
+static bool sortvisibleva(vtxarray *x, vtxarray *y)
+{
+    return x->distance < y->distance;
+}
+
 void sortvisiblevas()
 {
-    visibleva = NULL;
-    vtxarray **last = &visibleva;
-    loopi(VASORTSIZE) if(vasort[i])
+    if(visiblevasorted.length() > 1) visiblevasorted.sort(sortvisibleva);
+    visibleva = visiblevasorted.empty() ? NULL : visiblevasorted[0];
+    loopv(visiblevasorted)
     {
-        vtxarray *va = vasort[i];
-        *last = va;
-        while(va->next) va = va->next;
-        last = &va->next;
+        visiblevasorted[i]->next = visiblevasorted.inrange(i + 1) ? visiblevasorted[i + 1] : NULL;
     }
 }
 
@@ -224,7 +206,7 @@ void findvisiblevas()
     ZoneNamedN(livecullzone, "livecull", livecull != 0);
     visiblevas = liveculledvas = 0;
     livecullqueries.setsize(0);
-    memclear(vasort);
+    visiblevasorted.setsize(0);
     findvisiblevas<false, false>(varoot);
     sortvisiblevas();
     ZoneValueV(livecullzone, liveculledvas);
@@ -947,17 +929,22 @@ VAR(smbbcull, 0, 1, 1);
 VAR(smdistcull, 0, 1, 1);
 VAR(smnodraw, 0, 0, 1);
 VARP(livecullshadows, 0, 1, 1);
+VARP(livecullshadowsize, 0, 256, 4096);
 
 static int liveculledshadowvas = 0, livecullshadowmillis = -1;
 
 static inline bool livecullshadowva(vtxarray &va)
 {
     int sectionsize = getworldsectionsize();
-    if(!livecullshadows || !sectionsize || va.occluded < OCCLUDE_BB ||
+    if(!livecullshadows || !sectionsize || va.size < livecullshadowsize ||
+       va.curvfc != VFC_FULL_VISIBLE || va.occluded != OCCLUDE_BB ||
        va.occludedframe != occlusionframe ||
        camera1->o.dist_to_bb(va.bbmin, va.bbmax) < sectionsize)
         return false;
 
+    // A clipped query only proves that the on-screen portion was hidden. Its
+    // off-screen portion may still cast into a visible shadow-map split, so
+    // only fully camera-contained bounds are eligible for shadow pruning.
     liveculledshadowvas++;
     va.shadowmask = va.shadowtransparent = 0;
     return true;
