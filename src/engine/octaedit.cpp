@@ -2948,6 +2948,7 @@ EDITSTAT(octa, int, allocnodes*8);
 EDITSTAT(va, int, allocva);
 EDITSTAT(vva, int, getnumvisiblevas());
 EDITSTAT(livecull, int, getnumliveculledvas());
+EDITSTAT(livecullshadow, int, getnumliveculledshadowvas());
 EDITSTAT(glde, int, glde);
 EDITSTAT(geombatch, int, gbatches);
 EDITSTAT(oq, int, getnumqueries());

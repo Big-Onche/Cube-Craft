@@ -924,6 +924,26 @@ int cullfrustumsides(const vec &lightpos, float lightradius, float size, float b
 VAR(smbbcull, 0, 1, 1);
 VAR(smdistcull, 0, 1, 1);
 VAR(smnodraw, 0, 0, 1);
+VARP(livecullshadows, 0, 1, 1);
+
+static int liveculledshadowvas = 0, livecullshadowmillis = -1;
+
+static inline bool livecullshadowva(vtxarray &va)
+{
+    int sectionsize = getworldsectionsize();
+    if(!livecullshadows || !sectionsize || va.occluded < OCCLUDE_BB ||
+       camera1->o.dist_to_bb(va.bbmin, va.bbmax) < sectionsize)
+        return false;
+
+    liveculledshadowvas++;
+    va.shadowmask = va.shadowtransparent = 0;
+    return true;
+}
+
+int getnumliveculledshadowvas()
+{
+    return liveculledshadowvas;
+}
 
 vec shadoworigin(0, 0, 0), shadowdir(0, 0, 0);
 float shadowradius = 0, shadowbias = 0;
@@ -999,6 +1019,7 @@ void findcsmshadowvas(vector<vtxarray *> &vas, bool transparent)
     loopv(vas)
     {
         vtxarray &v = *vas[i];
+        if(livecullshadowva(v)) continue;
         ivec bbmin, bbmax;
         getshadowvabb(v, bbmin, bbmax, transparent);
         v.shadowmask = calcbbcsmsplits(bbmin, bbmax);
@@ -1025,6 +1046,7 @@ void findrsmshadowvas(vector<vtxarray *> &vas)
     loopv(vas)
     {
         vtxarray &v = *vas[i];
+        if(livecullshadowva(v)) continue;
         ivec bbmin, bbmax;
         getshadowvabb(v, bbmin, bbmax);
         v.shadowmask = calcbbrsmsplits(bbmin, bbmax);
@@ -1066,6 +1088,11 @@ void findspotshadowvas(vector<vtxarray *> &vas, bool transparent)
 
 void findshadowvas(bool transparent)
 {
+    if(livecullshadowmillis != totalmillis)
+    {
+        livecullshadowmillis = totalmillis;
+        liveculledshadowvas = 0;
+    }
     shadowtransparent = 0;
     memclear(vasort);
     switch(shadowmapping)
@@ -1843,7 +1870,7 @@ void rendergeom()
                 va->occluded = OCCLUDE_NOTHING;
                 continue;
             }
-            va->occluded = va->query && va->query->owner == va && checkquery(va->query)
+            va->occluded = va->query && va->query->owner == va && checkquery(va->query, true)
                          ? min(va->occluded + 1, int(OCCLUDE_BB))
                          : OCCLUDE_NOTHING;
             va->query = newquery(va);
