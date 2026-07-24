@@ -721,6 +721,8 @@ static void syncmountedworldchunks()
 static void mountworldchunk(worldchunk &chunk)
 {
     if(chunk.mounted) return;
+    ZoneScopedN("Chunks/Mount");
+    ZoneTextF("%d_%d", chunk.x, chunk.y);
     loopi(WORLD_SECTION_LAYERS) loopj(WORLD_SECTION_TILES)
     {
         int x = j % WORLD_SECTION_COLUMNS, y = j / WORLD_SECTION_COLUMNS;
@@ -734,6 +736,8 @@ static void mountworldchunk(worldchunk &chunk)
 static void unmountworldchunk(worldchunk &chunk)
 {
     if(!chunk.mounted) return;
+    ZoneScopedN("Chunks/Unmount");
+    ZoneTextF("%d_%d", chunk.x, chunk.y);
     loopi(WORLD_SECTION_LAYERS) loopj(WORLD_SECTION_TILES)
     {
         int x = j % WORLD_SECTION_COLUMNS, y = j / WORLD_SECTION_COLUMNS;
@@ -788,6 +792,9 @@ static int worldchunkjobscore(const worldchunkjob &job)
 
 static int worldchunkloader(void *)
 {
+#ifdef TRACY_ENABLE
+    tracy::SetThreadName("World chunk loader");
+#endif
     SDL_SetThreadPriority(SDL_THREAD_PRIORITY_LOW);
     for(;;)
     {
@@ -808,7 +815,11 @@ static int worldchunkloader(void *)
         worldchunkjob *job = worldchunkjobs.remove(best);
         SDL_UnlockMutex(worldchunkmutex);
 
-        job->root = prepareworldchunk(*job);
+        {
+            ZoneScopedN("Chunks/Worker job");
+            ZoneTextF("%d_%d", job->x, job->y);
+            job->root = prepareworldchunk(*job);
+        }
 
         SDL_LockMutex(worldchunkmutex);
         while(worldchunkresults.length() >= WORLD_MAX_PREPARED_CHUNKS && !stopworldchunkthread)
@@ -897,6 +908,8 @@ static int acquireworldchunksync(int x, int y, int &generated)
     int index = findworldchunk(x, y);
     if(index >= 0) return index;
 
+    ZoneScopedN("Chunks/Load synchronous");
+    ZoneTextF("%d_%d", x, y);
     defformatstring(chunkname, "%s/%d_%d", worldfolder, x, y);
     // loadworldchunkroot() resolves the configured home and package paths.
     // A direct fileexists() on the relative media path misses saved chunks
@@ -1140,7 +1153,11 @@ static int pruneworldchunkcache(int chunkx, int chunky, int limit)
         if(chunk.loading || worldchunkmounted(chunk) || chunk.dirty || !chunk.root ||
            max(abs(chunk.x - chunkx), abs(chunk.y - chunky)) <= cachedist)
             continue;
-        freeocta(chunk.root);
+        {
+            ZoneScopedN("Chunks/Release cache");
+            ZoneTextF("%d_%d", chunk.x, chunk.y);
+            freeocta(chunk.root);
+        }
         worldchunks.removeunordered(i);
         released++;
         if(released >= limit) break;
@@ -2248,6 +2265,8 @@ static void placeworldtrees(worldgencontext &ctx, cube *root, int chunkx, int ch
 
 static cube *generateworldchunk(int chunkx, int chunky, worldgencontext &ctx)
 {
+    ZoneScopedN("Chunks/Generate");
+    ZoneTextF("%d_%d", chunkx, chunky);
     generateworldheightmap(ctx, chunkx, chunky);
     cube *root = allocworldgenfamily(ctx);
     const int rootsize = WORLD_CHUNK_ROOT_SIZE;
@@ -2646,6 +2665,8 @@ static bool skipworldchunkvslots(stream *f, int remaining)
 
 static cube *loadworldchunkroot(const char *mname)
 {
+    ZoneScopedN("Chunks/Load from disk");
+    ZoneText(mname, strlen(mname));
     string name;
     validmapname(name, mname);
     defformatstring(filename, "media/map/%s.ogz", name);
@@ -2876,6 +2897,8 @@ static cube *loadpreparedworldchunk(const char *filename, int &families, int &op
 
 static cube *prepareworldchunk(worldchunkjob &job)
 {
+    ZoneScopedN("Chunks/Prepare");
+    ZoneTextF("%d_%d", job.x, job.y);
     if(job.filename[0])
     {
         cube *root = loadpreparedworldchunk(job.filename, job.families, job.optimized, job.loaderror);

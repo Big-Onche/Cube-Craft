@@ -144,6 +144,7 @@ struct vtxarray
     ivec nogimin, nogimax;   // BB of any nogi
     ivec bbmin, bbmax;       // BB of everything including children
     uchar curvfc, occluded;
+    uint occludedframe;
     occludequery *query;
     vector<octaentities *> mapmodels, decals;
     vector<grasstri> grasstris;
@@ -334,4 +335,3 @@ enum
 #define GENFACEVERTS(x0,x1, y0,y1, z0,z1, c0,c1, r0,r1, d0,d1) \
     GENFACEVERTSXY(x0,x1, y0,y1, z0,z1, c0,c1, r0,r1, d0,d1) \
     GENFACEVERTSZ(x0,x1, y0,y1, z0,z1, c0,c1, r0,r1, d0,d1)
-
