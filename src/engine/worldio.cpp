@@ -155,7 +155,7 @@ enum
     WORLD_CHUNK_SCALE = WORLD_GRID_POWER + 9,
     WORLD_CHUNK_MAP_SIZE = 1 << WORLD_CHUNK_SCALE,
     WORLD_CHUNK_ROOT_SIZE = WORLD_CHUNK_MAP_SIZE >> 1,
-    WORLD_CHUNK_SLICES = WORLD_MAP_SIZE / WORLD_CHUNK_SIZE,
+    WORLD_SECTION_LAYERS = WORLD_MAP_SIZE / WORLD_SECTION_SIZE,
     WORLD_GROUND_HEIGHT = -WORLD_MIN_HEIGHT * WORLD_BLOCK_SIZE,
     WORLD_DIRT_DEPTH = 4 * WORLD_BLOCK_SIZE,
     WORLD_RUNTIME_SCALE = 16,
@@ -163,7 +163,8 @@ enum
     WORLD_RUNTIME_CHUNKS = WORLD_RUNTIME_SIZE / WORLD_CHUNK_SIZE,
     WORLD_RUNTIME_CENTER = WORLD_RUNTIME_CHUNKS / 2,
     WORLD_MAX_CHUNK_DIST = WORLD_RUNTIME_CENTER - 2,
-    WORLD_MAX_PREPARED_CHUNKS = 8
+    WORLD_MAX_PREPARED_CHUNKS = 8,
+    WORLD_MAX_SECTION_PUBLISHES = 8
 };
 
 VARP(maxchunkdist, 0, 2, WORLD_MAX_CHUNK_DIST);
@@ -445,10 +446,11 @@ struct worldchunk
 {
     int x, y;
     cube *root;
-    bool mounted, loading;
+    uint mountedsections;
+    bool loading;
 
     worldchunk(int x, int y, cube *root, bool loading = false)
-        : x(x), y(y), root(root), mounted(false), loading(loading) {}
+        : x(x), y(y), root(root), mountedsections(0), loading(loading) {}
 };
 
 struct worldchunkjob
@@ -456,7 +458,7 @@ struct worldchunkjob
     int x, y, seed, grasstexture, grasssidetexture, dirttexture, stonetexture, sandtexture, snowtexture,
         woodtexture, leaftexture;
     terrainsettings terrain;
-    int families, loaderror;
+    int families, optimized, loaderror;
     uint epoch;
     bool loaded;
     cube *root;
@@ -468,7 +470,7 @@ struct worldchunkjob
           dirttexture(worlddirttexture), stonetexture(worldstonetexture),
           sandtexture(worldsandtexture), snowtexture(worldsnowtexture),
           woodtexture(worldwoodtexture), leaftexture(worldleaftexture),
-          families(0), loaderror(0), epoch(epoch), loaded(false), root(NULL)
+          families(0), optimized(0), loaderror(0), epoch(epoch), loaded(false), root(NULL)
     {
         filename[0] = '\0';
     }
@@ -481,7 +483,7 @@ static int activeworldchunk = -1;
 static int worldfirstchunkx = 0, worldfirstchunky = 0;
 static int lastplayerchunkx = INT_MIN, lastplayerchunky = INT_MIN, lastchunkdist = -1;
 static bool rebuildingworldchunks = false;
-static SDL_Thread *worldchunkthread = NULL;
+static vector<SDL_Thread *> worldchunkworkers;
 static SDL_mutex *worldchunkmutex = NULL;
 static SDL_cond *worldchunkcond = NULL;
 static bool stopworldchunkthread = false;
@@ -489,6 +491,8 @@ static uint worldchunkepoch = 1;
 static int lastworldchunkpublish = -1;
 
 VARP(asyncchunkloads, 1, 1, 4);
+VARP(chunkthreads, 0, 0, 16);
+VARP(chunkpublishbudget, 1, 2, 16);
 
 static cube *generateworldchunk(int chunkx, int chunky);
 static cube *loadworldchunkroot(const char *mname);
@@ -581,12 +585,11 @@ static ivec worldchunkorigin(const worldchunk &chunk, int z = 0)
                 (chunk.y - worldfirstchunky) * WORLD_CHUNK_SIZE, z);
 }
 
-static cube &lookupworldchunkcube(worldchunk &chunk, int z)
+static cube &lookupworldchunkcube(worldchunk &chunk, const ivec &pos, int size)
 {
-    ivec pos(0, 0, z);
     int scale = WORLD_CHUNK_SCALE - 1;
     cube *c = &chunk.root[octastep(pos.x, pos.y, pos.z, scale)];
-    while(!(WORLD_CHUNK_SIZE >> scale))
+    while(!(size >> scale))
     {
         if(!c->children) subdividecube(*c);
         --scale;
@@ -595,14 +598,35 @@ static cube &lookupworldchunkcube(worldchunk &chunk, int z)
     return *c;
 }
 
+static bool worldchunkmounted(const worldchunk &chunk)
+{
+    return chunk.mountedsections != 0;
+}
+
+static uint allworldchunksections()
+{
+    uint sections = 0;
+    loopi(WORLD_SECTION_LAYERS) sections |= 1U << i;
+    return sections;
+}
+
+static bool worldchunkfullymounted(const worldchunk &chunk)
+{
+    return chunk.mountedsections == allworldchunksections();
+}
+
 static void syncmountedworldchunk(worldchunk &chunk)
 {
-    if(!chunk.mounted || !chunk.root || !worldroot) return;
-    loopi(WORLD_CHUNK_SLICES)
+    if(!worldchunkmounted(chunk) || !chunk.root || !worldroot) return;
+    loopi(WORLD_SECTION_LAYERS) if(chunk.mountedsections & (1U << i))
     {
-        int z = i * WORLD_CHUNK_SIZE;
-        pasteworldcube(lookupcube(worldchunkorigin(chunk, z), WORLD_CHUNK_SIZE),
-                       lookupworldchunkcube(chunk, z));
+        loop(y, WORLD_CHUNK_SIZE / WORLD_SECTION_SIZE)
+        loop(x, WORLD_CHUNK_SIZE / WORLD_SECTION_SIZE)
+        {
+            ivec pos(x * WORLD_SECTION_SIZE, y * WORLD_SECTION_SIZE, i * WORLD_SECTION_SIZE);
+            pasteworldcube(lookupcube(ivec(worldchunkorigin(chunk)).add(pos), WORLD_SECTION_SIZE),
+                           lookupworldchunkcube(chunk, pos, WORLD_SECTION_SIZE));
+        }
     }
 }
 
@@ -612,27 +636,40 @@ static void syncmountedworldchunks()
     loopv(worldchunks) syncmountedworldchunk(worldchunks[i]);
 }
 
+static bool mountworldchunksection(worldchunk &chunk, int section)
+{
+    uint sectionbit = 1U << section;
+    if(chunk.mountedsections & sectionbit) return false;
+    loop(y, WORLD_CHUNK_SIZE / WORLD_SECTION_SIZE)
+    loop(x, WORLD_CHUNK_SIZE / WORLD_SECTION_SIZE)
+    {
+        ivec pos(x * WORLD_SECTION_SIZE, y * WORLD_SECTION_SIZE, section * WORLD_SECTION_SIZE);
+        moveworldcube(lookupworldchunkcube(chunk, pos, WORLD_SECTION_SIZE),
+                      lookupcube(ivec(worldchunkorigin(chunk)).add(pos), WORLD_SECTION_SIZE));
+    }
+    chunk.mountedsections |= sectionbit;
+    return true;
+}
+
 static void mountworldchunk(worldchunk &chunk)
 {
-    loopi(WORLD_CHUNK_SLICES)
-    {
-        int z = i * WORLD_CHUNK_SIZE;
-        moveworldcube(lookupworldchunkcube(chunk, z),
-                      lookupcube(worldchunkorigin(chunk, z), WORLD_CHUNK_SIZE));
-    }
-    chunk.mounted = true;
+    loopi(WORLD_SECTION_LAYERS) mountworldchunksection(chunk, i);
 }
 
 static void unmountworldchunk(worldchunk &chunk)
 {
-    loopi(WORLD_CHUNK_SLICES)
+    loopi(WORLD_SECTION_LAYERS) if(chunk.mountedsections & (1U << i))
     {
-        int z = i * WORLD_CHUNK_SIZE;
-        cube &c = lookupcube(worldchunkorigin(chunk, z), WORLD_CHUNK_SIZE);
-        detachworldcubegeometry(c);
-        moveworldcube(c, lookupworldchunkcube(chunk, z));
+        loop(y, WORLD_CHUNK_SIZE / WORLD_SECTION_SIZE)
+        loop(x, WORLD_CHUNK_SIZE / WORLD_SECTION_SIZE)
+        {
+            ivec pos(x * WORLD_SECTION_SIZE, y * WORLD_SECTION_SIZE, i * WORLD_SECTION_SIZE);
+            cube &c = lookupcube(ivec(worldchunkorigin(chunk)).add(pos), WORLD_SECTION_SIZE);
+            detachworldcubegeometry(c);
+            moveworldcube(c, lookupworldchunkcube(chunk, pos, WORLD_SECTION_SIZE));
+        }
     }
-    chunk.mounted = false;
+    chunk.mountedsections = 0;
 }
 
 static void invalidateworldchunk(const worldchunk &chunk)
@@ -640,6 +677,14 @@ static void invalidateworldchunk(const worldchunk &chunk)
     ivec bbmin = worldchunkorigin(chunk), bbmax = bbmin;
     bbmin.sub(1).max(0);
     bbmax.add(ivec(WORLD_CHUNK_SIZE, WORLD_CHUNK_SIZE, WORLD_MAP_SIZE)).add(1).min(worldsize);
+    changed(bbmin, bbmax, false);
+}
+
+static void invalidateworldchunksection(const worldchunk &chunk, int section)
+{
+    ivec bbmin = worldchunkorigin(chunk, section * WORLD_SECTION_SIZE), bbmax = bbmin;
+    bbmin.sub(1).max(0);
+    bbmax.add(ivec(WORLD_CHUNK_SIZE, WORLD_CHUNK_SIZE, WORLD_SECTION_SIZE)).add(1).min(worldsize);
     changed(bbmin, bbmax, false);
 }
 
@@ -659,6 +704,7 @@ static bool worldchunkinview(const worldchunk &chunk, int chunkx, int chunky)
 
 static int worldchunkloader(void *)
 {
+    SDL_SetThreadPriority(SDL_THREAD_PRIORITY_LOW);
     for(;;)
     {
         SDL_LockMutex(worldchunkmutex);
@@ -691,7 +737,7 @@ static int worldchunkloader(void *)
 
 static bool startworldchunkloader()
 {
-    if(worldchunkthread) return true;
+    if(!worldchunkworkers.empty()) return true;
     worldchunkmutex = SDL_CreateMutex();
     worldchunkcond = SDL_CreateCond();
     stopworldchunkthread = false;
@@ -703,8 +749,15 @@ static bool startworldchunkloader()
         worldchunkmutex = NULL;
         return false;
     }
-    worldchunkthread = SDL_CreateThread(worldchunkloader, "world chunk loader", NULL);
-    if(!worldchunkthread)
+
+    int workers = chunkthreads > 0 ? chunkthreads : numcpus;
+    loopi(workers)
+    {
+        SDL_Thread *worker = SDL_CreateThread(worldchunkloader, "world chunk loader", NULL);
+        if(!worker) break;
+        worldchunkworkers.add(worker);
+    }
+    if(worldchunkworkers.empty())
     {
         SDL_DestroyCond(worldchunkcond);
         SDL_DestroyMutex(worldchunkmutex);
@@ -712,19 +765,21 @@ static bool startworldchunkloader()
         worldchunkmutex = NULL;
         return false;
     }
+    conoutf(CON_DEBUG, "started %d low-priority world chunk workers (numcpus %d)",
+            worldchunkworkers.length(), numcpus);
     return true;
 }
 
 static void shutdownworldchunkloader()
 {
-    if(worldchunkthread)
+    if(!worldchunkworkers.empty())
     {
         SDL_LockMutex(worldchunkmutex);
         stopworldchunkthread = true;
         SDL_CondBroadcast(worldchunkcond);
         SDL_UnlockMutex(worldchunkmutex);
-        SDL_WaitThread(worldchunkthread, NULL);
-        worldchunkthread = NULL;
+        loopv(worldchunkworkers) SDL_WaitThread(worldchunkworkers[i], NULL);
+        worldchunkworkers.setsize(0);
     }
 
     loopv(worldchunkjobs) delete worldchunkjobs[i];
@@ -823,12 +878,11 @@ static int queueworldchunkview(int chunkx, int chunky)
     return queued;
 }
 
-static int processworldchunkresults(int chunkx, int chunky)
+static int processworldchunkresults()
 {
-    if(!worldchunkthread || lastworldchunkpublish == totalmillis) return 0;
-    lastworldchunkpublish = totalmillis;
+    if(worldchunkworkers.empty()) return 0;
 
-    int published = 0, mounted = 0, loaded = 0, generated = 0;
+    int published = 0, loaded = 0, generated = 0, optimized = 0;
     while(published < asyncchunkloads)
     {
         SDL_LockMutex(worldchunkmutex);
@@ -849,31 +903,92 @@ static int processworldchunkresults(int chunkx, int chunky)
         chunk.root = job->root;
         chunk.loading = false;
         allocnodes += job->families;
-        validatec(chunk.root, WORLD_CHUNK_ROOT_SIZE);
-        if(worldchunkinview(chunk, chunkx, chunky))
-        {
-            mountworldchunk(chunk);
-            invalidateworldchunk(chunk);
-            mounted++;
-        }
+        // Procedural chunks are valid by construction and have already been
+        // remipped by the worker. Avoid walking their entire cave octree again
+        // on the render thread; retain validation for untrusted disk data.
+        if(job->loaded) validatec(chunk.root, WORLD_CHUNK_ROOT_SIZE);
         if(!job->loaded && job->filename[0])
             conoutf(CON_WARN, "asynchronous load of chunk %d_%d failed at stage %d; regenerated it",
                     job->x, job->y, job->loaderror);
         if(job->loaded) loaded++; else generated++;
+        optimized += job->optimized;
         published++;
         delete job;
     }
 
-    if(mounted) commitchanges();
     if(published)
-        conoutf(CON_DEBUG, "published %d chunks asynchronously (%d loaded, %d generated, %d mounted)",
-                published, loaded, generated, mounted);
+        conoutf(CON_DEBUG, "prepared %d chunks asynchronously (%d loaded, %d generated, %d octree families remipped)",
+                published, loaded, generated, optimized);
     return published;
+}
+
+static int nextworldchunksection(const worldchunk &chunk, int center)
+{
+    loopi(WORLD_SECTION_LAYERS)
+    {
+        int below = center - i;
+        if(below >= 0 && !(chunk.mountedsections & (1U << below))) return below;
+        int above = center + i;
+        if(i && above < WORLD_SECTION_LAYERS && !(chunk.mountedsections & (1U << above))) return above;
+    }
+    return -1;
+}
+
+static bool findworldchunksection(int chunkx, int chunky, int &chunkindex, int &section)
+{
+    int center = clamp(player ? int(player->o.z) / WORLD_SECTION_SIZE
+                              : WORLD_GROUND_HEIGHT / WORLD_SECTION_SIZE,
+                       0, WORLD_SECTION_LAYERS - 1),
+        bestscore = INT_MAX;
+    chunkindex = section = -1;
+    loopv(worldchunks)
+    {
+        const worldchunk &chunk = worldchunks[i];
+        if(chunk.loading || !chunk.root || worldchunkfullymounted(chunk) ||
+           !worldchunkinview(chunk, chunkx, chunky))
+            continue;
+        int candidate = nextworldchunksection(chunk, center);
+        if(candidate < 0) continue;
+        int dx = abs(chunk.x - chunkx), dy = abs(chunk.y - chunky),
+            score = abs(candidate - center) * 1024 + max(dx, dy);
+        if(score >= bestscore) continue;
+        bestscore = score;
+        chunkindex = i;
+        section = candidate;
+    }
+    return chunkindex >= 0;
+}
+
+static int processworldchunkmounts(int chunkx, int chunky, Uint32 start)
+{
+    int mounted = 0;
+    do
+    {
+        int chunkindex, section;
+        if(!findworldchunksection(chunkx, chunky, chunkindex, section)) break;
+        worldchunk &chunk = worldchunks[chunkindex];
+        if(!mountworldchunksection(chunk, section)) break;
+        invalidateworldchunksection(chunk, section);
+        commitchanges();
+        mounted++;
+    }
+    while(mounted < WORLD_MAX_SECTION_PUBLISHES && SDL_GetTicks() - start < uint(chunkpublishbudget));
+    return mounted;
+}
+
+static void processworldchunkupdates(int chunkx, int chunky)
+{
+    if(lastworldchunkpublish == totalmillis) return;
+    lastworldchunkpublish = totalmillis;
+    Uint32 start = SDL_GetTicks();
+    int prepared = processworldchunkresults();
+    if(!prepared || SDL_GetTicks() - start < uint(chunkpublishbudget))
+        processworldchunkmounts(chunkx, chunky, start);
 }
 
 static void rebaseworldchunks(int chunkx, int chunky)
 {
-    loopv(worldchunks) if(worldchunks[i].mounted) unmountworldchunk(worldchunks[i]);
+    loopv(worldchunks) if(worldchunkmounted(worldchunks[i])) unmountworldchunk(worldchunks[i]);
 
     int newfirstx = chunkx - WORLD_RUNTIME_CENTER,
         newfirsty = chunky - WORLD_RUNTIME_CENTER,
@@ -901,12 +1016,12 @@ static void rebuildworldchunks(int chunkx, int chunky, bool load, bool updategeo
     {
         worldchunk &chunk = worldchunks[i];
         bool shouldmount = worldchunkinview(chunk, chunkx, chunky);
-        if(chunk.mounted && !shouldmount) leaving.add(i);
-        else if(!chunk.mounted && !chunk.loading && chunk.root && shouldmount) entering.add(i);
+        if(worldchunkmounted(chunk) && !shouldmount) leaving.add(i);
+        else if(!worldchunkfullymounted(chunk) && !chunk.loading && chunk.root && shouldmount) entering.add(i);
     }
 
     loopv(leaving) unmountworldchunk(worldchunks[leaving[i]]);
-    loopv(entering) mountworldchunk(worldchunks[entering[i]]);
+    if(load) loopv(entering) mountworldchunk(worldchunks[entering[i]]);
 
     lastplayerchunkx = chunkx;
     lastplayerchunky = chunky;
@@ -915,10 +1030,9 @@ static void rebuildworldchunks(int chunkx, int chunky, bool load, bool updategeo
     if(updategeometry)
     {
         if(load) allchanged(true);
-        else if(!leaving.empty() || !entering.empty())
+        else if(!leaving.empty())
         {
             loopv(leaving) invalidateworldchunk(worldchunks[leaving[i]]);
-            loopv(entering) invalidateworldchunk(worldchunks[entering[i]]);
             commitchanges();
         }
     }
@@ -932,7 +1046,7 @@ static void rebuildworldchunks(int chunkx, int chunky, bool load, bool updategeo
     }
 
     int mounted = 0;
-    loopv(worldchunks) if(worldchunks[i].mounted) mounted++;
+    loopv(worldchunks) if(worldchunkmounted(worldchunks[i])) mounted++;
     rebuildingworldchunks = false;
     conoutf(CON_DEBUG, "chunk view %d_%d: +%d -%d, %d queued, %d mounted (maxchunkdist %d)",
             chunkx, chunky, entering.length(), leaving.length(), queued, mounted, maxchunkdist);
@@ -950,7 +1064,7 @@ void updateworldchunks(bool force)
     }
     int chunkx = worldfirstchunkx + localchunkx,
         chunky = worldfirstchunky + localchunky;
-    processworldchunkresults(chunkx, chunky);
+    if(!force) processworldchunkupdates(chunkx, chunky);
     if(!force && chunkx == lastplayerchunkx && chunky == lastplayerchunky && maxchunkdist == lastchunkdist)
         return;
 
@@ -974,7 +1088,7 @@ struct worldgencontext
     int seed, grasstexture, grasssidetexture, dirttexture, stonetexture, sandtexture, snowtexture,
         woodtexture, leaftexture;
     bool prepared;
-    int families;
+    int families, optimized;
 
     worldgencontext(int seed, int grasstexture, int grasssidetexture, int dirttexture, int stonetexture,
                     int sandtexture, int snowtexture, int woodtexture, int leaftexture,
@@ -982,7 +1096,7 @@ struct worldgencontext
         : terrain(terrain), seed(seed), grasstexture(grasstexture), grasssidetexture(grasssidetexture),
           dirttexture(dirttexture), stonetexture(stonetexture), sandtexture(sandtexture),
           snowtexture(snowtexture), woodtexture(woodtexture), leaftexture(leaftexture),
-          prepared(prepared), families(0)
+          prepared(prepared), families(0), optimized(0)
     {
         setupworldwarp(continentwarp, seed ^ 0x6C8E9CF5, terrain.continentwarpfreq, terrain.continentwarpamp);
         setupworldwarp(featurewarp, seed ^ 0x35A4F2D1, terrain.featurewarpfreq, terrain.featurewarpamp);
@@ -1015,6 +1129,53 @@ static void freepreparedworldchunk(cube *root)
     if(!root) return;
     loopi(8) if(root[i].children) freepreparedworldchunk(root[i].children);
     delete[] root;
+}
+
+static bool sameworldchunkleaf(const cube &a, const cube &b)
+{
+    bool empty = isempty(a), solid = isentirelysolid(a);
+    if((!empty && !solid) || empty != isempty(b) || solid != isentirelysolid(b))
+        return false;
+    if(a.children || b.children || a.ext || b.ext || a.merged || b.merged ||
+       a.material != b.material ||
+       a.faces[0] != b.faces[0] || a.faces[1] != b.faces[1] || a.faces[2] != b.faces[2])
+        return false;
+
+    // Textures on empty/material-only cubes are not rendered. Cave carving
+    // inherits the old solid texture, so comparing it would prevent otherwise
+    // identical air siblings from collapsing across terrain strata.
+    if(isempty(a) && isempty(b)) return true;
+    loopi(6) if(a.texture[i] != b.texture[i]) return false;
+    return true;
+}
+
+static int remipworldchunk(cube &c, bool prepared, int &families)
+{
+    if(!c.children) return 0;
+
+    int merged = 0;
+    cube *children = c.children;
+    loopi(8) merged += remipworldchunk(children[i], prepared, families);
+
+    loopi(8) if(!sameworldchunkleaf(children[0], children[i])) return merged;
+
+    cube mip = children[0];
+    mip.children = NULL;
+    mip.ext = NULL;
+    mip.visible = 0;
+    mip.merged = 0;
+    delete[] children;
+    if(prepared) families--;
+    else allocnodes--;
+    c = mip;
+    return merged + 1;
+}
+
+static int remipworldchunk(cube *root, bool prepared, int &families)
+{
+    int merged = 0;
+    loopi(8) merged += remipworldchunk(root[i], prepared, families);
+    return merged;
 }
 
 static void setworldcubetexture(cube &c, int texture, int toptexture = -1)
@@ -1733,6 +1894,7 @@ static cube *generateworldchunk(int chunkx, int chunky, worldgencontext &ctx)
     loopi(8) generateworldcube(ctx, root[i], ivec(i, ivec(0, 0, 0), rootsize), rootsize);
     placeworldcaves(ctx, root, chunkx, chunky);
     placeworldtrees(ctx, root, chunkx, chunky);
+    ctx.optimized = remipworldchunk(root, ctx.prepared, ctx.families);
     return root;
 }
 
@@ -2258,7 +2420,7 @@ static cube *loadpreparedchildren(stream *f, int &families, bool &failed, int &l
     return c;
 }
 
-static cube *loadpreparedworldchunk(const char *filename, int &families, int &loaderror)
+static cube *loadpreparedworldchunk(const char *filename, int &families, int &optimized, int &loaderror)
 {
     gzFile gz = gzopen(filename, "rb");
     if(!gz) { loaderror = 1; return NULL; }
@@ -2343,6 +2505,7 @@ static cube *loadpreparedworldchunk(const char *filename, int &families, int &lo
         families = 0;
         return NULL;
     }
+    optimized = remipworldchunk(root, true, families);
     return root;
 }
 
@@ -2350,7 +2513,7 @@ static cube *prepareworldchunk(worldchunkjob &job)
 {
     if(job.filename[0])
     {
-        cube *root = loadpreparedworldchunk(job.filename, job.families, job.loaderror);
+        cube *root = loadpreparedworldchunk(job.filename, job.families, job.optimized, job.loaderror);
         if(root)
         {
             job.loaded = true;
@@ -2363,6 +2526,7 @@ static cube *prepareworldchunk(worldchunkjob &job)
                         job.woodtexture, job.leaftexture, true, job.terrain);
     cube *root = generateworldchunk(job.x, job.y, ctx);
     job.families = ctx.families;
+    job.optimized = ctx.optimized;
     job.loaded = false;
     return root;
 }
@@ -2809,7 +2973,7 @@ static void createworld(const char *requestedname)
     if(player) entinmap(player);
 
     int mounted = 0;
-    loopv(worldchunks) if(worldchunks[i].mounted) mounted++;
+    loopv(worldchunks) if(worldchunkmounted(worldchunks[i])) mounted++;
     conoutf("generated infinite world %s with %d initial chunks; %d chunks queued asynchronously",
             worldfolder, mounted, worldchunks.length() - mounted);
     conoutf("new chunks are prepared on demand; use saveworld to write ready chunks");
@@ -2866,7 +3030,7 @@ void saveworld()
     for(int i = worldchunks.length() - 1; i >= 0; --i)
     {
         worldchunk &chunk = worldchunks[i];
-        if(chunk.mounted || chunk.loading || !chunk.root ||
+        if(worldchunkmounted(chunk) || chunk.loading || !chunk.root ||
            worldchunkinview(chunk, lastplayerchunkx, lastplayerchunky))
             continue;
         freeocta(chunk.root);
