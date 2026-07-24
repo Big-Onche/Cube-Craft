@@ -451,10 +451,11 @@ struct worldchunk
     int x, y;
     cube *root;
     uint mountedsections;
-    bool lod, loading, saved, dirty;
+    bool lod, loading, generating, saved, dirty;
 
     worldchunk(int x, int y, cube *root, bool lod = false, bool loading = false, bool saved = false)
-        : x(x), y(y), root(root), mountedsections(0), lod(lod), loading(loading), saved(saved), dirty(false) {}
+        : x(x), y(y), root(root), mountedsections(0), lod(lod), loading(loading), generating(false),
+          saved(saved), dirty(false) {}
 };
 
 struct worldchunkjob
@@ -514,6 +515,82 @@ int getworldsectionsize()
     return worldchunks.empty() ? 0 : WORLD_SECTION_SIZE;
 }
 
+struct worlddebugstats
+{
+    int chunkx, chunky;
+    double absolutex, absolutey, absolutez;
+    int renderedfull, renderedlod;
+    int loadingqueue, generationqueue;
+};
+
+static void getworlddebugstats(const vec &position, worlddebugstats &stats)
+{
+    stats.renderedfull = stats.renderedlod = 0;
+    stats.loadingqueue = stats.generationqueue = 0;
+
+    if(!worldchunks.empty())
+    {
+        const int localchunkx = int(floor(position.x / WORLD_CHUNK_SIZE)),
+                  localchunky = int(floor(position.y / WORLD_CHUNK_SIZE));
+        stats.chunkx = worldfirstchunkx + localchunkx;
+        stats.chunky = worldfirstchunky + localchunky;
+        stats.absolutex = double(worldfirstchunkx) * WORLD_CHUNK_SIZE + position.x;
+        stats.absolutey = double(worldfirstchunky) * WORLD_CHUNK_SIZE + position.y;
+
+        loopv(worldchunks)
+        {
+            const worldchunk &chunk = worldchunks[i];
+            if(chunk.mountedsections)
+            {
+                if(chunk.lod) stats.renderedlod++;
+                else stats.renderedfull++;
+            }
+            if(chunk.loading)
+            {
+                if(chunk.generating) stats.generationqueue++;
+                else stats.loadingqueue++;
+            }
+        }
+    }
+    else
+    {
+        stats.chunkx = int(floor(position.x / WORLD_CHUNK_SIZE));
+        stats.chunky = int(floor(position.y / WORLD_CHUNK_SIZE));
+        stats.absolutex = position.x;
+        stats.absolutey = position.y;
+    }
+    stats.absolutez = position.z;
+}
+
+static worlddebugstats worlddebugcache;
+static int worlddebugcachemillis = -1;
+
+static const worlddebugstats &currentworlddebugstats()
+{
+    if(worlddebugcachemillis != totalmillis)
+    {
+        getworlddebugstats(camera1->o, worlddebugcache);
+        worlddebugcachemillis = totalmillis;
+    }
+    return worlddebugcache;
+}
+
+static void debugcoordinateresult(double coordinate)
+{
+    defformatstring(value, "%.2f", coordinate);
+    result(value);
+}
+
+ICOMMAND(getdebugcamx, "", (), debugcoordinateresult(currentworlddebugstats().absolutex));
+ICOMMAND(getdebugcamy, "", (), debugcoordinateresult(currentworlddebugstats().absolutey));
+ICOMMAND(getdebugcamz, "", (), debugcoordinateresult(currentworlddebugstats().absolutez));
+ICOMMAND(getdebugchunkx, "", (), intret(currentworlddebugstats().chunkx));
+ICOMMAND(getdebugchunky, "", (), intret(currentworlddebugstats().chunky));
+ICOMMAND(getdebugrenderedfull, "", (), intret(currentworlddebugstats().renderedfull));
+ICOMMAND(getdebugrenderedlod, "", (), intret(currentworlddebugstats().renderedlod));
+ICOMMAND(getdebugloadingqueue, "", (), intret(currentworlddebugstats().loadingqueue));
+ICOMMAND(getdebuggenerationqueue, "", (), intret(currentworlddebugstats().generationqueue));
+
 void clearworldchunks()
 {
     shutdownworldchunkloader();
@@ -527,6 +604,7 @@ void clearworldchunks()
     lastchunkdist = lastlodchunkdist = -1;
     rebuildingworldchunks = false;
     lastworldchunkpublish = -1;
+    worlddebugcachemillis = -1;
     ++worldchunkepoch;
 }
 
@@ -921,7 +999,8 @@ static int queueworldchunk(int x, int y, bool lod)
     if(found && fileexists(found, "r"))
         copystring(job->filename, found);
 
-    worldchunks.add(worldchunk(x, y, NULL, lod, true));
+    worldchunk &chunk = worldchunks.add(worldchunk(x, y, NULL, lod, true));
+    chunk.generating = !job->filename[0];
     SDL_LockMutex(worldchunkmutex);
     worldchunkjobs.add(job);
     SDL_CondSignal(worldchunkcond);

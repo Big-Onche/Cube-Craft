@@ -99,7 +99,10 @@ namespace game
     const char *defaultconfig() { return "config/default.cfg"; }
     const char *autoexec() { return "config/autoexec.cfg"; }
     const char *savedservers() { return "config/servers.cfg"; }
-    void loadconfigs() {}
+    void loadconfigs()
+    {
+        execute("if (|| (=s (getbind F2) []) (=s (getbind F2) [togglevar debughud])) [bind F2 [toggleui debughud]]");
+    }
 
     void initclient()
     {
