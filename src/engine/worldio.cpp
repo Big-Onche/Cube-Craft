@@ -146,6 +146,7 @@ enum
     WORLD_BLOCK_SIZE = 1 << WORLD_GRID_POWER,
     WORLD_LOD_GRID_POWER = 6,
     WORLD_LOD_BLOCK_SIZE = 1 << WORLD_LOD_GRID_POWER,
+    WORLD_LOD_VERSION = 2,
     WORLD_CHUNK_BLOCKS = 64,
     WORLD_CHUNK_SIZE = WORLD_BLOCK_SIZE * WORLD_CHUNK_BLOCKS,
     WORLD_SECTION_BLOCKS = 16,
@@ -742,6 +743,25 @@ static bool worldchunkcoordinateinview(const worldchunk &chunk, int chunkx, int 
            dy <= max(maxlodchunkdist, maxchunkdist);
 }
 
+static bool worldlodchunkcurrent(int x, int y)
+{
+    defformatstring(name, "media/map/%s/%d_%d_lod.cfg", worldfolder, x, y);
+    stream *f = openfile(path(name), "r");
+    if(!f) return false;
+
+    bool current = false;
+    string line;
+    while(f->getline(line, sizeof(line)))
+    {
+        int version;
+        if(sscanf(line, "// lodversion %d", &version) != 1) continue;
+        current = version == WORLD_LOD_VERSION;
+        break;
+    }
+    delete f;
+    return current;
+}
+
 static int worldchunkloader(void *)
 {
     SDL_SetThreadPriority(SDL_THREAD_PRIORITY_LOW);
@@ -847,7 +867,7 @@ static int acquireworldchunksync(int x, int y, bool lod, int &generated)
     // loadworldchunkroot() resolves the configured home and package paths.
     // A direct fileexists() on the relative media path misses saved chunks
     // when the game was launched with -u, causing them to be regenerated.
-    cube *root = loadworldchunkroot(chunkname);
+    cube *root = !lod || worldlodchunkcurrent(x, y) ? loadworldchunkroot(chunkname) : NULL;
     bool loaded = root != NULL;
     if(!root)
     {
@@ -896,8 +916,10 @@ static int queueworldchunk(int x, int y, bool lod)
     defformatstring(chunkfile, lod ? "media/map/%s/%d_%d_lod.ogz" : "media/map/%s/%d_%d.ogz",
                     worldfolder, x, y);
     path(chunkfile);
-    const char *found = findfile(chunkfile, "rb");
-    if(found && fileexists(found, "r")) copystring(job->filename, found);
+    bool loadcached = !lod || worldlodchunkcurrent(x, y);
+    const char *found = loadcached ? findfile(chunkfile, "rb") : NULL;
+    if(found && fileexists(found, "r"))
+        copystring(job->filename, found);
 
     worldchunks.add(worldchunk(x, y, NULL, lod, true));
     SDL_LockMutex(worldchunkmutex);
@@ -1704,9 +1726,22 @@ static int worldrepresentativecubetype(const worldgencontext &ctx, const ivec &o
 {
     const int x = clamp(o.x + size / 2, 0, WORLD_CHUNK_SIZE - 1),
               y = clamp(o.y + size / 2, 0, WORLD_CHUNK_SIZE - 1),
-              z = clamp(o.z + size / 2, 0, WORLD_MAP_SIZE - 1);
-    return worldcolumncubetype(ctx, z, 1, worldterrainheight(ctx, x, y),
-                               worldterrainbiome(ctx, x, y), worldterraincoast(ctx, x, y),
+              height = worldterrainheight(ctx, x, y),
+              biome = worldterrainbiome(ctx, x, y),
+              surface = WORLD_GROUND_HEIGHT + height,
+              watertop = WORLD_GROUND_HEIGHT + ctx.terrain.sealevel * WORLD_BLOCK_SIZE,
+              visibletop = max(surface, watertop);
+    int z = clamp(o.z + size / 2, 0, WORLD_MAP_SIZE - 1);
+
+    // A coarse cube intersecting the visible column top represents its
+    // surface, not the greater volume underneath it. Sample immediately below
+    // that top so grass/sand/snow/stone wins over dirt, and water wins for a
+    // submerged terrain column. Cubes wholly underground retain the centre
+    // sample used for their dominant interior material.
+    if(visibletop > o.z && visibletop <= o.z + size)
+        z = clamp(visibletop - 1, 0, WORLD_MAP_SIZE - 1);
+
+    return worldcolumncubetype(ctx, z, 1, height, biome, worldterraincoast(ctx, x, y),
                                worldterrainrock(ctx, x, y));
 }
 
@@ -3102,6 +3137,7 @@ static bool saveworldchunkconfig(const worldchunk &chunk)
         conoutf(CON_WARN, "could not write chunk configuration to %s", chunkcfg);
         return false;
     }
+    if(chunk.lod) f->printf("// lodversion %d\n", WORLD_LOD_VERSION);
     f->printf("exec \"media/map/%s/world.cfg\"\n", worldfolder);
     delete f;
     return true;
