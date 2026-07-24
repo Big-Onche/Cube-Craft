@@ -170,7 +170,7 @@ extern void screenquadoffset(float x, float y, float w, float h, float x2, float
 extern void hudquad(float x, float y, float w, float h, float tx = 0, float ty = 0, float tw = 1, float th = 1);
 extern void debugquad(float x, float y, float w, float h, float tx = 0, float ty = 0, float tw = 1, float th = 1);
 extern void recomputecamera();
-extern float calcfrustumboundsphere(float nearplane, float farplane,  const vec &pos, const vec &view, vec &center);
+extern float calcfrustumboundsphere(float nearplane, float farplane, const vec &pos, const vec &view, vec &center, vec *centeroffset = NULL);
 extern void setfogcolor(const vec &v);
 extern void zerofogcolor();
 extern void resetfogcolor();

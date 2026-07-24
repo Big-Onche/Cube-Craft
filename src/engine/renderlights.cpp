@@ -2058,7 +2058,7 @@ static shadowmapinfo *addshadowmap(ushort x, ushort y, int size, int &idx, int l
 
 #define CSM_MAXSPLITS 8
 
-VARF(csmmaxsize, 256, 768, 2048, clearshadowcache());
+VARF(csmmaxsize, 256, 1024, 2048, clearshadowcache());
 VARF(csmsplits, 1, 3, CSM_MAXSPLITS, { cleardeferredlightshaders(); clearshadowcache(); });
 FVAR(csmsplitweight, 0.20f, 0.75f, 0.95f);
 VARF(csmshadowmap, 0, 1, 1, { cleardeferredlightshaders(); clearshadowcache(); });
@@ -2108,12 +2108,12 @@ VAR(csmfarplane, 64, 1024, 16384);
 FVAR(csmpradiustweak, 1e-3f, 1, 1e3f);
 FVAR(csmdepthrange, 0, 1024, 1e6f);
 FVAR(csmdepthmargin, 0, 0.1f, 1e3f);
-FVAR(csmpolyfactor, -1e3f, 2, 1e3f);
+FVAR(csmpolyfactor, -1e3f, 1, 1e3f);
 FVAR(csmpolyoffset, -1e4f, 0, 1e4f);
-FVAR(csmbias, -1e6f, 1e-4f, 1e6f);
-FVAR(csmpolyfactor2, -1e3f, 3, 1e3f);
+FVAR(csmbias, -1e6f, 2e-5f, 1e6f);
+FVAR(csmpolyfactor2, -1e3f, 1.5f, 1e3f);
 FVAR(csmpolyoffset2, -1e4f, 0, 1e4f);
-FVAR(csmbias2, -1e16f, 2e-4f, 1e6f);
+FVAR(csmbias2, -1e16f, 4e-5f, 1e6f);
 VAR(csmcull, 0, 1, 1);
 
 void cascadedshadowmap::updatesplitdist()
@@ -2164,14 +2164,14 @@ void cascadedshadowmap::getprojmatrix()
         if(split.idx < 0) continue;
         const shadowmapinfo &sm = shadowmaps[split.idx];
 
-        vec c;
-        float radius = calcfrustumboundsphere(split.nearplane, split.farplane, camera1->o, camdir, c);
+        vec c, centeroffset;
+        float radius = calcfrustumboundsphere(split.nearplane, split.farplane, camera1->o, camdir, c, &centeroffset);
 
         // compute the projected bounding box of the sphere
         int border = smfilter > 2 ? smborder2 : smborder;
         const float pradius = ceil(radius * csmpradiustweak) + smalign, step = (2*pradius) / (sm.size - 2*border);
-        const double tcx = double(model.a.x)*c.x + double(model.b.x)*c.y + double(model.c.x)*c.z,
-                     tcy = double(model.a.y)*c.x + double(model.b.y)*c.y + double(model.c.y)*c.z,
+        const double tcx = modeloriginx + double(model.a.x)*centeroffset.x + double(model.b.x)*centeroffset.y + double(model.c.x)*centeroffset.z,
+                     tcy = modeloriginy + double(model.a.y)*centeroffset.x + double(model.b.y)*centeroffset.y + double(model.c.y)*centeroffset.z,
                      alignstep = double(step)*(1+smalign),
                      offsetx = floor((tcx - pradius)/alignstep)*(1+smalign),
                      offsety = floor((tcy - pradius)/alignstep)*(1+smalign);
@@ -5119,6 +5119,7 @@ void preparegbuffer(bool depthclear)
     invscreenmatrix.settranslation(-1.0f, -1.0f, -1.0f);
     invscreenmatrix.setscale(2.0f/vieww, 2.0f/viewh, 2.0f);
     eyematrix.muld(invprojmatrix, invscreenmatrix);
+    matrix4 shadowworldmatrix;
     if(drawtex == DRAWTEX_MINIMAP)
     {
         linearworldmatrix.muld(invcamprojmatrix, invscreenmatrix);
@@ -5129,6 +5130,11 @@ void preparegbuffer(bool depthclear)
         linearworldmatrix.d.z = invcammatrix.d.z;
         if(gdepthformat) worldmatrix = linearworldmatrix;
 
+        matrix4 shadowview;
+        shadowview.identity();
+        shadowview.translate(vec(camera1->o).neg());
+        shadowworldmatrix.muld(shadowview, worldmatrix);
+
         GLOBALPARAMF(radialfogscale, 0, 0, 0, 0);
     }
     else
@@ -5138,6 +5144,16 @@ void preparegbuffer(bool depthclear)
         linearworldmatrix.muld(invcammatrix, depthmatrix);
         if(gdepthformat) worldmatrix = linearworldmatrix;
         else worldmatrix.muld(invcamprojmatrix, invscreenmatrix);
+
+        matrix4 invviewrotation = invcammatrix;
+        invviewrotation.settranslation(0, 0, 0);
+        if(gdepthformat) shadowworldmatrix.muld(invviewrotation, depthmatrix);
+        else
+        {
+            matrix4 shadowinvproj;
+            shadowinvproj.muld(invviewrotation, invprojmatrix);
+            shadowworldmatrix.muld(shadowinvproj, invscreenmatrix);
+        }
 
         GLOBALPARAMF(radialfogscale, xscale/zscale, yscale/zscale, xoffset/zscale, yoffset/zscale);
     }
@@ -5154,13 +5170,8 @@ void preparegbuffer(bool depthclear)
     GLOBALPARAMF(gdepthunpackparams, -farplane, -farplane/255.0f, -farplane/(255.0f*255.0f));
     GLOBALPARAM(worldmatrix, worldmatrix);
 
-    matrix4 shadowview;
-    shadowview.identity();
-    shadowview.translate(vec(camera1->o).neg());
-    matrix4 shadowworldmatrix;
     // Shadow lookups only need camera-relative positions. Reconstructing them
-    // directly avoids first rounding a large absolute world position.
-    shadowworldmatrix.muld(shadowview, worldmatrix);
+    // directly avoids ever constructing a large absolute world position.
     GLOBALPARAM(shadowworldmatrix, shadowworldmatrix);
 
     GLOBALPARAMF(ldrscale, ldrscale);
