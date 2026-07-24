@@ -127,7 +127,13 @@ static inline void addvisibleva(vtxarray *va)
     float dist = vadist(va, camera1->o);
     va->distance = int(dist); /*cv.dist(camera1->o) - va->size*SQRT3/2*/
 
-    int hash = clamp(int(dist*VASORTSIZE/worldsize), 0, VASORTSIZE-1);
+    // Streaming worlds use a large, fixed runtime octree that can be many
+    // times wider than the actual view distance. Binning against worldsize
+    // collapses nearly every visible VA into the first bucket and makes this
+    // insertion sort approach O(n^2) in open views. Spread the work across
+    // the buckets using the distance that can actually be rendered.
+    float sortdist = max(min(float(worldsize), vfcDfog), 1.0f);
+    int hash = clamp(int(dist*VASORTSIZE/sortdist), 0, VASORTSIZE-1);
     vtxarray **prev = &vasort[hash], *cur = vasort[hash];
 
     while(cur && va->distance >= cur->distance)
@@ -384,7 +390,9 @@ void clearqueries()
 
 VARF(oqany, 0, 0, 2, clearqueries());
 VAR(oqfrags, 0, 8, 64);
-VAR(oqwait, 0, 1, 1);
+// Query results are an optimization, never a reason to stall the render
+// thread. If a result is not ready, render the object for this frame.
+VAR(oqwait, 0, 0, 1);
 
 static inline GLenum querytarget()
 {
@@ -1888,7 +1896,7 @@ void rendergeom()
                     va->occluded = OCCLUDE_PARENT;
                     continue;
                 }
-                va->occluded = va->query && va->query->owner == va && checkquery(va->query) ? min(va->occluded+1, int(OCCLUDE_BB)) : OCCLUDE_NOTHING;
+                va->occluded = va->query && va->query->owner == va && checkquery(va->query, true) ? min(va->occluded+1, int(OCCLUDE_BB)) : OCCLUDE_NOTHING;
                 va->query = newquery(va);
                 if(!va->query || !va->occluded)
                     va->occluded = pvsoccluded(va->geommin, va->geommax) ? OCCLUDE_GEOM : OCCLUDE_NOTHING;
@@ -1959,7 +1967,7 @@ void rendergeom()
         if(geombatches.length()) { renderbatches(cur, RENDERPASS_GBUFFER); glFlush(); }
         for(vtxarray *va = visibleva; va; va = va->next) if(va->texs && va->occluded >= OCCLUDE_GEOM)
         {
-            if((va->parent && va->parent->occluded >= OCCLUDE_BB) || (va->query && checkquery(va->query)))
+            if((va->parent && va->parent->occluded >= OCCLUDE_BB) || (va->query && checkquery(va->query, true)))
             {
                 va->occluded = OCCLUDE_BB;
                 continue;
