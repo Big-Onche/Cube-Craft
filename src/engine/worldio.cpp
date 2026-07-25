@@ -472,11 +472,11 @@ VARP(chunkthreads, 0, 0, 16);
 VARP(chunkcachedist, 0, 0, 0);
 VARP(chunkpendinglimit, 4, 8, 8);
 VARP(chunklookahead, 0, 2, 8);
-VARP(chunkpublishbudget, 4, 8, 33);
-VARP(chunkcleanupbudget, 1, 8, 33);
+VARP(chunkpublishbudget, 4, 6, 33);
+VARP(chunkcleanupbudget, 1, 6, 33);
 VARP(chunksectionbatch, 1, 1, WORLD_MAX_SECTION_BATCH);
-VARP(chunkvastagelimit, 1, 6, 16);
-VARP(chunksurfaceloaddepth, 0, 4, WORLD_SECTION_LAYERS - 1); // depth in 16-block sections
+VARP(chunkvastagelimit, 1, 4, 16);
+VARP(chunksurfaceloaddepth, 0, 3, WORLD_SECTION_LAYERS - 1); // depth in 16-block sections
 
 static cube *generateworldchunk(int chunkx, int chunky);
 static cube *loadworldchunkroot(const char *mname, int expectedx, int expectedy);
