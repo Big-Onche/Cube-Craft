@@ -90,7 +90,7 @@ namespace game
         loopv(args) conoutf(CON_ERROR, "unknown command-line option: %s", args[i]);
     }
 
-    const char *gameident() { return "HoverEngine"; }
+    const char *gameident() { return "CubeCraft"; }
 
 #ifndef STANDALONE
     const char *gameconfig() { return "config/game.cfg"; }
