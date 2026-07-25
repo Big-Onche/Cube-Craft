@@ -94,7 +94,7 @@ enum
     WORLD_MAX_PREPARED_CHUNKS = 8,
     WORLD_MAX_COLUMN_CHANGES = 64,
     WORLD_MAX_SECTION_BATCH = 16,
-    WORLD_MAX_SECTION_REGIONS = WORLD_MAX_SECTION_BATCH * 7
+    WORLD_MAX_VA_BATCH = 16
 };
 
 VARP(maxchunkdist, 2, 3, WORLD_MAX_CHUNK_DIST);
@@ -438,7 +438,10 @@ static int worldchunkaheadx = 0, worldchunkaheady = 0;
 static double lastworldchunkposx = 0, lastworldchunkposy = 0;
 static float worldchunkvelocityx = 0, worldchunkvelocityy = 0;
 static int lastworldchunkmotion = -1;
-static float worldchunkcolumnmillis = 6.0f;
+static vector<int> worldchunkvaupdates;
+static hashset<int> worldchunkvaupdateset(1<<14);
+static int worldchunkvaupdatecursor = 0;
+static float worldchunkvasectionmillis = 2.0f;
 
 VARP(asyncchunkloads, 2, 4, 4);
 VARP(chunkthreads, 0, 0, 16);
@@ -448,6 +451,8 @@ VARP(chunklookahead, 0, 2, 8);
 VARP(chunkpublishbudget, 4, 6, 33);
 VARP(chunkcleanupbudget, 1, 6, 33);
 VARP(chunksectionbatch, 1, 1, WORLD_MAX_SECTION_BATCH);
+VARP(chunkvabudget, 1, 6, 16);
+VARP(chunkvabatch, 1, 2, WORLD_MAX_VA_BATCH);
 
 static cube *generateworldchunk(int chunkx, int chunky);
 static cube *loadworldchunkroot(const char *mname);
@@ -544,6 +549,9 @@ void clearworldchunks()
 {
     ZoneScopedN("Chunks/Clear all chunks");
     shutdownworldchunkloader();
+    worldchunkvaupdates.setsize(0);
+    worldchunkvaupdateset.clear();
+    worldchunkvaupdatecursor = 0;
     loopv(worldchunks) if(worldchunks[i].root && worldchunks[i].root != worldroot)
     {
         ZoneScopedN("Chunks/Free chunk during clear");
@@ -561,7 +569,7 @@ void clearworldchunks()
     lastworldchunkmotion = -1;
     worldchunkvelocityx = worldchunkvelocityy = 0;
     worldchunkfocusx = worldchunkfocusy = worldchunkaheadx = worldchunkaheady = 0;
-    worldchunkcolumnmillis = max(float(max(chunkpublishbudget, chunkcleanupbudget)), 0.25f);
+    worldchunkvasectionmillis = 2.0f;
     worlddebugcachemillis = -1;
     ++worldchunkepoch;
 }
@@ -793,30 +801,37 @@ static int unmountworldchunkcolumnbatch(worldchunk &chunk, int tile, int *sectio
     return unmounted;
 }
 
-static void addworldchunksectionregion(const ivec &bbmin, ivec *bbmins, ivec *bbmaxs,
-                                       int &numregions, int maxregions)
+static int worldchunkvaupdatekey(const ivec &origin)
 {
-    ivec bbmax = ivec(bbmin).add(WORLD_SECTION_SIZE);
-    loopi(numregions)
-    {
-        if(bbmins[i].x != bbmin.x || bbmins[i].y != bbmin.y ||
-           bbmaxs[i].x != bbmax.x || bbmaxs[i].y != bbmax.y ||
-           bbmax.z < bbmins[i].z || bbmin.z > bbmaxs[i].z)
-            continue;
-        bbmins[i].z = min(bbmins[i].z, bbmin.z);
-        bbmaxs[i].z = max(bbmaxs[i].z, bbmax.z);
-        return;
-    }
-    if(numregions >= maxregions) return;
-    bbmins[numregions] = bbmin;
-    bbmaxs[numregions] = bbmax;
-    numregions++;
+    const int rowsize = WORLD_RUNTIME_SIZE / WORLD_SECTION_SIZE;
+    return ((origin.z / WORLD_SECTION_SIZE) * rowsize
+          + origin.y / WORLD_SECTION_SIZE) * rowsize
+          + origin.x / WORLD_SECTION_SIZE;
 }
 
-static int worldchunksectionregions(const worldchunk &chunk, int tile,
-                                    const int *sections, int numsections,
-                                    ivec *bbmins, ivec *bbmaxs, int maxregions)
+static ivec worldchunkvaupdateorigin(int key)
 {
+    const int rowsize = WORLD_RUNTIME_SIZE / WORLD_SECTION_SIZE;
+    int x = key % rowsize;
+    key /= rowsize;
+    int y = key % rowsize, z = key / rowsize;
+    return ivec(x, y, z).mul(WORLD_SECTION_SIZE);
+}
+
+static void queueworldchunkvaupdate(const ivec &origin)
+{
+    int key = worldchunkvaupdatekey(origin);
+    if(worldchunkvaupdateset.access(key)) return;
+    worldchunkvaupdateset.add(key);
+    worldchunkvaupdates.add(key);
+    TracyPlot("Chunks/Pending VA sections",
+              int64_t(worldchunkvaupdates.length() - worldchunkvaupdatecursor));
+}
+
+static void queueworldchunksectionupdates(const worldchunk &chunk, int tile,
+                                          const int *sections, int numsections)
+{
+    ZoneScopedN("Chunks/Queue affected VA sections");
     static const int offsets[][3] =
     {
         { 0, 0, 0 },
@@ -825,7 +840,6 @@ static int worldchunksectionregions(const worldchunk &chunk, int tile,
         { 0, 0, -1 }, { 0, 0, 1 }
     };
     int x = tile % WORLD_SECTION_COLUMNS, y = tile / WORLD_SECTION_COLUMNS;
-    int numregions = 0;
     loopi(numsections)
     {
         ivec center = worldchunkorigin(chunk, sections[i] * WORLD_SECTION_SIZE);
@@ -839,24 +853,10 @@ static int worldchunksectionregions(const worldchunk &chunk, int tile,
             if(bbmin.x < 0 || bbmin.y < 0 || bbmin.z < 0 ||
                bbmax.x > worldsize || bbmax.y > worldsize || bbmax.z > WORLD_MAP_SIZE)
                 continue;
-            addworldchunksectionregion(bbmin, bbmins, bbmaxs, numregions, maxregions);
+            queueworldchunkvaupdate(bbmin);
         }
     }
-    return numregions;
-}
-
-static void invalidateworldchunksections(const worldchunk &chunk, int tile,
-                                         const int *sections, int numsections)
-{
-    ZoneScopedN("Chunks/Invalidate column sections");
-    ZoneTextF("%d_%d tile %d sections %d", chunk.x, chunk.y, tile, numsections);
-    ivec bbmins[WORLD_MAX_SECTION_REGIONS], bbmaxs[WORLD_MAX_SECTION_REGIONS];
-    int numregions = worldchunksectionregions(chunk, tile, sections, numsections,
-                                              bbmins, bbmaxs, WORLD_MAX_SECTION_REGIONS);
-    bool oldsuppress = suppressworldchunkdirty;
-    suppressworldchunkdirty = true;
-    changedstreaming(bbmins, bbmaxs, numregions, false);
-    suppressworldchunkdirty = oldsuppress;
+    ZoneValue(numsections);
 }
 
 static int findworldchunk(int x, int y)
@@ -1351,7 +1351,10 @@ static int processworldchunkresults()
 static bool findworldchunkmountcolumn(int chunkx, int chunky, int &chunkindex, int &tile)
 {
     const int playertilex = player ? int(player->o.x) / WORLD_SECTION_SIZE : 0,
-              playertiley = player ? int(player->o.y) / WORLD_SECTION_SIZE : 0;
+              playertiley = player ? int(player->o.y) / WORLD_SECTION_SIZE : 0,
+              playersection = clamp(player ? int(player->o.z) / WORLD_SECTION_SIZE
+                                           : WORLD_SECTION_LAYERS / 2,
+                                    0, int(WORLD_SECTION_LAYERS) - 1);
     long long bestscore = LLONG_MAX;
     chunkindex = tile = -1;
     loopv(worldchunks)
@@ -1360,7 +1363,6 @@ static bool findworldchunkmountcolumn(int chunkx, int chunky, int &chunkindex, i
         if(chunk.loading || !chunk.root || worldchunkfullymounted(chunk) ||
            !worldchunkinview(chunk, chunkx, chunky))
             continue;
-        int chunkdist = worldchunkdistance(chunk.x, chunk.y, chunkx, chunky);
         loopj(WORLD_SECTION_TILES)
         {
             if(worldchunkcolumnmounted(chunk, j)) continue;
@@ -1368,8 +1370,12 @@ static bool findworldchunkmountcolumn(int chunkx, int chunky, int &chunkindex, i
                 worldtilex = (chunk.x - worldfirstchunkx) * WORLD_SECTION_COLUMNS + x,
                 worldtiley = (chunk.y - worldfirstchunky) * WORLD_SECTION_COLUMNS + y,
                 dx = worldtilex - playertilex, dy = worldtiley - playertiley;
-            long long score = (long long)chunkdist * 0x10000000
-                            + (long long)dx * dx + (long long)dy * dy;
+            const uint tilebit = 1U << j;
+            int dz = WORLD_SECTION_LAYERS;
+            loopk(WORLD_SECTION_LAYERS) if(!(chunk.mountedtiles[k] & tilebit))
+                dz = min(dz, abs(k - playersection));
+            long long score = (long long)dx * dx + (long long)dy * dy
+                            + (long long)dz * dz;
             if(score >= bestscore) continue;
             bestscore = score;
             chunkindex = i;
@@ -1405,15 +1411,72 @@ static bool findworldchunkunloadcolumn(int chunkx, int chunky, int &chunkindex, 
     return chunkindex >= 0;
 }
 
+static int processworldchunkvaupdates()
+{
+    int pending = worldchunkvaupdates.length() - worldchunkvaupdatecursor;
+    if(pending <= 0) return 0;
+
+    ZoneScopedN("Chunks/Process deferred VA updates");
+    ZoneValue(pending);
+    int target = clamp(int(floorf(chunkvabudget / max(worldchunkvasectionmillis, 0.05f))),
+                       1, chunkvabatch);
+    ivec bbmins[WORLD_MAX_VA_BATCH], bbmaxs[WORLD_MAX_VA_BATCH];
+    int numupdates = 0;
+    while(numupdates < target && worldchunkvaupdatecursor < worldchunkvaupdates.length())
+    {
+        int key = worldchunkvaupdates[worldchunkvaupdatecursor++];
+        worldchunkvaupdateset.remove(key);
+        ivec origin = worldchunkvaupdateorigin(key), actualorigin;
+        int actualsize;
+        cube &section = lookupcube(origin, -WORLD_SECTION_SIZE, actualorigin, actualsize);
+        if(!section.children && isempty(section) && section.material == MAT_AIR &&
+           !(section.ext && section.ext->va))
+            continue;
+        bbmins[numupdates] = origin;
+        bbmaxs[numupdates] = ivec(origin).add(WORLD_SECTION_SIZE);
+        numupdates++;
+    }
+
+    if(worldchunkvaupdatecursor >= worldchunkvaupdates.length())
+    {
+        worldchunkvaupdates.setsize(0);
+        worldchunkvaupdatecursor = 0;
+    }
+    else if(worldchunkvaupdatecursor >= 1024 &&
+            worldchunkvaupdatecursor * 2 >= worldchunkvaupdates.length())
+    {
+        worldchunkvaupdates.remove(0, worldchunkvaupdatecursor);
+        worldchunkvaupdatecursor = 0;
+    }
+    TracyPlot("Chunks/Pending VA sections",
+              int64_t(worldchunkvaupdates.length() - worldchunkvaupdatecursor));
+    if(!numupdates) return 0;
+
+    Uint64 start = SDL_GetPerformanceCounter();
+    bool oldsuppress = suppressworldchunkdirty;
+    suppressworldchunkdirty = true;
+    changedstreaming(bbmins, bbmaxs, numupdates, false);
+    suppressworldchunkdirty = oldsuppress;
+    {
+        ZoneScopedN("Chunks/Commit deferred VA updates");
+        ZoneValue(numupdates);
+        commitchanges();
+    }
+    float sample = max(float((SDL_GetPerformanceCounter() - start) * 1000.0 /
+                             SDL_GetPerformanceFrequency()) / numupdates, 0.05f);
+    worldchunkvasectionmillis = worldchunkvasectionmillis * 0.75f + sample * 0.25f;
+    TracyPlot("Chunks/VA section milliseconds", double(worldchunkvasectionmillis));
+    return numupdates;
+}
+
 static int processworldchunkchanges(int chunkx, int chunky)
 {
     ZoneScopedN("Chunks/Process geometry changes");
     ZoneTextF("focus %d_%d", chunkx, chunky);
-    Uint64 start = SDL_GetPerformanceCounter(), phasestart = start;
+    Uint64 phasestart = SDL_GetPerformanceCounter();
     const Uint64 frequency = SDL_GetPerformanceFrequency();
     int changedcolumns = 0, unloaded = 0,
-        unloadtarget = clamp(int(floorf(chunkcleanupbudget / max(worldchunkcolumnmillis, 0.05f))),
-                             1, int(WORLD_MAX_COLUMN_CHANGES));
+        unloadtarget = WORLD_MAX_COLUMN_CHANGES;
 
     // Cleanup has its own budget and always runs before publication. This
     // prevents rapid movement from leaving a growing trail of live geometry.
@@ -1422,14 +1485,14 @@ static int processworldchunkchanges(int chunkx, int chunky)
         while(unloaded < unloadtarget)
         {
             double elapsed = (SDL_GetPerformanceCounter() - phasestart) * 1000.0 / frequency;
-            if(unloaded && elapsed + worldchunkcolumnmillis > chunkcleanupbudget) break;
+            if(unloaded && elapsed >= chunkcleanupbudget) break;
             int chunkindex, tile;
             if(!findworldchunkunloadcolumn(chunkx, chunky, chunkindex, tile)) break;
             worldchunk &chunk = worldchunks[chunkindex];
             int sections[WORLD_MAX_SECTION_BATCH],
                 numsections = unmountworldchunkcolumnbatch(chunk, tile, sections, chunksectionbatch);
             if(!numsections) break;
-            invalidateworldchunksections(chunk, tile, sections, numsections);
+            queueworldchunksectionupdates(chunk, tile, sections, numsections);
             unloaded++;
             changedcolumns++;
         }
@@ -1437,39 +1500,27 @@ static int processworldchunkchanges(int chunkx, int chunky)
     }
 
     phasestart = SDL_GetPerformanceCounter();
-    int mounted = 0,
-        mounttarget = clamp(int(floorf(chunkpublishbudget / max(worldchunkcolumnmillis, 0.05f))),
-                            1, int(WORLD_MAX_COLUMN_CHANGES));
+    int mounted = 0, mounttarget = WORLD_MAX_COLUMN_CHANGES;
     {
         ZoneScopedN("Chunks/Mount columns");
         while(mounted < mounttarget)
         {
             double elapsed = (SDL_GetPerformanceCounter() - phasestart) * 1000.0 / frequency;
-            if(mounted && elapsed + worldchunkcolumnmillis > chunkpublishbudget) break;
+            if(mounted && elapsed >= chunkpublishbudget) break;
             int chunkindex, tile;
             if(!findworldchunkmountcolumn(chunkx, chunky, chunkindex, tile)) break;
             worldchunk &chunk = worldchunks[chunkindex];
             int sections[WORLD_MAX_SECTION_BATCH],
                 numsections = mountworldchunkcolumnbatch(chunk, tile, sections, chunksectionbatch);
             if(!numsections) break;
-            invalidateworldchunksections(chunk, tile, sections, numsections);
+            queueworldchunksectionupdates(chunk, tile, sections, numsections);
             mounted++;
             changedcolumns++;
         }
         ZoneValue(mounted);
     }
 
-    if(changedcolumns)
-    {
-        {
-            ZoneScopedN("Chunks/Commit geometry changes");
-            ZoneValue(changedcolumns);
-            commitchanges();
-        }
-        float sample = max(float((SDL_GetPerformanceCounter() - start) * 1000.0 /
-                                 frequency) / changedcolumns, 0.05f);
-        worldchunkcolumnmillis = worldchunkcolumnmillis * 0.75f + sample * 0.25f;
-    }
+    processworldchunkvaupdates();
     return changedcolumns;
 }
 
@@ -1491,6 +1542,9 @@ static void rebaseworldchunks(int chunkx, int chunky)
 {
     ZoneScopedN("Chunks/Rebase runtime world");
     ZoneTextF("%d_%d", chunkx, chunky);
+    worldchunkvaupdates.setsize(0);
+    worldchunkvaupdateset.clear();
+    worldchunkvaupdatecursor = 0;
     loopv(worldchunks) if(worldchunkmounted(worldchunks[i])) unmountworldchunk(worldchunks[i]);
 
     int newfirstx = chunkx - WORLD_RUNTIME_CENTER,
@@ -1541,15 +1595,15 @@ static void mountworldchunksafetyregion(int chunkx, int chunky)
                 sections[numsections++] = section;
             }
             if(!numsections) continue;
-            invalidateworldchunksections(chunk, j, sections, numsections);
+            queueworldchunksectionupdates(chunk, j, sections, numsections);
             changedsections += numsections;
         }
     }
     if(changedsections)
     {
-        ZoneScopedN("Chunks/Commit safety region");
+        ZoneScopedN("Chunks/Queue safety region geometry");
         ZoneValue(changedsections);
-        commitchanges();
+        processworldchunkvaupdates();
     }
 }
 
