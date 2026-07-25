@@ -6,35 +6,15 @@ enum                            // hardcoded texture numbers
     NUMDEFAULTSLOTS
 };
 
-#define OCTAVERSION 33
+#define MAPVERSION 2
 
-struct octaheader
-{
-    char magic[4];              // "OCTA"
-    int version;                // any >8bit quantity is little endian
-    int headersize;             // sizeof(header)
-    int worldsize;
-    int numents;
-    int numpvs;
-    int lightmaps;
-    int blendmap;
-    int numvars;
-    int numvslots;
-};
-
-#define MAPVERSION 1            // bump if map format changes, see worldio.cpp
-
+// Raw lightweight map header. The octree follows immediately; all world
+// settings and data-driven cube definitions live in the external map config.
 struct mapheader
 {
     char magic[4];              // "TMAP"
     int version;                // any >8bit quantity is little endian
-    int headersize;             // sizeof(header)
     int worldsize;
-    int numents;
-    int numpvs;
-    int blendmap;
-    int numvars;
-    int numvslots;
 };
 
 #define WATER_AMPLITUDE 0.4f
@@ -50,4 +30,3 @@ enum
 #define TEX_SCALE 16.0f
 
 struct vertex { vec pos; bvec4 norm; vec tc; bvec4 tangent; };
-
