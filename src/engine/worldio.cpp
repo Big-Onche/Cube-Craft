@@ -400,7 +400,8 @@ struct worldchunk
     int x, y;
     cube *root;
     uint mountedtiles[WORLD_SECTION_LAYERS];
-    uint contentknown[WORLD_SECTION_LAYERS], contenttiles[WORLD_SECTION_LAYERS];
+    uint contentknown[WORLD_SECTION_LAYERS], contenttiles[WORLD_SECTION_LAYERS],
+         exposureknown[WORLD_SECTION_LAYERS], exposedtiles[WORLD_SECTION_LAYERS];
     schar surfacesections[WORLD_SECTION_TILES];
     uint request;
     bool loading, generating, saved, dirty, corrupted;
@@ -412,6 +413,8 @@ struct worldchunk
         memclear(mountedtiles);
         memclear(contentknown);
         memclear(contenttiles);
+        memclear(exposureknown);
+        memclear(exposedtiles);
         loopi(WORLD_SECTION_TILES) surfacesections[i] = -2;
     }
 };
@@ -524,6 +527,7 @@ VARP(chunkcleanupbudget, 1, 6, 33);
 VARP(chunksectionbatch, 1, 1, WORLD_MAX_SECTION_BATCH);
 VARP(chunkvastagelimit, 1, 4, 16);
 VARP(chunksurfaceloaddepth, 0, 3, WORLD_SECTION_LAYERS - 1); // depth in 16-block sections
+VARP(drawfullchunk, 0, 0, 1);
 
 static cube *generateworldchunk(int chunkx, int chunky);
 static cube *loadworldchunkroot(const char *mname, int expectedx, int expectedy);
@@ -908,6 +912,7 @@ static bool unmountworldchunktile(worldchunk &chunk, int section, int tile)
     cube &c = lookupcube(runtimepos, WORLD_SECTION_SIZE);
     setworldchunksectioncontent(chunk, tile, section, worldcubehascontent(c));
     chunk.surfacesections[tile] = -2;
+    if(chunk.dirty) loopv(worldchunks) memclear(worldchunks[i].exposureknown);
     detachworldcubegeometry(c);
     moveworldcube(c, lookupworldchunkcube(chunk, pos, WORLD_SECTION_SIZE));
     worldsectionowners.remove(key);
@@ -1523,6 +1528,86 @@ static int processworldchunkresults()
     return published;
 }
 
+static bool worldchunksectionnearplayer(const worldchunk &chunk, int tile, int section, int radius)
+{
+    if(!player && !camera1) return false;
+    int x = tile % WORLD_SECTION_COLUMNS, y = tile / WORLD_SECTION_COLUMNS;
+    ivec origin = ivec(worldchunkorigin(chunk)).add(
+        ivec(x * WORLD_SECTION_SIZE, y * WORLD_SECTION_SIZE,
+             section * WORLD_SECTION_SIZE));
+    const vec &focus = player ? player->o : camera1->o;
+    int sectionx = origin.x / WORLD_SECTION_SIZE,
+        sectiony = origin.y / WORLD_SECTION_SIZE,
+        focusx = int(floorf(focus.x / WORLD_SECTION_SIZE)),
+        focusy = int(floorf(focus.y / WORLD_SECTION_SIZE)),
+        focusz = clamp(int(floorf(focus.z / WORLD_SECTION_SIZE)),
+                       0, int(WORLD_SECTION_LAYERS) - 1);
+    return abs(sectionx - focusx) <= radius && abs(sectiony - focusy) <= radius &&
+           abs(section - focusz) <= radius;
+}
+
+static bool worldchunksectionexposed(worldchunk &chunk, int tile, int section)
+{
+    static const int offsets[][2] = { { -1, 0 }, { 1, 0 }, { 0, -1 }, { 0, 1 } };
+    const uint tilebit = 1U << tile;
+    if(chunk.exposureknown[section] & tilebit)
+        return (chunk.exposedtiles[section] & tilebit) != 0;
+    int tilex = tile % WORLD_SECTION_COLUMNS, tiley = tile / WORLD_SECTION_COLUMNS;
+    bool allneighborsknown = true;
+    loopi(int(sizeof(offsets) / sizeof(offsets[0])))
+    {
+        int chunkx = chunk.x, chunky = chunk.y,
+            x = tilex + offsets[i][0], y = tiley + offsets[i][1];
+        if(x < 0) { --chunkx; x += WORLD_SECTION_COLUMNS; }
+        else if(x >= WORLD_SECTION_COLUMNS) { ++chunkx; x -= WORLD_SECTION_COLUMNS; }
+        if(y < 0) { --chunky; y += WORLD_SECTION_COLUMNS; }
+        else if(y >= WORLD_SECTION_COLUMNS) { ++chunky; y -= WORLD_SECTION_COLUMNS; }
+
+        worldchunk *neighbor = &chunk;
+        if(chunkx != chunk.x || chunky != chunk.y)
+        {
+            int index = findworldchunk(chunkx, chunky);
+            if(!worldchunks.inrange(index))
+            {
+                allneighborsknown = false;
+                continue;
+            }
+            neighbor = &worldchunks[index];
+        }
+        if(neighbor->loading || neighbor->corrupted || !neighbor->root)
+        {
+            allneighborsknown = false;
+            continue;
+        }
+        int neighborsurface = worldchunksurfacesection(
+            *neighbor, y * WORLD_SECTION_COLUMNS + x);
+        if(neighborsurface < section)
+        {
+            chunk.exposureknown[section] |= tilebit;
+            chunk.exposedtiles[section] |= tilebit;
+            return true;
+        }
+    }
+    if(allneighborsknown)
+    {
+        chunk.exposureknown[section] |= tilebit;
+        chunk.exposedtiles[section] &= ~tilebit;
+    }
+    return false;
+}
+
+static bool worldchunksectionrequired(worldchunk &chunk, int tile, int section, int playerradius)
+{
+    if(drawfullchunk || worldchunksectionnearplayer(chunk, tile, section, playerradius))
+        return true;
+    int surface = worldchunksurfacesection(chunk, tile);
+    if(surface >= 0 && section <= surface &&
+       surface - section <= chunksurfaceloaddepth)
+        return true;
+    return worldchunksectionhascontent(chunk, tile, section) &&
+           worldchunksectionexposed(chunk, tile, section);
+}
+
 static long long worldchunksectionpriority(worldchunk &chunk, int tile, int section)
 {
     int x = tile % WORLD_SECTION_COLUMNS, y = tile / WORLD_SECTION_COLUMNS;
@@ -1546,7 +1631,9 @@ static long long worldchunksectionpriority(worldchunk &chunk, int tile, int sect
          surfacesupport = surfacesection >= 0 && section < surfacesection &&
                           surfacesection - section <= chunksurfaceloaddepth,
          surfaceband = surface || surfacesupport,
-         content = worldchunksectionhascontent(chunk, tile, section);
+         content = worldchunksectionhascontent(chunk, tile, section),
+         exposed = content && worldchunksectionexposed(chunk, tile, section);
+    if(!drawfullchunk && !nearplayer && !surfaceband && !exposed) return LLONG_MAX;
     int visibility = camera1 ? isvisiblebb(origin, ivec(WORLD_SECTION_SIZE,
                                                         WORLD_SECTION_SIZE,
                                                         WORLD_SECTION_SIZE))
@@ -1555,8 +1642,10 @@ static long long worldchunksectionpriority(worldchunk &chunk, int tile, int sect
     int tier = nearplayer ? 0 :
                surfaceband && visible ? 1 :
                surfaceband ? 2 :
-               visible && content ? 3 :
-               content ? 4 : 5;
+               exposed && visible ? 3 :
+               exposed ? 4 :
+               visible && content ? 5 :
+               content ? 6 : 7;
 
     long long distance = (long long)dx * dx + (long long)dy * dy + (long long)dz * dz;
     int viewpenalty = 0;
@@ -1600,6 +1689,7 @@ static int findworldchunkmountsections(int chunkx, int chunky,
             {
                 if(chunk.mountedtiles[k] & tilebit) continue;
                 long long score = worldchunksectionpriority(chunk, j, k);
+                if(score == LLONG_MAX) continue;
                 int insert = numcandidates;
                 while(insert > 0 && score < candidates[insert - 1].score) --insert;
                 if(insert >= maxcandidates) continue;
@@ -1642,6 +1732,59 @@ static bool findworldchunkunloadcolumn(int chunkx, int chunky, int &chunkindex, 
         }
     }
     return chunkindex >= 0;
+}
+
+static int findworldchunkcachedsections(int chunkx, int chunky,
+                                        worldsectioncandidate *candidates, int maxcandidates)
+{
+    if(drawfullchunk || maxcandidates <= 0) return 0;
+    ZoneScopedN("Chunks/Select occluded sections for caching");
+    vec focus = player ? player->o : camera1 ? camera1->o : vec(0, 0, 0);
+    int focusx = int(floorf(focus.x / WORLD_SECTION_SIZE)),
+        focusy = int(floorf(focus.y / WORLD_SECTION_SIZE)),
+        focusz = clamp(int(floorf(focus.z / WORLD_SECTION_SIZE)),
+                       0, int(WORLD_SECTION_LAYERS) - 1),
+        numcandidates = 0;
+    loopv(worldchunks)
+    {
+        worldchunk &chunk = worldchunks[i];
+        if(chunk.loading || chunk.corrupted || !chunk.root || !worldchunkmounted(chunk) ||
+           !worldchunkinview(chunk, chunkx, chunky))
+            continue;
+        loopj(WORLD_SECTION_TILES)
+        {
+            int x = j % WORLD_SECTION_COLUMNS, y = j / WORLD_SECTION_COLUMNS,
+                sectionx = (chunk.x - worldfirstchunkx) * WORLD_SECTION_COLUMNS + x,
+                sectiony = (chunk.y - worldfirstchunky) * WORLD_SECTION_COLUMNS + y,
+                dx = sectionx - focusx, dy = sectiony - focusy,
+                surface = worldchunksurfacesection(chunk, j);
+            const uint tilebit = 1U << j;
+            loopk(WORLD_SECTION_LAYERS)
+            {
+                if(!(chunk.mountedtiles[k] & tilebit) ||
+                   worldchunksectionrequired(chunk, j, k, 2))
+                    continue;
+                int dz = k - focusz,
+                    depth = surface >= 0 ? max(surface - k, 0) : WORLD_SECTION_LAYERS;
+                long long distance = (long long)dx * dx + (long long)dy * dy +
+                                     (long long)dz * dz,
+                          score = ((long long)depth << 32) + distance;
+                int insert = numcandidates;
+                while(insert > 0 && score > candidates[insert - 1].score) --insert;
+                if(insert >= maxcandidates) continue;
+                int newcount = min(numcandidates + 1, maxcandidates);
+                for(int move = newcount - 1; move > insert; --move)
+                    candidates[move] = candidates[move - 1];
+                candidates[insert].chunkindex = i;
+                candidates[insert].tile = j;
+                candidates[insert].section = k;
+                candidates[insert].score = score;
+                numcandidates = newcount;
+            }
+        }
+    }
+    ZoneValue(numcandidates);
+    return numcandidates;
 }
 
 static int processworldchunkvaupdates()
@@ -1696,6 +1839,25 @@ static int processworldchunkchanges(int chunkx, int chunky)
             unloadedsections += numsections;
             unloaded++;
             changedcolumns++;
+        }
+        if(unloadedsections < chunkvastagelimit)
+        {
+            worldsectioncandidate candidates[WORLD_MAX_SECTION_BATCH];
+            int numcandidates = findworldchunkcachedsections(
+                chunkx, chunky, candidates,
+                min(chunkvastagelimit - unloadedsections, int(WORLD_MAX_SECTION_BATCH)));
+            loopi(numcandidates)
+            {
+                double elapsed = (SDL_GetPerformanceCounter() - phasestart) * 1000.0 / frequency;
+                if(unloaded && elapsed >= chunkcleanupbudget) break;
+                worldsectioncandidate &candidate = candidates[i];
+                worldchunk &chunk = worldchunks[candidate.chunkindex];
+                if(!unmountworldchunktile(chunk, candidate.section, candidate.tile)) continue;
+                queueworldchunksectionupdates(chunk, candidate.tile, &candidate.section, 1);
+                unloadedsections++;
+                unloaded++;
+                changedcolumns++;
+            }
         }
         ZoneValue(unloaded);
     }
