@@ -280,18 +280,20 @@ ICOMMAND(worldloadseed, "i", (int *seed), loadworldseed(*seed));
 
 struct terraincubetype
 {
-    string name, texture, sides;
+    string name, texture, sidetexture, bottom;
     float texsize;
-    int slot, sideslot;
+    int slot, sideslot, bottomslot;
 
-    terraincubetype() : texsize(1), slot(DEFAULT_GEOM), sideslot(DEFAULT_GEOM)
+    terraincubetype()
+        : texsize(1), slot(DEFAULT_GEOM), sideslot(DEFAULT_GEOM), bottomslot(DEFAULT_GEOM)
     {
-        name[0] = texture[0] = sides[0] = '\0';
+        name[0] = texture[0] = sidetexture[0] = bottom[0] = '\0';
     }
 };
 
 static vector<terraincubetype *> terraincubetypes;
 static int worldgrasstexture = DEFAULT_GEOM, worldgrasssidetexture = DEFAULT_GEOM,
+           worldgrassbottomtexture = DEFAULT_GEOM,
            worlddirttexture = DEFAULT_GEOM, worldstonetexture = DEFAULT_GEOM,
            worldsandtexture = DEFAULT_GEOM, worldsnowtexture = DEFAULT_GEOM,
            worldwoodtexture = DEFAULT_GEOM, worldleaftexture = DEFAULT_GEOM;
@@ -320,13 +322,15 @@ static terraincubetype *findterraincube(const char *name)
 void terrainreset()
 {
     terraincubetypes.deletecontents();
-    worldgrasstexture = worldgrasssidetexture = worlddirttexture = worldstonetexture =
-        worldsandtexture = worldsnowtexture = worldwoodtexture = worldleaftexture = DEFAULT_GEOM;
+    worldgrasstexture = worldgrasssidetexture = worldgrassbottomtexture = worlddirttexture =
+        worldstonetexture = worldsandtexture = worldsnowtexture = worldwoodtexture =
+        worldleaftexture = DEFAULT_GEOM;
 }
 
 COMMAND(terrainreset, "");
 
-static void defineterraincube(const char *name, const char *texture, float texsize, const char *sides)
+static void defineterraincube(const char *name, const char *texture, float texsize,
+                              const char *side, const char *bottom, int numargs)
 {
     if(!name[0] || !texture[0])
     {
@@ -338,14 +342,30 @@ static void defineterraincube(const char *name, const char *texture, float texsi
     if(!type) type = terraincubetypes.add(new terraincubetype);
     copystring(type->name, name);
     copystring(type->texture, texture);
-    copystring(type->sides, sides ? sides : "");
+    copystring(type->sidetexture, numargs >= 4 && side ? side : "");
+    copystring(type->bottom, numargs >= 5 && bottom ? bottom : "");
     type->texsize = texsize > 0 ? texsize : 1;
 }
 
-ICOMMAND(terraincube, "ssfsN", (char *name, char *texture, float *texsize, char *sides, int *numargs),
+ICOMMAND(terraincube, "ssfssN", (char *name, char *texture, float *texsize,
+                                char *side, char *bottom, int *numargs),
 {
-    defineterraincube(name, texture, *texsize, *numargs >= 4 ? sides : NULL);
+    defineterraincube(name, texture, *texsize, side, bottom, *numargs);
 });
+
+static int loadterraintextureslot(const char *path, float texsize, bool alpha)
+{
+    const char *texture = escapestring(path);
+    string command;
+    if(alpha)
+        formatstring(command, "setshader leafworld; texture 0 %s; texture a %s; texscale %.9g; texalpha 1 1",
+                     texture, texture, texsize);
+    else
+        formatstring(command, "setshader stdworld; texture 0 %s; texscale %.9g",
+                     texture, texsize);
+    execute(command);
+    return slots.last()->variants->index;
+}
 
 static bool loadterrain()
 {
@@ -370,31 +390,28 @@ static bool loadterrain()
     loopv(terraincubetypes)
     {
         terraincubetype &type = *terraincubetypes[i];
-        const char *texture = escapestring(type.texture);
-        string command;
-        if(&type == leaves)
-            formatstring(command, "setshader leafworld; texture 0 %s; texture a %s; texscale %.9g; texalpha 1 1",
-                         texture, texture, type.texsize);
-        else
-            formatstring(command, "setshader stdworld; texture 0 %s; texscale %.9g",
-                         texture, type.texsize);
-        execute(command);
-        type.slot = slots.last()->variants->index;
+        const bool alpha = &type == leaves;
+        type.slot = loadterraintextureslot(type.texture, type.texsize, alpha);
+        type.sideslot = type.sidetexture[0]
+                      ? loadterraintextureslot(type.sidetexture, type.texsize, alpha)
+                      : type.slot;
     }
     loopv(terraincubetypes)
     {
         terraincubetype &type = *terraincubetypes[i];
-        terraincubetype *sidetype = type.sides[0] ? findterraincube(type.sides) : NULL;
-        if(type.sides[0] && !sidetype)
+        terraincubetype *bottomtype = type.bottom[0] ? findterraincube(type.bottom) : NULL;
+        if(type.bottom[0] && !bottomtype)
         {
-            conoutf(CON_ERROR, "terrain cube %s references unknown side cube %s", type.name, type.sides);
+            conoutf(CON_ERROR, "terrain cube %s references unknown bottom cube %s",
+                    type.name, type.bottom);
             return false;
         }
-        type.sideslot = sidetype ? sidetype->slot : type.slot;
+        type.bottomslot = bottomtype ? bottomtype->slot : type.sideslot;
     }
 
     worldgrasstexture = grass->slot;
     worldgrasssidetexture = grass->sideslot;
+    worldgrassbottomtexture = grass->bottomslot;
     worlddirttexture = dirt->slot;
     worldstonetexture = stone->slot;
     worldsandtexture = sand->slot;
@@ -455,8 +472,8 @@ VARP(chunkremip, 0, 0, 1); // optional CPU-for-memory octree collapse on generat
 
 struct worldchunkjob
 {
-    int x, y, seed, grasstexture, grasssidetexture, dirttexture, stonetexture, sandtexture, snowtexture,
-        woodtexture, leaftexture;
+    int x, y, seed, grasstexture, grasssidetexture, grassbottomtexture;
+    int dirttexture, stonetexture, sandtexture, snowtexture, woodtexture, leaftexture;
     terrainsettings terrain;
     int families, optimized, loaderror;
     uint epoch, request;
@@ -468,6 +485,7 @@ struct worldchunkjob
     worldchunkjob(int x, int y, uint epoch, uint request)
         : x(x), y(y), seed(activeworldseed),
           grasstexture(worldgrasstexture), grasssidetexture(worldgrasssidetexture),
+          grassbottomtexture(worldgrassbottomtexture),
           dirttexture(worlddirttexture), stonetexture(worldstonetexture),
           sandtexture(worldsandtexture), snowtexture(worldsnowtexture),
           woodtexture(worldwoodtexture), leaftexture(worldleaftexture),
@@ -2273,16 +2291,18 @@ struct worldgencontext
     uchar mountainmap[WORLD_CHUNK_BLOCKS * WORLD_CHUNK_BLOCKS];
     uchar coastmap[WORLD_CHUNK_BLOCKS * WORLD_CHUNK_BLOCKS];
     uchar rockmap[WORLD_CHUNK_BLOCKS * WORLD_CHUNK_BLOCKS];
-    int seed, grasstexture, grasssidetexture, dirttexture, stonetexture, sandtexture, snowtexture,
-        woodtexture, leaftexture;
+    int seed, grasstexture, grasssidetexture, grassbottomtexture;
+    int dirttexture, stonetexture, sandtexture, snowtexture, woodtexture, leaftexture;
     bool prepared, remip;
     int families, optimized;
     SDL_atomic_t *cancelled;
 
-    worldgencontext(int seed, int grasstexture, int grasssidetexture, int dirttexture, int stonetexture,
-                    int sandtexture, int snowtexture, int woodtexture, int leaftexture,
+    worldgencontext(int seed, int grasstexture, int grasssidetexture, int grassbottomtexture,
+                    int dirttexture, int stonetexture, int sandtexture, int snowtexture,
+                    int woodtexture, int leaftexture,
                     bool prepared, bool remip, const terrainsettings &terrain, SDL_atomic_t *cancelled = NULL)
-        : terrain(terrain), seed(seed), grasstexture(grasstexture), grasssidetexture(grasssidetexture),
+        : terrain(terrain), seed(seed), grasstexture(grasstexture),
+          grasssidetexture(grasssidetexture), grassbottomtexture(grassbottomtexture),
           dirttexture(dirttexture), stonetexture(stonetexture), sandtexture(sandtexture),
           snowtexture(snowtexture), woodtexture(woodtexture), leaftexture(leaftexture),
           prepared(prepared), remip(remip), families(0), optimized(0), cancelled(cancelled)
@@ -2555,12 +2575,14 @@ static int remipworldchunk(cube *root, bool prepared, int &families, SDL_atomic_
     return merged;
 }
 
-static void setworldcubetexture(cube &c, int texture, int toptexture = -1, int material = MAT_AIR)
+static void setworldcubetexture(cube &c, int texture, int toptexture = -1,
+                                int bottomtexture = -1, int material = MAT_AIR)
 {
     solidfaces(c);
     c.material = material;
     loopi(6) c.texture[i] = texture;
     if(toptexture >= 0) c.texture[O_TOP] = toptexture;
+    if(bottomtexture >= 0) c.texture[O_BOTTOM] = bottomtexture;
 }
 
 static void setworldcubematerial(cube &c, int material)
@@ -2910,7 +2932,8 @@ static bool generateworldcube(worldgencontext &ctx, cube &c, const ivec &o, int 
             return true;
 
         case WORLD_GRASS:
-            setworldcubetexture(c, ctx.grasssidetexture, ctx.grasstexture);
+            setworldcubetexture(c, ctx.grasssidetexture, ctx.grasstexture,
+                               ctx.grassbottomtexture);
             return true;
 
         case WORLD_SAND:
@@ -3356,7 +3379,8 @@ static bool placeworldtrees(worldgencontext &ctx, cube *root, int chunkx, int ch
         {
             cube &c = lookupworldgenblock(ctx, root, leaves[i]);
             if(isempty(c) && c.material == MAT_AIR)
-                setworldcubetexture(c, ctx.leaftexture, -1, leavesalpha ? MAT_ALPHA : MAT_AIR);
+                setworldcubetexture(c, ctx.leaftexture, -1, -1,
+                                    leavesalpha ? MAT_ALPHA : MAT_AIR);
         }
         loopv(wood)
         {
@@ -3429,6 +3453,7 @@ static cube *generateworldchunk(int chunkx, int chunky)
     ZoneTextF("%d_%d", chunkx, chunky);
     const terrainsettings terrain;
     worldgencontext ctx(activeworldseed, worldgrasstexture, worldgrasssidetexture,
+                        worldgrassbottomtexture,
                         worlddirttexture, worldstonetexture, worldsandtexture, worldsnowtexture,
                         worldwoodtexture, worldleaftexture, false, chunkremip != 0, terrain);
     return generateworldchunk(chunkx, chunky, ctx);
@@ -3844,6 +3869,7 @@ static cube *prepareworldchunk(worldchunkjob &job)
     {
         ZoneScopedN("Chunks/Prepare generated chunk");
         worldgencontext ctx(job.seed, job.grasstexture, job.grasssidetexture,
+                            job.grassbottomtexture,
                             job.dirttexture, job.stonetexture, job.sandtexture, job.snowtexture,
                             job.woodtexture, job.leaftexture, true, job.remip,
                             job.terrain, &job.cancelled);
