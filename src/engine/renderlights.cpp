@@ -1926,7 +1926,7 @@ VARN(lightbatches, lightbatchesused, 1, 0, 0);
 VARN(lightbatchrects, lightbatchrectsused, 1, 0, 0);
 VARN(lightbatchstacks, lightbatchstacksused, 1, 0, 0);
 
-VARFR(alphashadow, 0, 0, 2, { cleardeferredlightshaders(); cleanupshadowatlas(); });
+VARFR(alphashadow, 0, 2, 2, { cleardeferredlightshaders(); cleanupshadowatlas(); });
 FVARFR(alphashadowscale, 0, 1, 2, clearshadowcache());
 
 enum

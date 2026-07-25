@@ -360,7 +360,7 @@ static bool loadterrain()
         const char *texture = escapestring(type.texture);
         string command;
         if(&type == leaves)
-            formatstring(command, "setshader alphaworld; texture 0 %s; texture a %s; texscale %.9g; texalpha 1 1",
+            formatstring(command, "setshader leafworld; texture 0 %s; texture a %s; texscale %.9g; texalpha 1 1",
                          texture, texture, type.texsize);
         else
             formatstring(command, "setshader stdworld; texture 0 %s; texscale %.9g",
