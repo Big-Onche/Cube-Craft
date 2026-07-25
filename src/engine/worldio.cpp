@@ -418,6 +418,7 @@ struct worldchunkjob
 static vector<worldchunk> worldchunks;
 static vector<worldchunkjob *> worldchunkjobs, worldchunkactivejobs, worldchunkresults;
 static string worldfolder = "";
+static bool applyloadworlddefaults = false;
 static int activeworldchunk = -1;
 static int worldfirstchunkx = 0, worldfirstchunky = 0;
 static int lastplayerchunkx = INT_MIN, lastplayerchunky = INT_MIN, lastchunkdist = -1;
@@ -3211,7 +3212,9 @@ static void loadworldcommand(const char *requested)
     }
 
     defformatstring(entry, "%s/%d_%d", folder, chunkx, chunky);
+    applyloadworlddefaults = true;
     game::changemap(entry);
+    applyloadworlddefaults = false;
 }
 
 ICOMMAND(loadworld, "s", (char *name), loadworldcommand(name));
@@ -3353,6 +3356,14 @@ bool load_world(const char *mname, const char *cname)
 
     identflags |= IDF_OVERRIDDEN;
     execfile("config/default_map_settings.cfg", false);
+    if(applyloadworlddefaults)
+    {
+        setvar("ambient", 0x252525);
+        setvar("sunlight", 0xFFF8E0);
+        setfvar("sunlightyaw", 30);
+        setfvar("sunlightpitch", 50);
+        setvar("atmo", 1);
+    }
     execfile(cfgname, false);
     identflags &= ~IDF_OVERRIDDEN;
 
