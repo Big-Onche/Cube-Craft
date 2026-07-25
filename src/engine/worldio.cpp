@@ -143,16 +143,16 @@ FVAR(terrainplainstreedensity, 0.0f, 0.0015f, 0.25f);
 VAR(terrainpinestartheight, WORLD_MIN_HEIGHT + 1, 25, WORLD_MAX_HEIGHT - 1);
 VAR(terrainpinefullheight, WORLD_MIN_HEIGHT + 1, 45, WORLD_MAX_HEIGHT - 1);
 
-FVAR(terraincavefreq, 0.0001f, 0.035f, 0.25f);
-FVAR(terraincavethreshold, -1.0f, 0.55f, 1.0f);
-FVAR(terrainlargecavefreq, 0.0001f, 0.012f, 0.25f);
-FVAR(terrainlargecavethreshold, -1.0f, 0.72f, 1.0f);
-FVAR(terrainlargecavedeepthreshold, -1.0f, 0.48f, 1.0f);
-FVAR(terraintunnelfreq, 0.0001f, 0.018f, 0.25f);
-FVAR(terraintunnelwidth, 0.001f, 0.065f, 0.3f);
-FVAR(terraincaveentrancewidth, 0.001f, 0.015f, 0.3f);
-VAR(terraincavemindepth, 1, 8, 64);
-VAR(terraincavefulldepth, 1, 24, 128);
+FVAR(terraincavefreq, 0.0001f, 0.045f, 0.25f);
+FVAR(terraincavethreshold, -1.0f, 0.58f, 1.0f);
+FVAR(terrainlargecavefreq, 0.0001f, 0.018f, 0.25f);
+FVAR(terrainlargecavethreshold, -1.0f, 0.76f, 1.0f);
+FVAR(terrainlargecavedeepthreshold, -1.0f, 0.58f, 1.0f);
+FVAR(terraintunnelfreq, 0.0001f, 0.025f, 0.25f);
+FVAR(terraintunnelwidth, 0.001f, 0.075f, 0.3f);
+FVAR(terraincaveentrancewidth, 0.001f, 0.05f, 0.3f);
+VAR(terraincavemindepth, 1, 12, 64);
+VAR(terraincavefulldepth, 1, 32, 128);
 VAR(terraincavedeepheight, WORLD_MIN_HEIGHT + 1, -64, WORLD_MAX_HEIGHT - 1);
 
 VAR(terrainbottomlavalayers, 0, 3, 16);
