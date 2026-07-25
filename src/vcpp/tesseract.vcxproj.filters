@@ -1,6 +1,9 @@
 ﻿<?xml version="1.0" encoding="utf-8"?>
 <Project ToolsVersion="4.0" xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
   <ItemGroup>
+    <ClCompile Include="..\include\tracy\public\TracyClient.cpp">
+      <Filter>third party</Filter>
+    </ClCompile>
     <ClCompile Include="..\engine\aa.cpp">
       <Filter>engine</Filter>
     </ClCompile>
@@ -262,6 +265,9 @@
     </Filter>
     <Filter Include="game">
       <UniqueIdentifier>{9b7a70df-c8ed-4662-8380-4ffe119eb216}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="third party">
+      <UniqueIdentifier>{2cbbd7de-b16e-4367-9fd8-64fb729b9023}</UniqueIdentifier>
     </Filter>
   </ItemGroup>
 </Project>

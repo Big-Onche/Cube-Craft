@@ -51,6 +51,53 @@
 					<Variable name="WINDRES_TARGET" value="pe-x86-64" />
 				</Environment>
 			</Target>
+			<Target title="profile64">
+				<Option output="..\..\bin64\tesseract_profile.exe" prefix_auto="0" extension_auto="0" />
+				<Option working_dir="..\..\" />
+				<Option object_output=".objs\profile64" />
+				<Option type="0" />
+				<Option compiler="gcc" />
+				<Option parameters="-t0 -w640 -h480 -qhome" />
+				<Compiler>
+					<Add option="-O3" />
+					<Add option="-g" />
+					<Add option="-ffast-math" />
+					<Add option="-Wall" />
+					<Add option="-m64" />
+					<Add option="-std=gnu++17" />
+					<Add option="-DTRACY_ENABLE" />
+					<Add option="-fsigned-char" />
+					<Add option="-fno-exceptions" />
+					<Add option="-fno-rtti" />
+					<Add directory="..\enet\include" />
+					<Add directory="..\include" />
+					<Add directory="..\engine" />
+					<Add directory="..\shared" />
+					<Add directory="..\vcpp" />
+					<Add directory="..\game" />
+				</Compiler>
+				<ResourceCompiler>
+					<Add directory="..\vcpp" />
+				</ResourceCompiler>
+				<Linker>
+					<Add option="-m64" />
+					<Add option="-mwindows" />
+					<Add library="SDL2" />
+					<Add library="SDL2_image" />
+					<Add library="SDL2_mixer" />
+					<Add library="zlib1" />
+					<Add library="opengl32" />
+					<Add library="enet" />
+					<Add library="ws2_32" />
+					<Add library="winmm" />
+					<Add library="dbghelp" />
+					<Add directory="..\..\bin64" />
+					<Add directory="..\lib64" />
+				</Linker>
+				<Environment>
+					<Variable name="WINDRES_TARGET" value="pe-x86-64" />
+				</Environment>
+			</Target>
 			<Target title="client32">
 				<Option output="..\..\bin\tesseract.exe" prefix_auto="0" extension_auto="0" />
 				<Option working_dir="..\..\" />
@@ -170,6 +217,9 @@
 			<Option weight="0" />
 		</Unit>
 		<Unit filename="..\game\server.cpp" />
+		<Unit filename="..\include\tracy\public\TracyClient.cpp">
+			<Option target="profile64" />
+		</Unit>
 		<Unit filename="..\shared\command.h" />
 		<Unit filename="..\shared\crypto.cpp" />
 		<Unit filename="..\shared\cube.h">

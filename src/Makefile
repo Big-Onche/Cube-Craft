@@ -1,6 +1,8 @@
 CXXFLAGS= -O3 -fomit-frame-pointer -ffast-math
 override CXXFLAGS+= -Wall -fsigned-char -fno-exceptions -fno-rtti
 
+TRACY?= 0
+
 PLATFORM= $(shell uname -s | tr '[:lower:]' '[:upper:]')
 PLATFORM_ARCH= $(shell uname -m)
 PLATFORM_PREFIX= native
@@ -115,6 +117,20 @@ CLIENT_OBJS= \
 	game/entities.o \
 	game/game.o \
 	game/server.o
+
+ifeq ($(TRACY),1)
+CLIENT_OBJS+= include/tracy/public/TracyClient.o
+CLIENT_INCLUDES+= -std=gnu++17 -DTRACY_ENABLE
+ifneq (,$(findstring MINGW,$(PLATFORM)))
+CLIENT_LIBS+= -ldbghelp
+else
+ifneq (,$(findstring DARWIN,$(PLATFORM)))
+CLIENT_LIBS+= -pthread -ldl
+else
+CLIENT_LIBS+= -pthread
+endif
+endif
+endif
 
 CLIENT_PCH= shared/cube.h.gch engine/engine.h.gch game/game.h.gch
 
