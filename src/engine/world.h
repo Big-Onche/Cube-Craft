@@ -6,7 +6,7 @@ enum                            // hardcoded texture numbers
     NUMDEFAULTSLOTS
 };
 
-#define MAPVERSION 2
+#define MAPVERSION 3
 
 // Raw lightweight map header. The octree follows immediately; all world
 // settings and data-driven cube definitions live in the external map config.
@@ -15,6 +15,7 @@ struct mapheader
     char magic[4];              // "TMAP"
     int version;                // any >8bit quantity is little endian
     int worldsize;
+    int chunkx, chunky;         // authoritative streamed-world identity
 };
 
 #define WATER_AMPLITUDE 0.4f

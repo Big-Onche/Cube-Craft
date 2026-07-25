@@ -29,7 +29,7 @@ static bool loadmapheader(stream *f, const char *mapname, mapheader &hdr)
         conoutf(CON_ERROR, "map %s has a malformed lightweight header", mapname);
         return false;
     }
-    lilswap(&hdr.version, 2);
+    lilswap(&hdr.version, 4);
     if(memcmp(hdr.magic, "TMAP", 4) || hdr.version != MAPVERSION)
     {
         conoutf(CON_ERROR, "map %s is not a version %d lightweight octree", mapname, MAPVERSION);
@@ -94,7 +94,7 @@ enum
     WORLD_MAX_PREPARED_CHUNKS = 8,
     WORLD_MAX_COLUMN_CHANGES = 64,
     WORLD_MAX_SECTION_BATCH = 16,
-    WORLD_MAX_VA_BATCH = 16
+    WORLD_MAX_SECTION_REGIONS = WORLD_MAX_SECTION_BATCH * 7
 };
 
 VARP(maxchunkdist, 2, 3, WORLD_MAX_CHUNK_DIST);
@@ -378,16 +378,34 @@ struct worldchunk
     cube *root;
     uint mountedtiles[WORLD_SECTION_LAYERS];
     uint request;
-    bool loading, generating, saved, dirty;
+    bool loading, generating, saved, dirty, corrupted;
 
     worldchunk(int x, int y, cube *root, bool loading = false, bool saved = false)
-        : x(x), y(y), root(root), request(0), loading(loading), generating(false), saved(saved), dirty(false)
+        : x(x), y(y), root(root), request(0), loading(loading), generating(false),
+          saved(saved), dirty(false), corrupted(false)
     {
         memclear(mountedtiles);
     }
 };
 
 static bool worldchunkmounted(const worldchunk &chunk);
+static int worldchunkvaupdatekey(const ivec &origin);
+
+struct worldsectionowner
+{
+    int chunkx, chunky;
+    ushort section, tile;
+
+    worldsectionowner() : chunkx(0), chunky(0), section(0), tile(0) {}
+    worldsectionowner(int chunkx, int chunky, int section, int tile)
+        : chunkx(chunkx), chunky(chunky), section(section), tile(tile) {}
+
+    bool matches(const worldchunk &chunk, int section, int tile) const
+    {
+        return chunkx == chunk.x && chunky == chunk.y &&
+               this->section == section && this->tile == tile;
+    }
+};
 
 VARP(chunkremip, 0, 0, 1); // optional CPU-for-memory octree collapse on generation/load
 
@@ -440,7 +458,7 @@ static float worldchunkvelocityx = 0, worldchunkvelocityy = 0;
 static int lastworldchunkmotion = -1;
 static vector<int> worldchunkvaupdates;
 static hashset<int> worldchunkvaupdateset(1<<14);
-static int worldchunkvaupdatecursor = 0;
+static hashtable<int, worldsectionowner> worldsectionowners(1<<15);
 static float worldchunkvasectionmillis = 2.0f;
 
 VARP(asyncchunkloads, 2, 4, 4);
@@ -448,15 +466,13 @@ VARP(chunkthreads, 0, 0, 16);
 VARP(chunkcachedist, 0, 0, 0);
 VARP(chunkpendinglimit, 4, 8, 8);
 VARP(chunklookahead, 0, 2, 8);
-VARP(chunkpublishbudget, 4, 6, 33);
-VARP(chunkcleanupbudget, 1, 6, 33);
+VARP(chunkpublishbudget, 4, 8, 33);
+VARP(chunkcleanupbudget, 1, 8, 33);
 VARP(chunksectionbatch, 1, 1, WORLD_MAX_SECTION_BATCH);
-VARP(chunkvabudget, 1, 6, 16);
-VARP(chunkvabatch, 1, 2, WORLD_MAX_VA_BATCH);
-VARP(chunkvastagelimit, 1, 2, 16);
+VARP(chunkvastagelimit, 1, 6, 16);
 
 static cube *generateworldchunk(int chunkx, int chunky);
-static cube *loadworldchunkroot(const char *mname);
+static cube *loadworldchunkroot(const char *mname, int expectedx, int expectedy);
 static cube *prepareworldchunk(worldchunkjob &job);
 static void freepreparedworldchunk(cube *root);
 static int worldchunkloader(void *);
@@ -552,7 +568,7 @@ void clearworldchunks()
     shutdownworldchunkloader();
     worldchunkvaupdates.setsize(0);
     worldchunkvaupdateset.clear();
-    worldchunkvaupdatecursor = 0;
+    worldsectionowners.clear();
     loopv(worldchunks) if(worldchunks[i].root && worldchunks[i].root != worldroot)
     {
         ZoneScopedN("Chunks/Free chunk during clear");
@@ -677,26 +693,45 @@ void markworldchunksdirty(const ivec &bbmin, const ivec &bbmax)
     }
 }
 
-static void syncmountedworldchunk(worldchunk &chunk)
+static bool syncmountedworldchunk(worldchunk &chunk)
 {
-    if(!worldchunkmounted(chunk) || !chunk.root || !worldroot) return;
+    if(!worldchunkmounted(chunk) || !chunk.root || !worldroot) return !chunk.corrupted;
     ZoneScopedN("Chunks/Sync mounted chunk");
     ZoneTextF("%d_%d", chunk.x, chunk.y);
+    bool valid = !chunk.corrupted;
     loopi(WORLD_SECTION_LAYERS) if(chunk.mountedtiles[i]) loopj(WORLD_SECTION_TILES)
     {
         if(!(chunk.mountedtiles[i] & (1U << j))) continue;
         int x = j % WORLD_SECTION_COLUMNS, y = j / WORLD_SECTION_COLUMNS;
         ivec pos(x * WORLD_SECTION_SIZE, y * WORLD_SECTION_SIZE, i * WORLD_SECTION_SIZE);
-        pasteworldcube(lookupcube(ivec(worldchunkorigin(chunk)).add(pos), WORLD_SECTION_SIZE),
+        ivec runtimepos = ivec(worldchunkorigin(chunk)).add(pos);
+        int key = worldchunkvaupdatekey(runtimepos);
+        worldsectionowner *owner = worldsectionowners.access(key);
+        if(!owner || !owner->matches(chunk, i, j))
+        {
+            conoutf(CON_ERROR, "refusing to sync chunk %d_%d section %d:%d: runtime ownership mismatch",
+                    chunk.x, chunk.y, i, j);
+            chunk.corrupted = true;
+            valid = false;
+            continue;
+        }
+        pasteworldcube(lookupcube(runtimepos, WORLD_SECTION_SIZE),
                        lookupworldchunkcube(chunk, pos, WORLD_SECTION_SIZE));
     }
+    return valid;
 }
 
-static void syncmountedworldchunks()
+static bool syncmountedworldchunks()
 {
-    if(worldchunks.empty() || !worldroot) return;
-    loopv(worldchunks) if(!worldchunks[i].saved || worldchunks[i].dirty)
-        syncmountedworldchunk(worldchunks[i]);
+    if(worldchunks.empty() || !worldroot) return true;
+    bool valid = true;
+    loopv(worldchunks)
+    {
+        if(worldchunks[i].corrupted) valid = false;
+        if(!worldchunks[i].saved || worldchunks[i].dirty)
+            valid &= syncmountedworldchunk(worldchunks[i]);
+    }
+    return valid;
 }
 
 static bool mountworldchunktile(worldchunk &chunk, int section, int tile)
@@ -705,8 +740,26 @@ static bool mountworldchunktile(worldchunk &chunk, int section, int tile)
     if(chunk.mountedtiles[section] & tilebit) return false;
     int x = tile % WORLD_SECTION_COLUMNS, y = tile / WORLD_SECTION_COLUMNS;
     ivec pos(x * WORLD_SECTION_SIZE, y * WORLD_SECTION_SIZE, section * WORLD_SECTION_SIZE);
+    ivec runtimepos = ivec(worldchunkorigin(chunk)).add(pos);
+    int key = worldchunkvaupdatekey(runtimepos);
+    worldsectionowner *owner = worldsectionowners.access(key);
+    if(owner)
+    {
+        if(owner->matches(chunk, section, tile))
+        {
+            chunk.mountedtiles[section] |= tilebit;
+            return false;
+        }
+        conoutf(CON_ERROR,
+                "refusing to mount chunk %d_%d section %d:%d over chunk %d_%d section %d:%d",
+                chunk.x, chunk.y, section, tile, owner->chunkx, owner->chunky,
+                int(owner->section), int(owner->tile));
+        chunk.corrupted = true;
+        return false;
+    }
     moveworldcube(lookupworldchunkcube(chunk, pos, WORLD_SECTION_SIZE),
-                  lookupcube(ivec(worldchunkorigin(chunk)).add(pos), WORLD_SECTION_SIZE));
+                  lookupcube(runtimepos, WORLD_SECTION_SIZE));
+    worldsectionowners[key] = worldsectionowner(chunk.x, chunk.y, section, tile);
     chunk.mountedtiles[section] |= tilebit;
     return true;
 }
@@ -717,15 +770,28 @@ static bool unmountworldchunktile(worldchunk &chunk, int section, int tile)
     if(!(chunk.mountedtiles[section] & tilebit)) return false;
     int x = tile % WORLD_SECTION_COLUMNS, y = tile / WORLD_SECTION_COLUMNS;
     ivec pos(x * WORLD_SECTION_SIZE, y * WORLD_SECTION_SIZE, section * WORLD_SECTION_SIZE);
-    cube &c = lookupcube(ivec(worldchunkorigin(chunk)).add(pos), WORLD_SECTION_SIZE);
+    ivec runtimepos = ivec(worldchunkorigin(chunk)).add(pos);
+    int key = worldchunkvaupdatekey(runtimepos);
+    worldsectionowner *owner = worldsectionowners.access(key);
+    if(!owner || !owner->matches(chunk, section, tile))
+    {
+        conoutf(CON_ERROR, "refusing to unmount chunk %d_%d section %d:%d: runtime ownership mismatch",
+                chunk.x, chunk.y, section, tile);
+        chunk.corrupted = true;
+        chunk.mountedtiles[section] &= ~tilebit;
+        return false;
+    }
+    cube &c = lookupcube(runtimepos, WORLD_SECTION_SIZE);
     detachworldcubegeometry(c);
     moveworldcube(c, lookupworldchunkcube(chunk, pos, WORLD_SECTION_SIZE));
+    worldsectionowners.remove(key);
     chunk.mountedtiles[section] &= ~tilebit;
     return true;
 }
 
 static void mountworldchunk(worldchunk &chunk)
 {
+    if(chunk.corrupted) return;
     ZoneScopedN("Chunks/Mount");
     ZoneTextF("%d_%d", chunk.x, chunk.y);
     loopi(WORLD_SECTION_LAYERS) loopj(WORLD_SECTION_TILES)
@@ -810,23 +876,14 @@ static int worldchunkvaupdatekey(const ivec &origin)
           + origin.x / WORLD_SECTION_SIZE;
 }
 
-static ivec worldchunkvaupdateorigin(int key)
-{
-    const int rowsize = WORLD_RUNTIME_SIZE / WORLD_SECTION_SIZE;
-    int x = key % rowsize;
-    key /= rowsize;
-    int y = key % rowsize, z = key / rowsize;
-    return ivec(x, y, z).mul(WORLD_SECTION_SIZE);
-}
-
-static void queueworldchunkvaupdate(const ivec &origin)
+static bool queueworldchunkvaupdate(const ivec &origin)
 {
     int key = worldchunkvaupdatekey(origin);
-    if(worldchunkvaupdateset.access(key)) return;
+    if(worldchunkvaupdateset.access(key)) return false;
     worldchunkvaupdateset.add(key);
     worldchunkvaupdates.add(key);
-    TracyPlot("Chunks/Pending VA sections",
-              int64_t(worldchunkvaupdates.length() - worldchunkvaupdatecursor));
+    TracyPlot("Chunks/Pending VA sections", int64_t(worldchunkvaupdates.length()));
+    return true;
 }
 
 static void queueworldchunksectionupdates(const worldchunk &chunk, int tile,
@@ -841,6 +898,8 @@ static void queueworldchunksectionupdates(const worldchunk &chunk, int tile,
         { 0, 0, -1 }, { 0, 0, 1 }
     };
     int x = tile % WORLD_SECTION_COLUMNS, y = tile / WORLD_SECTION_COLUMNS;
+    ivec bbmins[WORLD_MAX_SECTION_REGIONS], bbmaxs[WORLD_MAX_SECTION_REGIONS];
+    int numregions = 0;
     loopi(numsections)
     {
         ivec center = worldchunkorigin(chunk, sections[i] * WORLD_SECTION_SIZE);
@@ -854,8 +913,21 @@ static void queueworldchunksectionupdates(const worldchunk &chunk, int tile,
             if(bbmin.x < 0 || bbmin.y < 0 || bbmin.z < 0 ||
                bbmax.x > worldsize || bbmax.y > worldsize || bbmax.z > WORLD_MAP_SIZE)
                 continue;
-            queueworldchunkvaupdate(bbmin);
+            if(!queueworldchunkvaupdate(bbmin)) continue;
+            bbmins[numregions] = bbmin;
+            bbmaxs[numregions] = bbmax;
+            numregions++;
         }
+    }
+    if(numregions)
+    {
+        // Runtime cubes have already moved. Their old parent VAs must be
+        // destroyed before another frame can draw them at stale coordinates.
+        // Building replacement VAs remains grouped in processworldchunkvaupdates().
+        bool oldsuppress = suppressworldchunkdirty;
+        suppressworldchunkdirty = true;
+        changedstreaming(bbmins, bbmaxs, numregions, false);
+        suppressworldchunkdirty = oldsuppress;
     }
     ZoneValue(numsections);
 }
@@ -1065,7 +1137,7 @@ static int acquireworldchunksync(int x, int y, int &generated)
     // loadworldchunkroot() resolves the configured home and package paths.
     // A direct fileexists() on the relative media path misses saved chunks
     // when the game was launched with -u, causing them to be regenerated.
-    cube *root = loadworldchunkroot(chunkname);
+    cube *root = loadworldchunkroot(chunkname, x, y);
     bool loaded = root != NULL;
     if(!root)
     {
@@ -1151,7 +1223,7 @@ static int worldchunkreadybacklog(int chunkx, int chunky)
     loopv(worldchunks)
     {
         const worldchunk &chunk = worldchunks[i];
-        if(chunk.loading || !chunk.root || worldchunkfullymounted(chunk) ||
+        if(chunk.loading || chunk.corrupted || !chunk.root || worldchunkfullymounted(chunk) ||
            !worldchunkinview(chunk, chunkx, chunky))
             continue;
         ready++;
@@ -1361,7 +1433,7 @@ static bool findworldchunkmountcolumn(int chunkx, int chunky, int &chunkindex, i
     loopv(worldchunks)
     {
         const worldchunk &chunk = worldchunks[i];
-        if(chunk.loading || !chunk.root || worldchunkfullymounted(chunk) ||
+        if(chunk.loading || chunk.corrupted || !chunk.root || worldchunkfullymounted(chunk) ||
            !worldchunkinview(chunk, chunkx, chunky))
             continue;
         loopj(WORLD_SECTION_TILES)
@@ -1414,60 +1486,26 @@ static bool findworldchunkunloadcolumn(int chunkx, int chunky, int &chunkindex, 
 
 static int processworldchunkvaupdates()
 {
-    int pending = worldchunkvaupdates.length() - worldchunkvaupdatecursor;
+    int pending = worldchunkvaupdates.length();
     if(pending <= 0) return 0;
 
     ZoneScopedN("Chunks/Process deferred VA updates");
     ZoneValue(pending);
-    int target = clamp(int(floorf(chunkvabudget / max(worldchunkvasectionmillis, 0.05f))),
-                       1, chunkvabatch);
-    ivec bbmins[WORLD_MAX_VA_BATCH], bbmaxs[WORLD_MAX_VA_BATCH];
-    int numupdates = 0;
-    while(numupdates < target && worldchunkvaupdatecursor < worldchunkvaupdates.length())
-    {
-        int key = worldchunkvaupdates[worldchunkvaupdatecursor++];
-        worldchunkvaupdateset.remove(key);
-        ivec origin = worldchunkvaupdateorigin(key), actualorigin;
-        int actualsize;
-        cube &section = lookupcube(origin, -WORLD_SECTION_SIZE, actualorigin, actualsize);
-        if(!section.children && isempty(section) && section.material == MAT_AIR &&
-           !(section.ext && section.ext->va))
-            continue;
-        bbmins[numupdates] = origin;
-        bbmaxs[numupdates] = ivec(origin).add(WORLD_SECTION_SIZE);
-        numupdates++;
-    }
-
-    if(worldchunkvaupdatecursor >= worldchunkvaupdates.length())
-    {
-        worldchunkvaupdates.setsize(0);
-        worldchunkvaupdatecursor = 0;
-    }
-    else if(worldchunkvaupdatecursor >= 1024 &&
-            worldchunkvaupdatecursor * 2 >= worldchunkvaupdates.length())
-    {
-        worldchunkvaupdates.remove(0, worldchunkvaupdatecursor);
-        worldchunkvaupdatecursor = 0;
-    }
-    TracyPlot("Chunks/Pending VA sections",
-              int64_t(worldchunkvaupdates.length() - worldchunkvaupdatecursor));
-    if(!numupdates) return 0;
 
     Uint64 start = SDL_GetPerformanceCounter();
-    bool oldsuppress = suppressworldchunkdirty;
-    suppressworldchunkdirty = true;
     {
-        ZoneScopedN("Chunks/Commit deferred VA updates");
-        ZoneValue(numupdates);
-        changedstreaming(bbmins, bbmaxs, numupdates, false);
+        ZoneScopedN("Chunks/Commit invalidated VA updates");
+        ZoneValue(pending);
         commitchanges();
     }
-    suppressworldchunkdirty = oldsuppress;
+    worldchunkvaupdates.setsize(0);
+    worldchunkvaupdateset.clear();
+    TracyPlot("Chunks/Pending VA sections", int64_t(0));
     float sample = max(float((SDL_GetPerformanceCounter() - start) * 1000.0 /
-                             SDL_GetPerformanceFrequency()) / numupdates, 0.05f);
+                             SDL_GetPerformanceFrequency()) / pending, 0.05f);
     worldchunkvasectionmillis = worldchunkvasectionmillis * 0.75f + sample * 0.25f;
     TracyPlot("Chunks/VA section milliseconds", double(worldchunkvasectionmillis));
-    return numupdates;
+    return pending;
 }
 
 static int processworldchunkchanges(int chunkx, int chunky)
@@ -1476,14 +1514,14 @@ static int processworldchunkchanges(int chunkx, int chunky)
     ZoneTextF("focus %d_%d", chunkx, chunky);
     Uint64 phasestart = SDL_GetPerformanceCounter();
     const Uint64 frequency = SDL_GetPerformanceFrequency();
-    int changedcolumns = 0, unloaded = 0,
+    int changedcolumns = 0, unloaded = 0, unloadedsections = 0,
         unloadtarget = WORLD_MAX_COLUMN_CHANGES;
 
     // Cleanup has its own budget and always runs before publication. This
     // prevents rapid movement from leaving a growing trail of live geometry.
     {
         ZoneScopedN("Chunks/Unload columns");
-        while(unloaded < unloadtarget)
+        while(unloaded < unloadtarget && unloadedsections < chunkvastagelimit)
         {
             double elapsed = (SDL_GetPerformanceCounter() - phasestart) * 1000.0 / frequency;
             if(unloaded && elapsed >= chunkcleanupbudget) break;
@@ -1491,9 +1529,11 @@ static int processworldchunkchanges(int chunkx, int chunky)
             if(!findworldchunkunloadcolumn(chunkx, chunky, chunkindex, tile)) break;
             worldchunk &chunk = worldchunks[chunkindex];
             int sections[WORLD_MAX_SECTION_BATCH],
-                numsections = unmountworldchunkcolumnbatch(chunk, tile, sections, chunksectionbatch);
+                numsections = unmountworldchunkcolumnbatch(chunk, tile, sections,
+                    min(chunksectionbatch, chunkvastagelimit - unloadedsections));
             if(!numsections) break;
             queueworldchunksectionupdates(chunk, tile, sections, numsections);
+            unloadedsections += numsections;
             unloaded++;
             changedcolumns++;
         }
@@ -1547,8 +1587,13 @@ static void rebaseworldchunks(int chunkx, int chunky)
     ZoneTextF("%d_%d", chunkx, chunky);
     worldchunkvaupdates.setsize(0);
     worldchunkvaupdateset.clear();
-    worldchunkvaupdatecursor = 0;
     loopv(worldchunks) if(worldchunkmounted(worldchunks[i])) unmountworldchunk(worldchunks[i]);
+    if(worldsectionowners.numelems)
+    {
+        conoutf(CON_ERROR, "discarding %d stale runtime section owners during chunk rebase",
+                worldsectionowners.numelems);
+        worldsectionowners.clear();
+    }
 
     int newfirstx = chunkx - WORLD_RUNTIME_CENTER,
         newfirsty = chunky - WORLD_RUNTIME_CENTER,
@@ -1582,7 +1627,9 @@ static void mountworldchunksafetyregion(int chunkx, int chunky)
     loopv(worldchunks)
     {
         worldchunk &chunk = worldchunks[i];
-        if(chunk.loading || !chunk.root || !worldchunkinview(chunk, chunkx, chunky)) continue;
+        if(chunk.loading || chunk.corrupted || !chunk.root ||
+           !worldchunkinview(chunk, chunkx, chunky))
+            continue;
         loopj(WORLD_SECTION_TILES)
         {
             int x = j % WORLD_SECTION_COLUMNS, y = j / WORLD_SECTION_COLUMNS,
@@ -1650,7 +1697,9 @@ static void rebuildworldchunks(int chunkx, int chunky, int aheadx, int aheady, b
         worldchunk &chunk = worldchunks[i];
         bool shouldmount = worldchunkinview(chunk, chunkx, chunky);
         if(worldchunkmounted(chunk) && !shouldmount) leaving.add(i);
-        else if(!worldchunkmounted(chunk) && !chunk.loading && chunk.root && shouldmount) entering.add(i);
+        else if(!worldchunkmounted(chunk) && !chunk.loading && !chunk.corrupted &&
+                chunk.root && shouldmount)
+            entering.add(i);
     }
 
     if(load) loopv(entering)
@@ -3072,7 +3121,7 @@ cube *loadchildren(stream *f, const ivec &co, int size, bool &failed)
     return c;
 }
 
-static cube *loadworldchunkroot(const char *mname)
+static cube *loadworldchunkroot(const char *mname, int expectedx, int expectedy)
 {
     ZoneScopedN("Chunks/Load from disk");
     ZoneText(mname, strlen(mname));
@@ -3090,8 +3139,13 @@ static cube *loadworldchunkroot(const char *mname)
     mapheader hdr;
     {
         ZoneScopedN("Chunks/Read chunk header");
-        if(!loadmapheader(f, filename, hdr) || hdr.worldsize != WORLD_CHUNK_MAP_SIZE)
+        bool headerok = loadmapheader(f, filename, hdr);
+        if(!headerok || hdr.worldsize != WORLD_CHUNK_MAP_SIZE ||
+           hdr.chunkx != expectedx || hdr.chunky != expectedy)
         {
+            if(headerok && (hdr.chunkx != expectedx || hdr.chunky != expectedy))
+                conoutf(CON_ERROR, "chunk file %s identifies itself as %d_%d, expected %d_%d",
+                        filename, hdr.chunkx, hdr.chunky, expectedx, expectedy);
             delete f;
             return NULL;
         }
@@ -3229,7 +3283,8 @@ static cube *loadpreparedchildren(worldchunkreader &input, int &families, bool &
     return c;
 }
 
-static cube *loadpreparedworldchunk(const char *filename, bool remip, int &families, int &optimized, int &loaderror)
+static cube *loadpreparedworldchunk(const char *filename, int expectedx, int expectedy,
+                                    bool remip, int &families, int &optimized, int &loaderror)
 {
     ZoneScopedN("Chunks/Load prepared from disk");
     ZoneText(filename, strlen(filename));
@@ -3261,8 +3316,16 @@ static cube *loadpreparedworldchunk(const char *filename, bool remip, int &famil
     bool failed;
     {
         ZoneScopedN("Chunks/Read chunk header");
-        failed = !loadmapheader(f, filename, hdr) || hdr.worldsize != WORLD_CHUNK_MAP_SIZE;
-        if(failed) loaderror = 2;
+        bool headerok = loadmapheader(f, filename, hdr);
+        failed = !headerok || hdr.worldsize != WORLD_CHUNK_MAP_SIZE;
+        if(headerok && (hdr.chunkx != expectedx || hdr.chunky != expectedy))
+        {
+            conoutf(CON_ERROR, "chunk file %s identifies itself as %d_%d, expected %d_%d",
+                    filename, hdr.chunkx, hdr.chunky, expectedx, expectedy);
+            failed = true;
+            loaderror = 4;
+        }
+        else if(failed) loaderror = 2;
     }
     worldchunkreader reader(contents.getbuf() + input.tell(), contents.length() - input.tell());
     cube *root = NULL;
@@ -3298,7 +3361,7 @@ static cube *prepareworldchunk(worldchunkjob &job)
     if(job.filename[0])
     {
         ZoneScopedN("Chunks/Prepare disk chunk");
-        cube *root = loadpreparedworldchunk(job.filename, job.remip, job.families,
+        cube *root = loadpreparedworldchunk(job.filename, job.x, job.y, job.remip, job.families,
                                             job.optimized, job.loaderror);
         if(root)
         {
@@ -3372,7 +3435,13 @@ bool save_world(const char *mname)
     memcpy(hdr.magic, "TMAP", 4);
     hdr.version = MAPVERSION;
     hdr.worldsize = worldsize;
-    lilswap(&hdr.version, 2);
+    hdr.chunkx = hdr.chunky = INT_MIN;
+    const char *forwardslash = strrchr(mname, '/'), *backslash = strrchr(mname, '\\'),
+               *basename = !forwardslash ? backslash :
+                           !backslash || forwardslash > backslash ? forwardslash : backslash;
+    basename = basename ? basename + 1 : mname;
+    chunkcoords(basename, hdr.chunkx, hdr.chunky);
+    lilswap(&hdr.version, 4);
     f->write(&hdr, sizeof(hdr));
 
     savec(worldroot, ivec(0, 0, 0), worldsize>>1, f);
@@ -3680,7 +3749,12 @@ void saveworld()
     if(!finishworldchunkloads()) return;
     if(!saveworldconfig()) return;
 
-    syncmountedworldchunks();
+    if(!syncmountedworldchunks())
+    {
+        conoutf(CON_ERROR, "refusing to save world %s: runtime chunk ownership is inconsistent",
+                worldfolder);
+        return;
+    }
     cube *runtimeroot = worldroot;
     const int runtimescale = worldscale, runtimesize = worldsize;
     setvar("mapscale", WORLD_CHUNK_SCALE, true, false);
@@ -3774,6 +3848,19 @@ bool load_world(const char *mname, const char *cname)
     {
         ZoneScopedN("Chunks/Read entry header");
         if(!loadmapheader(f, ogzname, hdr)) { delete f; return false; }
+        const char *forwardslash = strrchr(mname, '/'), *backslash = strrchr(mname, '\\'),
+                   *basename = !forwardslash ? backslash :
+                               !backslash || forwardslash > backslash ? forwardslash : backslash;
+        basename = basename ? basename + 1 : mname;
+        int expectedx, expectedy;
+        if(chunkcoords(basename, expectedx, expectedy) &&
+           (hdr.chunkx != expectedx || hdr.chunky != expectedy))
+        {
+            conoutf(CON_ERROR, "map %s identifies itself as chunk %d_%d, expected %d_%d",
+                    ogzname, hdr.chunkx, hdr.chunky, expectedx, expectedy);
+            delete f;
+            return false;
+        }
     }
 
     {
