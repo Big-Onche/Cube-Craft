@@ -2,6 +2,7 @@
 
 #include "FastNoiseLite.h"
 #include "engine.h"
+#include <errno.h>
 
 void validmapname(char *dst, const char *src, const char *prefix = NULL, const char *alt = "untitled", size_t maxlen = 100)
 {
@@ -1904,7 +1905,7 @@ static void processworldchunkupdates(int chunkx, int chunky, int aheadx, int ahe
     activeworldchunk = findworldchunk(chunkx, chunky);
 }
 
-static void rebaseworldchunks(int chunkx, int chunky)
+static void rebaseworldchunks(int chunkx, int chunky, bool translateplayer = true)
 {
     ZoneScopedN("Chunks/Rebase runtime world");
     ZoneTextF("%d_%d", chunkx, chunky);
@@ -1919,9 +1920,9 @@ static void rebaseworldchunks(int chunkx, int chunky)
     }
 
     int newfirstx = chunkx - WORLD_RUNTIME_CENTER,
-        newfirsty = chunky - WORLD_RUNTIME_CENTER,
-        shiftx = (newfirstx - worldfirstchunkx) * WORLD_CHUNK_SIZE,
-        shifty = (newfirsty - worldfirstchunky) * WORLD_CHUNK_SIZE;
+        newfirsty = chunky - WORLD_RUNTIME_CENTER;
+    long long shiftx = ((long long)newfirstx - worldfirstchunkx) * WORLD_CHUNK_SIZE,
+              shifty = ((long long)newfirsty - worldfirstchunky) * WORLD_CHUNK_SIZE;
     {
         ZoneScopedN("Chunks/Rebase free old octree");
         freeocta(worldroot);
@@ -1929,10 +1930,10 @@ static void rebaseworldchunks(int chunkx, int chunky)
     worldroot = newcubes(F_EMPTY);
     worldfirstchunkx = newfirstx;
     worldfirstchunky = newfirsty;
-    if(player)
+    if(player && translateplayer)
     {
-        player->o.x -= shiftx;
-        player->o.y -= shifty;
+        player->o.x -= float(shiftx);
+        player->o.y -= float(shifty);
     }
     conoutf(CON_DEBUG, "rebased chunk window around %d_%d", chunkx, chunky);
 }
@@ -2140,6 +2141,113 @@ void updateworldchunks(bool force)
     }
     rebuildworldchunks(chunkx, chunky, worldchunkaheadx, worldchunkaheady, force && !rebase, true);
 }
+
+static bool parseworldcoordinate(const char *text, double &coordinate)
+{
+    if(!text || !*text) return false;
+    const char *number = text;
+    if(*number == '+' || *number == '-') ++number;
+    if(!isdigit(*number) && *number != '.') return false;
+
+    char *end = NULL;
+    errno = 0;
+    coordinate = strtod(text, &end);
+    return errno != ERANGE && end != text && !*end &&
+           coordinate >= -DBL_MAX && coordinate <= DBL_MAX;
+}
+
+static void teleportplayer(char *xtext, char *ytext, char *ztext)
+{
+    if(!player)
+    {
+        conoutf(CON_ERROR, "teleport: no player is available");
+        return;
+    }
+
+    double x, y, z;
+    if(!parseworldcoordinate(xtext, x) || !parseworldcoordinate(ytext, y) ||
+       !parseworldcoordinate(ztext, z))
+    {
+        conoutf(CON_ERROR, "usage: /teleport <absolute x> <absolute y> <absolute z>");
+        return;
+    }
+
+    if(worldchunks.empty())
+    {
+        if(x < 0 || x >= worldsize || y < 0 || y >= worldsize ||
+           z < 0 || z >= worldsize)
+        {
+            conoutf(CON_ERROR, "teleport: coordinates must be inside this map (0 <= x, y, z < %d)",
+                    worldsize);
+            return;
+        }
+
+        player->o = vec(float(x), float(y), float(z));
+        player->reset();
+        player->resetinterp();
+        conoutf("teleported to %.2f %.2f %.2f", x, y, z);
+        return;
+    }
+
+    if(z < 0 || z >= WORLD_MAP_SIZE)
+    {
+        conoutf(CON_ERROR, "teleport: z must be in the generated world band (0 <= z < %d)",
+                WORLD_MAP_SIZE);
+        return;
+    }
+
+    double chunkxd = floor(x / WORLD_CHUNK_SIZE),
+           chunkyd = floor(y / WORLD_CHUNK_SIZE);
+    const int chunkmargin = max(int(WORLD_RUNTIME_CENTER), maxchunkdist) + 1,
+              minchunk = INT_MIN + chunkmargin,
+              maxchunk = INT_MAX - chunkmargin;
+    if(chunkxd < minchunk || chunkxd > maxchunk ||
+       chunkyd < minchunk || chunkyd > maxchunk)
+    {
+        double mincoordinate = double(minchunk) * WORLD_CHUNK_SIZE,
+               maxcoordinate = double(maxchunk + 1LL) * WORLD_CHUNK_SIZE;
+        conoutf(CON_ERROR,
+                "teleport: x and y must be in the safe streamed range [%.0f, %.0f)",
+                mincoordinate, maxcoordinate);
+        return;
+    }
+
+    int chunkx = int(chunkxd), chunky = int(chunkyd);
+
+    // A teleport can invalidate every queued streaming request. Stop the
+    // workers and remove their placeholders before preparing the destination
+    // synchronously, ensuring collision exists as soon as the player arrives.
+    shutdownworldchunkloader();
+    for(int i = worldchunks.length() - 1; i >= 0; --i)
+        if(worldchunks[i].loading) worldchunks.removeunordered(i);
+
+    int generated = 0;
+    int destination = acquireworldchunksync(chunkx, chunky, generated);
+    if(!worldchunks.inrange(destination) || !worldchunks[destination].root)
+    {
+        conoutf(CON_ERROR, "teleport: could not prepare destination chunk %d_%d",
+                chunkx, chunky);
+        return;
+    }
+
+    rebaseworldchunks(chunkx, chunky, false);
+    player->o = vec(float(x - double(worldfirstchunkx) * WORLD_CHUNK_SIZE),
+                    float(y - double(worldfirstchunky) * WORLD_CHUNK_SIZE),
+                    float(z));
+    player->reset();
+    player->resetinterp();
+
+    lastworldchunkmotion = -1;
+    worldchunkaheadx = chunkx;
+    worldchunkaheady = chunky;
+    worlddebugcachemillis = -1;
+    rebuildworldchunks(chunkx, chunky, chunkx, chunky, true, true);
+
+    conoutf("teleported to absolute %.2f %.2f %.2f (chunk %d_%d%s)",
+            x, y, z, chunkx, chunky, generated ? ", generated" : "");
+}
+
+COMMANDN(teleport, teleportplayer, "sss");
 
 struct worldgencontext
 {
