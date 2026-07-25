@@ -103,6 +103,8 @@ VARP(worldseed, 0, 1337, INT_MAX);
 
 FVAR(terraincontinentfreq, 0.000001f, 0.0005f, 1.0f);
 FVAR(terrainmountainfreq, 0.000001f, 0.002f, 1.0f);
+FVAR(terrainmountainpeakfreq, 0.000001f, 0.006f, 1.0f);
+FVAR(terrainmountaindetailfreq, 0.000001f, 0.012f, 1.0f);
 FVAR(terrainerosionfreq, 0.000001f, 0.003f, 1.0f);
 FVAR(terrainhillfreq, 0.000001f, 0.01f, 1.0f);
 FVAR(terraindetailfreq, 0.000001f, 0.04f, 1.0f);
@@ -128,6 +130,8 @@ VAR(terrainbeachmaxheight, -32, 2, 32);
 FVAR(terraincontinentheight, 0.0f, 35.0f, float(WORLD_HEIGHT_BLOCKS));
 FVAR(terrainhillheight, 0.0f, 10.0f, float(WORLD_HEIGHT_BLOCKS));
 FVAR(terrainmountainheight, 0.0f, 80.0f, float(WORLD_HEIGHT_BLOCKS));
+FVAR(terrainmountainpeakstrength, 0.0f, 0.45f, 1.0f);
+FVAR(terrainmountaindetailheight, 0.0f, 12.0f, float(WORLD_HEIGHT_BLOCKS));
 FVAR(terrainerosionheight, 0.0f, 15.0f, float(WORLD_HEIGHT_BLOCKS));
 FVAR(terraindetailheight, 0.0f, 2.0f, float(WORLD_HEIGHT_BLOCKS));
 
@@ -170,10 +174,12 @@ static int activeworldseed = 1337;
 
 struct terrainsettings
 {
-    float continentfreq, mountainfreq, erosionfreq, hillfreq, detailfreq;
+    float continentfreq, mountainfreq, mountainpeakfreq, mountaindetailfreq;
+    float erosionfreq, hillfreq, detailfreq;
     float continentwarpfreq, continentwarpamp, featurewarpfreq, featurewarpamp;
     float temperaturefreq, moisturefreq, weirdnessfreq, weirdnessstrength, mountainstonefreq;
-    float continentheight, hillheight, mountainheight, erosionheight, detailheight;
+    float continentheight, hillheight, mountainheight, mountainpeakstrength;
+    float mountaindetailheight, erosionheight, detailheight;
     float landmasklow, landmaskhigh, mountainmasklow, mountainmaskhigh;
     float deserttemperature, desertmoisture, forestmoisture;
     float foresttreedensity, plainstreedensity;
@@ -190,6 +196,8 @@ struct terrainsettings
 
     terrainsettings()
         : continentfreq(terraincontinentfreq), mountainfreq(terrainmountainfreq),
+          mountainpeakfreq(terrainmountainpeakfreq),
+          mountaindetailfreq(terrainmountaindetailfreq),
           erosionfreq(terrainerosionfreq), hillfreq(terrainhillfreq), detailfreq(terraindetailfreq),
           continentwarpfreq(terraincontinentwarpfreq), continentwarpamp(terraincontinentwarpamp),
           featurewarpfreq(terrainfeaturewarpfreq), featurewarpamp(terrainfeaturewarpamp),
@@ -197,7 +205,8 @@ struct terrainsettings
           weirdnessfreq(terrainweirdnessfreq), weirdnessstrength(terrainweirdnessstrength),
           mountainstonefreq(terrainmountainstonefreq),
           continentheight(terraincontinentheight), hillheight(terrainhillheight),
-          mountainheight(terrainmountainheight), erosionheight(terrainerosionheight),
+          mountainheight(terrainmountainheight), mountainpeakstrength(terrainmountainpeakstrength),
+          mountaindetailheight(terrainmountaindetailheight), erosionheight(terrainerosionheight),
           detailheight(terraindetailheight), landmasklow(terrainlandmasklow),
           landmaskhigh(terrainlandmaskhigh), mountainmasklow(terrainmountainmasklow),
           mountainmaskhigh(terrainmountainmaskhigh), deserttemperature(terraindeserttemperature),
@@ -2252,7 +2261,7 @@ COMMANDN(teleport, teleportplayer, "sss");
 struct worldgencontext
 {
     FastNoiseLite continentwarp, featurewarp;
-    FastNoiseLite continent, mountains, erosion, hills, detail;
+    FastNoiseLite continent, mountains, mountainpeaks, mountaindetail, erosion, hills, detail;
     FastNoiseLite temperature, moisture, weirdness, biomeblend, rockiness;
     FastNoiseLite caves, largecaves, tunnela, tunnelb, lakeshape;
     terrainsettings terrain;
@@ -2277,6 +2286,8 @@ struct worldgencontext
         setupworldwarp(continentwarp, seed ^ 0x6C8E9CF5, terrain.continentwarpfreq, terrain.continentwarpamp);
         setupworldwarp(featurewarp, seed ^ 0x35A4F2D1, terrain.featurewarpfreq, terrain.featurewarpamp);
         setupworldnoise(continent, mountains, erosion, hills, detail, seed, terrain);
+        setupworldnoiselayer(mountainpeaks, seed ^ 0x0F4C2A91, terrain.mountainpeakfreq, 2);
+        setupworldnoiselayer(mountaindetail, seed ^ 0x63D8B5E7, terrain.mountaindetailfreq, 4);
         setupworldnoiselayer(temperature, seed ^ 0x51D7348B, terrain.temperaturefreq, 3);
         setupworldnoiselayer(moisture, seed ^ 0x2F6E2B1D, terrain.moisturefreq, 3);
         setupworldnoiselayer(weirdness, seed ^ 0x749A7C15, terrain.weirdnessfreq, 3);
@@ -2575,6 +2586,8 @@ static int generateworldterrainheight(const worldgencontext &ctx, int chunkx, in
 
     const float continental = ctx.continent.GetNoise(continentx, contingenty),
                 mountains = ctx.mountains.GetNoise(featurex, featurey),
+                mountainpeaks = ctx.mountainpeaks.GetNoise(featurex, featurey),
+                mountaindetail = ctx.mountaindetail.GetNoise(featurex, featurey),
                 erosion = ctx.erosion.GetNoise(featurex, featurey),
                 hills = ctx.hills.GetNoise(noisex, noisey),
                 detail = ctx.detail.GetNoise(noisex, noisey);
@@ -2583,11 +2596,19 @@ static int generateworldterrainheight(const worldgencontext &ctx, int chunkx, in
                                                       ctx.terrain.mountainmaskhigh, continental);
     float ridge = 1.0f - fabs(mountains);
     ridge = ridge * ridge * ridge;
+    float peak = worldterrainsmoothstep(0.3f, 0.72f, mountainpeaks * 0.5f + 0.5f);
+    peak *= peak;
+    const float peakvariation = 1.0f - ctx.terrain.mountainpeakstrength * (1.0f - peak),
+                mountainshape = ridge * peakvariation,
+                mountaindetailweight = mountainmask
+                                      * worldterrainsmoothstep(0.05f, 0.6f, ridge);
 
     const float height = ctx.terrain.sealevel
                        + continental * ctx.terrain.continentheight
                        + landmask * hills * ctx.terrain.hillheight
-                       + mountainmask * ridge * ctx.terrain.mountainheight
+                       + mountainmask * mountainshape * ctx.terrain.mountainheight
+                       + mountaindetail * mountaindetailweight
+                         * ctx.terrain.mountaindetailheight
                        - erosion * mountainmask * ctx.terrain.erosionheight
                        + detail * ctx.terrain.detailheight;
     return clamp(int(floor(height + 0.5f)), WORLD_MIN_HEIGHT + 1, WORLD_MAX_HEIGHT - 1) * WORLD_BLOCK_SIZE;
@@ -3921,6 +3942,8 @@ static bool saveworldconfig()
         "terrainload\n\n"
         "terraincontinentfreq %.9g\n"
         "terrainmountainfreq %.9g\n"
+        "terrainmountainpeakfreq %.9g\n"
+        "terrainmountaindetailfreq %.9g\n"
         "terrainerosionfreq %.9g\n"
         "terrainhillfreq %.9g\n"
         "terraindetailfreq %.9g\n"
@@ -3945,6 +3968,8 @@ static bool saveworldconfig()
         "terraincontinentheight %.9g\n"
         "terrainhillheight %.9g\n"
         "terrainmountainheight %.9g\n"
+        "terrainmountainpeakstrength %.9g\n"
+        "terrainmountaindetailheight %.9g\n"
         "terrainerosionheight %.9g\n"
         "terraindetailheight %.9g\n"
         "terrainlandmasklow %.9g\n"
@@ -3981,7 +4006,8 @@ static bool saveworldconfig()
         "terrainlavalakeshapevariation %.9g\n",
         WORLD_GROUND_HEIGHT, WORLD_CHUNK_BLOCKS, WORLD_GRID_POWER, WORLD_BLOCK_SIZE, activeworldseed,
         WORLD_MIN_HEIGHT, WORLD_MAX_HEIGHT,
-        terraincontinentfreq, terrainmountainfreq, terrainerosionfreq, terrainhillfreq, terraindetailfreq,
+        terraincontinentfreq, terrainmountainfreq, terrainmountainpeakfreq, terrainmountaindetailfreq,
+        terrainerosionfreq, terrainhillfreq, terraindetailfreq,
         terraincontinentwarpfreq, terraincontinentwarpamp, terrainfeaturewarpfreq, terrainfeaturewarpamp,
         terraintemperaturefreq, terrainmoisturefreq, terrainweirdnessfreq, terrainweirdnessstrength,
         terrainmountainstonefreq, terrainsealevel, terrainsnowheight,
@@ -3989,6 +4015,7 @@ static bool saveworldconfig()
         terrainbiomeblend, terraincoastwidth, terraincoastvariation,
         terrainbeachminheight, terrainbeachmaxheight,
         terraincontinentheight, terrainhillheight, terrainmountainheight,
+        terrainmountainpeakstrength, terrainmountaindetailheight,
         terrainerosionheight, terraindetailheight, terrainlandmasklow, terrainlandmaskhigh,
         terrainmountainmasklow, terrainmountainmaskhigh, terraindeserttemperature,
         terraindesertmoisture, terrainforestmoisture,
