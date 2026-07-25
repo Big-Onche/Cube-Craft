@@ -476,6 +476,7 @@ VARP(chunkpublishbudget, 4, 8, 33);
 VARP(chunkcleanupbudget, 1, 8, 33);
 VARP(chunksectionbatch, 1, 1, WORLD_MAX_SECTION_BATCH);
 VARP(chunkvastagelimit, 1, 6, 16);
+VARP(chunksurfaceloaddepth, 0, 4, WORLD_SECTION_LAYERS - 1); // depth in 16-block sections
 
 static cube *generateworldchunk(int chunkx, int chunky);
 static cube *loadworldchunkroot(const char *mname, int expectedx, int expectedy);
@@ -1488,11 +1489,15 @@ static long long worldchunksectionpriority(worldchunk &chunk, int tile, int sect
                             0, int(WORLD_SECTION_LAYERS) - 1));
     int dx = sectionpos.x - focussection.x, dy = sectionpos.y - focussection.y,
         dz = section - focussection.z,
-        surfacedelta = worldchunksurfacesection(chunk, tile);
-    surfacedelta = surfacedelta >= 0 ? abs(section - surfacedelta) : WORLD_SECTION_LAYERS;
+        surfacesection = worldchunksurfacesection(chunk, tile),
+        surfacedelta = surfacesection >= 0 ? abs(section - surfacesection)
+                                           : WORLD_SECTION_LAYERS;
 
     bool nearplayer = abs(dx) <= 1 && abs(dy) <= 1 && abs(dz) <= 1,
-         surface = surfacedelta <= 1,
+         surface = section == surfacesection,
+         surfacesupport = surfacesection >= 0 && section < surfacesection &&
+                          surfacesection - section <= chunksurfaceloaddepth,
+         surfaceband = surface || surfacesupport,
          content = worldchunksectionhascontent(chunk, tile, section);
     int visibility = camera1 ? isvisiblebb(origin, ivec(WORLD_SECTION_SIZE,
                                                         WORLD_SECTION_SIZE,
@@ -1500,8 +1505,8 @@ static long long worldchunksectionpriority(worldchunk &chunk, int tile, int sect
                              : VFC_FULL_VISIBLE;
     bool visible = visibility == VFC_FULL_VISIBLE || visibility == VFC_PART_VISIBLE;
     int tier = nearplayer ? 0 :
-               surface && visible ? 1 :
-               surface ? 2 :
+               surfaceband && visible ? 1 :
+               surfaceband ? 2 :
                visible && content ? 3 :
                content ? 4 : 5;
 
