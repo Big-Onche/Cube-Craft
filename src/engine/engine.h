@@ -214,6 +214,7 @@ extern const cube &neighbourcube(const cube &c, int orient, const ivec &co, int 
 extern void resetclipplanes();
 extern void clearworldchunks();
 extern int getworldsectionsize();
+extern bool isworldleafcube(const cube &c);
 extern int getmippedtexture(const cube &p, int orient);
 extern void forcemip(cube &c, bool fixtex = true);
 extern bool subdividecube(cube &c, bool fullcheck=true, bool brighten=true);

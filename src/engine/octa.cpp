@@ -953,6 +953,13 @@ static inline bool occludesface(const cube &c, int orient, const ivec &o, int si
     return true;
 }
 
+static inline bool sharedleafface(const cube &c, const cube &o, int size, int nsize)
+{
+    // Keep one two-sided plane between equal leaf blocks instead of two
+    // coincident planes or no plane at all.
+    return nsize == size && !o.children && isworldleafcube(c) && isworldleafcube(o);
+}
+
 bool visibleface(const cube &c, int orient, const ivec &co, int size, ushort mat, ushort nmat, ushort matmask)
 {
     if(mat != MAT_AIR)
@@ -970,6 +977,8 @@ bool visibleface(const cube &c, int orient, const ivec &co, int size, ushort mat
     const cube &o = neighbourcube(c, orient, co, size, no, nsize);
 
     int opp = opposite(orient);
+    if(mat == MAT_AIR && sharedleafface(c, o, size, nsize))
+        return (orient&1) != 0;
     if(nsize > size || (nsize == size && !o.children))
     {
         if(o.material)
@@ -1011,6 +1020,8 @@ bool visiblefaceagainst(const cube &c, int orient, const ivec &co, int size,
     }
 
     int opp = opposite(orient);
+    if(mat == MAT_AIR && sharedleafface(c, o, size, nsize))
+        return (orient&1) != 0;
     if(nsize > size || (nsize == size && !o.children))
     {
         if(o.material)
@@ -1068,6 +1079,7 @@ int classifyface(const cube &c, int orient, const ivec &co, int size)
     if(&o==&c) return 0;
 
     int opp = opposite(orient);
+    bool leafshared = sharedleafface(c, o, size, nsize);
     if(nsize > size || (nsize == size && !o.children))
     {
         if(o.material)
@@ -1125,6 +1137,11 @@ int classifyface(const cube &c, int orient, const ivec &co, int size)
         }
     }
 
+    if(leafshared)
+    {
+        if(orient&1) forcevis |= 1;
+        else forcevis &= ~1;
+    }
     if(forcevis&2 && !solid && !collideface(c, orient)) forcevis &= ~2;
     return forcevis;
 }
@@ -1168,6 +1185,8 @@ int visibletris(const cube &c, int orient, const ivec &co, int size, ushort vmat
     no.mask(0xFFF);
     ivec2 cf[4], of[4];
     int opp = opposite(orient), numo = 0, numc;
+    if(vmat == MAT_AIR && sharedleafface(c, o, size, nsize))
+        return orient&1 ? vis : vis&notouch;
     if(nsize > size || (nsize == size && !o.children))
     {
         if(o.material)

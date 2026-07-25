@@ -282,6 +282,21 @@ static int worldgrasstexture = DEFAULT_GEOM, worldgrasssidetexture = DEFAULT_GEO
            worlddirttexture = DEFAULT_GEOM, worldstonetexture = DEFAULT_GEOM,
            worldsandtexture = DEFAULT_GEOM, worldsnowtexture = DEFAULT_GEOM,
            worldwoodtexture = DEFAULT_GEOM, worldleaftexture = DEFAULT_GEOM;
+static void updateleavesalpha();
+static void setworldleavesalpha(cube *root, bool enabled);
+VARFP(leavesalpha, 0, 1, 1, updateleavesalpha());
+
+static bool isworldleaftexture(const cube &c)
+{
+    if(worldleaftexture == DEFAULT_GEOM || c.children || isempty(c)) return false;
+    loopi(6) if(c.texture[i] != worldleaftexture) return false;
+    return true;
+}
+
+bool isworldleafcube(const cube &c)
+{
+    return leavesalpha != 0 && isworldleaftexture(c);
+}
 
 static terraincubetype *findterraincube(const char *name)
 {
@@ -342,7 +357,14 @@ static bool loadterrain()
     loopv(terraincubetypes)
     {
         terraincubetype &type = *terraincubetypes[i];
-        defformatstring(command, "texture 0 %s; texscale %.9g", escapestring(type.texture), type.texsize);
+        const char *texture = escapestring(type.texture);
+        string command;
+        if(&type == leaves)
+            formatstring(command, "setshader alphaworld; texture 0 %s; texture a %s; texscale %.9g; texalpha 1 1",
+                         texture, texture, type.texsize);
+        else
+            formatstring(command, "setshader stdworld; texture 0 %s; texscale %.9g",
+                         texture, type.texsize);
         execute(command);
         type.slot = slots.last()->variants->index;
     }
@@ -366,6 +388,7 @@ static bool loadterrain()
     worldsnowtexture = snow->slot;
     worldwoodtexture = wood->slot;
     worldleaftexture = leaves->slot;
+    setworldleavesalpha(worldroot, leavesalpha != 0);
     conoutf(CON_DEBUG, "loaded %d terrain cube definitions", terraincubetypes.length());
     return true;
 }
@@ -466,6 +489,30 @@ static vector<int> worldchunkvaupdates;
 static hashset<int> worldchunkvaupdateset(1<<14);
 static hashtable<int, worldsectionowner> worldsectionowners(1<<15);
 static float worldchunkvasectionmillis = 2.0f;
+
+static void setworldleavesalpha(cube *root, bool enabled)
+{
+    if(!root || worldleaftexture == DEFAULT_GEOM) return;
+    loopi(8)
+    {
+        cube &c = root[i];
+        if(c.children) setworldleavesalpha(c.children, enabled);
+        else if(isworldleaftexture(c))
+        {
+            if(enabled) c.material |= MAT_ALPHA;
+            else c.material &= ~MAT_ALPHA;
+            c.visible = c.merged = 0;
+        }
+    }
+}
+
+static void updateleavesalpha()
+{
+    setworldleavesalpha(worldroot, leavesalpha != 0);
+    loopv(worldchunks) if(worldchunks[i].root && worldchunks[i].root != worldroot)
+        setworldleavesalpha(worldchunks[i].root, leavesalpha != 0);
+    if(worldroot) allchanged();
+}
 
 VARP(asyncchunkloads, 2, 4, 4);
 VARP(chunkthreads, 0, 0, 16);
@@ -1455,6 +1502,7 @@ static int processworldchunkresults()
             ZoneValue(job->families);
             worldchunk &chunk = worldchunks[index];
             chunk.root = job->root;
+            setworldleavesalpha(chunk.root, leavesalpha != 0);
             chunk.loading = false;
             chunk.saved = job->loaded;
             chunk.dirty = false;
@@ -2222,10 +2270,10 @@ static int remipworldchunk(cube *root, bool prepared, int &families, SDL_atomic_
     return merged;
 }
 
-static void setworldcubetexture(cube &c, int texture, int toptexture = -1)
+static void setworldcubetexture(cube &c, int texture, int toptexture = -1, int material = MAT_AIR)
 {
     solidfaces(c);
-    c.material = MAT_AIR;
+    c.material = material;
     loopi(6) c.texture[i] = texture;
     if(toptexture >= 0) c.texture[O_TOP] = toptexture;
 }
@@ -2999,7 +3047,8 @@ static bool placeworldtrees(worldgencontext &ctx, cube *root, int chunkx, int ch
         loopv(leaves)
         {
             cube &c = lookupworldgenblock(ctx, root, leaves[i]);
-            if(isempty(c) && c.material == MAT_AIR) setworldcubetexture(c, ctx.leaftexture);
+            if(isempty(c) && c.material == MAT_AIR)
+                setworldcubetexture(c, ctx.leaftexture, -1, leavesalpha ? MAT_ALPHA : MAT_AIR);
         }
         loopv(wood)
         {
@@ -3278,6 +3327,7 @@ static cube *loadworldchunkroot(const char *mname, int expectedx, int expectedy)
         freeocta(root);
         return NULL;
     }
+    setworldleavesalpha(root, leavesalpha != 0);
     return root;
 }
 
@@ -3455,6 +3505,7 @@ static cube *loadpreparedworldchunk(const char *filename, int expectedx, int exp
         families = 0;
         return NULL;
     }
+    setworldleavesalpha(root, leavesalpha != 0);
     if(remip)
     {
         ZoneScopedN("Chunks/Remip loaded octree");
