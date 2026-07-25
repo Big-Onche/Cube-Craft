@@ -104,7 +104,7 @@ VARP(worldseed, 0, 1337, INT_MAX);
 FVAR(terraincontinentfreq, 0.000001f, 0.0005f, 1.0f);
 FVAR(terrainmountainfreq, 0.000001f, 0.002f, 1.0f);
 FVAR(terrainmountainpeakfreq, 0.000001f, 0.006f, 1.0f);
-FVAR(terrainmountaindetailfreq, 0.000001f, 0.012f, 1.0f);
+FVAR(terrainmountaindetailfreq, 0.000001f, 0.018f, 1.0f);
 FVAR(terrainerosionfreq, 0.000001f, 0.003f, 1.0f);
 FVAR(terrainhillfreq, 0.000001f, 0.01f, 1.0f);
 FVAR(terraindetailfreq, 0.000001f, 0.04f, 1.0f);
@@ -117,6 +117,7 @@ FVAR(terrainmoisturefreq, 0.000001f, 0.0006f, 1.0f);
 FVAR(terrainweirdnessfreq, 0.000001f, 0.001f, 1.0f);
 FVAR(terrainweirdnessstrength, 0.0f, 0.15f, 1.0f);
 FVAR(terrainmountainstonefreq, 0.000001f, 0.08f, 1.0f);
+FVAR(terrainmountainmoistureboost, 0.0f, 0.3f, 1.0f);
 
 VAR(terrainsealevel, WORLD_MIN_HEIGHT + 1, 0, WORLD_MAX_HEIGHT - 1);
 VAR(terrainsnowheight, WORLD_MIN_HEIGHT + 1, 70, WORLD_MAX_HEIGHT - 1);
@@ -130,8 +131,8 @@ VAR(terrainbeachmaxheight, -32, 2, 32);
 FVAR(terraincontinentheight, 0.0f, 35.0f, float(WORLD_HEIGHT_BLOCKS));
 FVAR(terrainhillheight, 0.0f, 10.0f, float(WORLD_HEIGHT_BLOCKS));
 FVAR(terrainmountainheight, 0.0f, 80.0f, float(WORLD_HEIGHT_BLOCKS));
-FVAR(terrainmountainpeakstrength, 0.0f, 0.45f, 1.0f);
-FVAR(terrainmountaindetailheight, 0.0f, 12.0f, float(WORLD_HEIGHT_BLOCKS));
+FVAR(terrainmountainpeakstrength, 0.0f, 0.6f, 1.0f);
+FVAR(terrainmountaindetailheight, 0.0f, 18.0f, float(WORLD_HEIGHT_BLOCKS));
 FVAR(terrainerosionheight, 0.0f, 15.0f, float(WORLD_HEIGHT_BLOCKS));
 FVAR(terraindetailheight, 0.0f, 2.0f, float(WORLD_HEIGHT_BLOCKS));
 
@@ -178,6 +179,7 @@ struct terrainsettings
     float erosionfreq, hillfreq, detailfreq;
     float continentwarpfreq, continentwarpamp, featurewarpfreq, featurewarpamp;
     float temperaturefreq, moisturefreq, weirdnessfreq, weirdnessstrength, mountainstonefreq;
+    float mountainmoistureboost;
     float continentheight, hillheight, mountainheight, mountainpeakstrength;
     float mountaindetailheight, erosionheight, detailheight;
     float landmasklow, landmaskhigh, mountainmasklow, mountainmaskhigh;
@@ -204,6 +206,7 @@ struct terrainsettings
           temperaturefreq(terraintemperaturefreq), moisturefreq(terrainmoisturefreq),
           weirdnessfreq(terrainweirdnessfreq), weirdnessstrength(terrainweirdnessstrength),
           mountainstonefreq(terrainmountainstonefreq),
+          mountainmoistureboost(terrainmountainmoistureboost),
           continentheight(terraincontinentheight), hillheight(terrainhillheight),
           mountainheight(terrainmountainheight), mountainpeakstrength(terrainmountainpeakstrength),
           mountaindetailheight(terrainmountaindetailheight), erosionheight(terrainerosionheight),
@@ -2267,6 +2270,7 @@ struct worldgencontext
     terrainsettings terrain;
     int heightmap[WORLD_CHUNK_BLOCKS * WORLD_CHUNK_BLOCKS];
     uchar biomemap[WORLD_CHUNK_BLOCKS * WORLD_CHUNK_BLOCKS];
+    uchar mountainmap[WORLD_CHUNK_BLOCKS * WORLD_CHUNK_BLOCKS];
     uchar coastmap[WORLD_CHUNK_BLOCKS * WORLD_CHUNK_BLOCKS];
     uchar rockmap[WORLD_CHUNK_BLOCKS * WORLD_CHUNK_BLOCKS];
     int seed, grasstexture, grasssidetexture, dirttexture, stonetexture, sandtexture, snowtexture,
@@ -2575,7 +2579,8 @@ static float worldterrainsmoothstep(float low, float high, float value)
     return t * t * (3.0f - 2.0f * t);
 }
 
-static int generateworldterrainheight(const worldgencontext &ctx, int chunkx, int chunky, int blockx, int blocky)
+static int generateworldterrainheight(const worldgencontext &ctx, int chunkx, int chunky,
+                                      int blockx, int blocky, float *mountainweight = NULL)
 {
     const float noisex = float(chunkx) * WORLD_CHUNK_BLOCKS + blockx + 10000.5f,
                 noisey = float(chunky) * WORLD_CHUNK_BLOCKS + blocky - 10000.5f;
@@ -2602,6 +2607,7 @@ static int generateworldterrainheight(const worldgencontext &ctx, int chunkx, in
                 mountainshape = ridge * peakvariation,
                 mountaindetailweight = mountainmask
                                       * worldterrainsmoothstep(0.05f, 0.6f, ridge);
+    if(mountainweight) *mountainweight = mountaindetailweight;
 
     const float height = ctx.terrain.sealevel
                        + continental * ctx.terrain.continentheight
@@ -2680,7 +2686,7 @@ static void generateworldcoastmap(worldgencontext &ctx, int chunkx, int chunky)
 }
 
 static int generateworldbiome(const worldgencontext &ctx, int chunkx, int chunky, int blockx, int blocky,
-                              int height)
+                              int height, float mountainweight)
 {
     if(height < ctx.terrain.sealevel * WORLD_BLOCK_SIZE) return BIOME_OCEAN;
 
@@ -2689,8 +2695,10 @@ static int generateworldbiome(const worldgencontext &ctx, int chunkx, int chunky
                 weirdness = ctx.weirdness.GetNoise(noisex, noisey),
                 temperature = ctx.temperature.GetNoise(noisex, noisey)
                             + weirdness * ctx.terrain.weirdnessstrength,
-                moisture = ctx.moisture.GetNoise(noisex, noisey)
-                         - weirdness * ctx.terrain.weirdnessstrength,
+                moisture = clamp(ctx.moisture.GetNoise(noisex, noisey)
+                               - weirdness * ctx.terrain.weirdnessstrength
+                               + mountainweight * ctx.terrain.mountainmoistureboost,
+                                 -1.0f, 1.0f),
                 heightblocks = height / float(WORLD_BLOCK_SIZE);
 
     if(ctx.terrain.biomeblend <= 0)
@@ -2750,7 +2758,11 @@ static bool generateworldheightmap(worldgencontext &ctx, int chunkx, int chunky)
             loop(x, WORLD_CHUNK_BLOCKS)
             {
                 const int index = y * WORLD_CHUNK_BLOCKS + x;
-                ctx.heightmap[index] = generateworldterrainheight(ctx, chunkx, chunky, x, y);
+                float mountainweight;
+                ctx.heightmap[index] = generateworldterrainheight(ctx, chunkx, chunky, x, y,
+                                                                  &mountainweight);
+                ctx.mountainmap[index] = uchar(clamp(int(floor(mountainweight * 255.0f + 0.5f)),
+                                                     0, 255));
             }
         }
     }
@@ -2766,7 +2778,9 @@ static bool generateworldheightmap(worldgencontext &ctx, int chunkx, int chunky)
             loop(x, WORLD_CHUNK_BLOCKS)
             {
                 const int index = y * WORLD_CHUNK_BLOCKS + x;
-                ctx.biomemap[index] = generateworldbiome(ctx, chunkx, chunky, x, y, ctx.heightmap[index]);
+                ctx.biomemap[index] = generateworldbiome(ctx, chunkx, chunky, x, y,
+                                                         ctx.heightmap[index],
+                                                         ctx.mountainmap[index] / 255.0f);
                 ctx.rockmap[index] = generateworldrock(ctx, chunkx, chunky, x, y, ctx.heightmap[index]);
             }
         }
@@ -3299,11 +3313,14 @@ static bool placeworldtrees(worldgencontext &ctx, cube *root, int chunkx, int ch
             if(x == -halo && ctx.iscanceled()) return false;
             const bool inside = x >= 0 && x < WORLD_CHUNK_BLOCKS &&
                                 y >= 0 && y < WORLD_CHUNK_BLOCKS;
-            const int index = inside ? y * WORLD_CHUNK_BLOCKS + x : 0,
-                      height = inside ? ctx.heightmap[index]
-                                      : generateworldterrainheight(ctx, chunkx, chunky, x, y),
+            const int index = inside ? y * WORLD_CHUNK_BLOCKS + x : 0;
+            float mountainweight = inside ? ctx.mountainmap[index] / 255.0f : 0.0f;
+            const int height = inside ? ctx.heightmap[index]
+                                      : generateworldterrainheight(ctx, chunkx, chunky, x, y,
+                                                                   &mountainweight),
                       biome = inside ? ctx.biomemap[index]
-                                     : generateworldbiome(ctx, chunkx, chunky, x, y, height);
+                                     : generateworldbiome(ctx, chunkx, chunky, x, y, height,
+                                                          mountainweight);
             if(biome != BIOME_FOREST && biome != BIOME_PLAINS) continue;
             if(inside ? ctx.rockmap[index] != 0
                       : generateworldrock(ctx, chunkx, chunky, x, y, height)) continue;
@@ -3956,6 +3973,7 @@ static bool saveworldconfig()
         "terrainweirdnessfreq %.9g\n"
         "terrainweirdnessstrength %.9g\n"
         "terrainmountainstonefreq %.9g\n"
+        "terrainmountainmoistureboost %.9g\n"
         "terrainsealevel %d\n"
         "terrainsnowheight %d\n"
         "terrainmountainstonelow %d\n"
@@ -4010,7 +4028,7 @@ static bool saveworldconfig()
         terrainerosionfreq, terrainhillfreq, terraindetailfreq,
         terraincontinentwarpfreq, terraincontinentwarpamp, terrainfeaturewarpfreq, terrainfeaturewarpamp,
         terraintemperaturefreq, terrainmoisturefreq, terrainweirdnessfreq, terrainweirdnessstrength,
-        terrainmountainstonefreq, terrainsealevel, terrainsnowheight,
+        terrainmountainstonefreq, terrainmountainmoistureboost, terrainsealevel, terrainsnowheight,
         terrainmountainstonelow, terrainmountainstonehigh,
         terrainbiomeblend, terraincoastwidth, terraincoastvariation,
         terrainbeachminheight, terrainbeachmaxheight,
