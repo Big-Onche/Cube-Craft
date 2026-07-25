@@ -453,6 +453,7 @@ VARP(chunkcleanupbudget, 1, 6, 33);
 VARP(chunksectionbatch, 1, 1, WORLD_MAX_SECTION_BATCH);
 VARP(chunkvabudget, 1, 6, 16);
 VARP(chunkvabatch, 1, 2, WORLD_MAX_VA_BATCH);
+VARP(chunkvastagelimit, 1, 2, 16);
 
 static cube *generateworldchunk(int chunkx, int chunky);
 static cube *loadworldchunkroot(const char *mname);
@@ -1455,13 +1456,13 @@ static int processworldchunkvaupdates()
     Uint64 start = SDL_GetPerformanceCounter();
     bool oldsuppress = suppressworldchunkdirty;
     suppressworldchunkdirty = true;
-    changedstreaming(bbmins, bbmaxs, numupdates, false);
-    suppressworldchunkdirty = oldsuppress;
     {
         ZoneScopedN("Chunks/Commit deferred VA updates");
         ZoneValue(numupdates);
+        changedstreaming(bbmins, bbmaxs, numupdates, false);
         commitchanges();
     }
+    suppressworldchunkdirty = oldsuppress;
     float sample = max(float((SDL_GetPerformanceCounter() - start) * 1000.0 /
                              SDL_GetPerformanceFrequency()) / numupdates, 0.05f);
     worldchunkvasectionmillis = worldchunkvasectionmillis * 0.75f + sample * 0.25f;
@@ -1500,10 +1501,10 @@ static int processworldchunkchanges(int chunkx, int chunky)
     }
 
     phasestart = SDL_GetPerformanceCounter();
-    int mounted = 0, mounttarget = WORLD_MAX_COLUMN_CHANGES;
+    int mounted = 0, mountedsections = 0, mounttarget = WORLD_MAX_COLUMN_CHANGES;
     {
         ZoneScopedN("Chunks/Mount columns");
-        while(mounted < mounttarget)
+        while(mounted < mounttarget && mountedsections < chunkvastagelimit)
         {
             double elapsed = (SDL_GetPerformanceCounter() - phasestart) * 1000.0 / frequency;
             if(mounted && elapsed >= chunkpublishbudget) break;
@@ -1511,13 +1512,15 @@ static int processworldchunkchanges(int chunkx, int chunky)
             if(!findworldchunkmountcolumn(chunkx, chunky, chunkindex, tile)) break;
             worldchunk &chunk = worldchunks[chunkindex];
             int sections[WORLD_MAX_SECTION_BATCH],
-                numsections = mountworldchunkcolumnbatch(chunk, tile, sections, chunksectionbatch);
+                numsections = mountworldchunkcolumnbatch(chunk, tile, sections,
+                    min(chunksectionbatch, chunkvastagelimit - mountedsections));
             if(!numsections) break;
             queueworldchunksectionupdates(chunk, tile, sections, numsections);
+            mountedsections += numsections;
             mounted++;
             changedcolumns++;
         }
-        ZoneValue(mounted);
+        ZoneValue(mountedsections);
     }
 
     processworldchunkvaupdates();
@@ -1585,7 +1588,7 @@ static void mountworldchunksafetyregion(int chunkx, int chunky)
             int x = j % WORLD_SECTION_COLUMNS, y = j / WORLD_SECTION_COLUMNS,
                 worldtilex = (chunk.x - worldfirstchunkx) * WORLD_SECTION_COLUMNS + x,
                 worldtiley = (chunk.y - worldfirstchunky) * WORLD_SECTION_COLUMNS + y;
-            if(abs(worldtilex - playertilex) > 1 || abs(worldtiley - playertiley) > 1) continue;
+            if(worldtilex != playertilex || worldtiley != playertiley) continue;
             int sections[3], numsections = 0;
             for(int section = max(playersection - 1, 0);
                 section <= min(playersection + 1, int(WORLD_SECTION_LAYERS) - 1);
