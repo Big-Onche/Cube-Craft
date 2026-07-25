@@ -598,26 +598,97 @@ void readychanges(const ivec &bbmin, const ivec &bbmax, cube *c, const ivec &cor
     }
 }
 
+static void readystreamingchanges(const ivec *bbmins, const ivec *bbmaxs, int numregions,
+                                  cube *c, const ivec &cor, int size)
+{
+    uchar possible = 0;
+    loopj(numregions) possible |= octaboxoverlap(cor, size, bbmins[j], bbmaxs[j]);
+    loopi(8) if(possible & (1 << i))
+    {
+        ivec o(i, cor, size);
+        if(c[i].ext)
+        {
+            if(c[i].ext->va)
+            {
+                int hasmerges = c[i].ext->va->hasmerges;
+                destroyva(c[i].ext->va);
+                c[i].ext->va = NULL;
+                if(hasmerges) invalidatemerges(c[i], o, size, false);
+            }
+            freeoctaentities(c[i]);
+            c[i].ext->tjoints = -1;
+        }
+        if(c[i].children)
+        {
+            if(size <= 1)
+            {
+                solidfaces(c[i]);
+                discardchildren(c[i], true);
+                if(c[i].ext) brightencube(c[i]);
+            }
+            else readystreamingchanges(bbmins, bbmaxs, numregions, c[i].children, o, size/2);
+        }
+        else if(c[i].ext) brightencube(c[i]);
+    }
+}
+
 void commitchanges(bool force)
 {
     if(!force && !haschanged) return;
+    ZoneScopedN("Geometry/Commit changes");
     haschanged = false;
 
     int oldlen = valist.length();
-    resetclipplanes();
-    entitiesinoctanodes();
+    {
+        ZoneScopedN("Geometry/Reset clip planes");
+        resetclipplanes();
+    }
+    {
+        ZoneScopedN("Geometry/Reinsert entities");
+        entitiesinoctanodes();
+    }
     inbetweenframes = false;
-    octarender();
+    {
+        ZoneScopedN("Geometry/Rebuild octree render data");
+        octarender();
+    }
     inbetweenframes = true;
-    setupmaterials(oldlen);
-    clearshadowcache();
-    updatevabbs();
+    {
+        ZoneScopedN("Geometry/Setup materials");
+        setupmaterials(oldlen);
+    }
+    {
+        ZoneScopedN("Geometry/Clear shadow cache");
+        clearshadowcache();
+    }
+    {
+        ZoneScopedN("Geometry/Update VA bounds");
+        updatevabbs();
+    }
 }
 
 void changed(const ivec &bbmin, const ivec &bbmax, bool commit)
 {
     markworldchunksdirty(bbmin, bbmax);
-    readychanges(bbmin, bbmax, worldroot, ivec(0, 0, 0), worldsize/2);
+    {
+        ZoneScopedN("Geometry/Invalidate changed region");
+        readychanges(bbmin, bbmax, worldroot, ivec(0, 0, 0), worldsize/2);
+    }
+    haschanged = true;
+
+    if(commit) commitchanges();
+}
+
+void changedstreaming(const ivec *bbmins, const ivec *bbmaxs, int numregions, bool commit)
+{
+    if(numregions <= 0) return;
+    loopi(numregions) markworldchunksdirty(bbmins[i], bbmaxs[i]);
+    {
+        ZoneScopedN("Geometry/Invalidate streaming regions");
+        ZoneValue(numregions);
+        readystreamingchanges(bbmins, bbmaxs, numregions,
+                              worldroot, ivec(0, 0, 0), worldsize/2);
+    }
     haschanged = true;
 
     if(commit) commitchanges();

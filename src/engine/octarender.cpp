@@ -1548,10 +1548,10 @@ VARF(vafacemax, 64, 384, 256*256, allchanged());
 VARF(vafacemin, 0, 96, 256*256, allchanged());
 VARF(vacubesize, 32, 128, 0x1000, allchanged());
 
-int updateva(cube *c, const ivec &co, int size, int csi)
+int updateva(cube *c, const ivec &co, int size, int csi,
+             int worldsectionsize, int facemax, int maxvasize)
 {
     progress("recalculating geometry...");
-    const int worldsectionsize = getworldsectionsize();
     int ccount = 0, cmergemax = vamergemax, chasmerges = vahasmerges;
     neighbourstack[++neighbourdepth] = c;
     loopi(8)                                    // counting number of semi-solid/solid children cubes
@@ -1570,18 +1570,18 @@ int updateva(cube *c, const ivec &co, int size, int csi)
             if(c[i].children)
             {
                 if(c[i].ext && c[i].ext->ents) entstack[++entdepth] = c[i].ext->ents;
-                count += updateva(c[i].children, o, size/2, csi-1);
+                count += updateva(c[i].children, o, size/2, csi-1,
+                                  worldsectionsize, facemax, maxvasize);
                 if(c[i].ext && c[i].ext->ents) --entdepth;
             }
             else count += setcubevisibility(c[i], o, size);
             int tcount = count + (csi <= MAXMERGELEVEL ? vamerges[csi].length() : 0);
-            int facemax = worldsectionsize ? max(vafacemax, 8192) : vafacemax;
             bool makegroup = worldsectionsize > 0 && size >= worldsectionsize &&
-                             size <= min(0x1000, worldsize/2) &&
+                             size <= maxvasize &&
                              (tcount > 0 || varoot.length() > childpos);
             if(tcount > facemax || makegroup ||
                (!worldsectionsize && tcount >= vafacemin && size >= vacubesize) ||
-               size == min(0x1000, worldsize/2))
+               size == maxvasize)
             {
                 loadprogress = clamp(recalcprogress/float(allocnodes), 0.0f, 1.0f);
                 setva(c[i], o, size, csi, makegroup);
@@ -1691,20 +1691,35 @@ void findtjoints()
 
 void octarender()                               // creates va s for all leaf cubes that don't already have them
 {
+    ZoneScopedN("Geometry/Update octree render");
     int csi = 0;
     while(1<<csi < worldsize) csi++;
+    const int worldsectionsize = getworldsectionsize(),
+              facemax = worldsectionsize ? max(vafacemax, 8192) : vafacemax,
+              maxvasize = min(0x1000, worldsize/2);
 
     recalcprogress = 0;
     varoot.setsize(0);
-    updateva(worldroot, ivec(0, 0, 0), worldsize/2, csi-1);
-    loadprogress = 0;
-    flushvbo();
-
-    explicitsky = 0;
-    loopv(valist)
     {
-        vtxarray *va = valist[i];
-        explicitsky += va->sky;
+        ZoneScopedN("Geometry/Build changed vertex arrays");
+        ZoneValue(valist.length());
+        updateva(worldroot, ivec(0, 0, 0), worldsize/2, csi-1,
+                 worldsectionsize, facemax, maxvasize);
+    }
+    loadprogress = 0;
+    {
+        ZoneScopedN("Geometry/Flush vertex buffers");
+        flushvbo();
+    }
+
+    {
+        ZoneScopedN("Geometry/Recount explicit sky");
+        explicitsky = 0;
+        loopv(valist)
+        {
+            vtxarray *va = valist[i];
+            explicitsky += va->sky;
+        }
     }
 
     visibleva = NULL;
