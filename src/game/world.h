@@ -65,7 +65,8 @@ namespace game
 
     struct worldgenerator
     {
-        FastNoiseLite geology, hills, mountainrange, mountainnoise, mountainpeaks;
+        FastNoiseLite geology, hills, coastshape, covenoise, beachnoise;
+        FastNoiseLite mountainrange, mountainnoise, mountainpeaks;
         FastNoiseLite tectonicnoise, tectonicwarp;
         FastNoiseLite temperature, moisture, biomevariation, biomeblend, rockiness;
         FastNoiseLite caves, largecaves, tunnela, tunnelb, lakeshape;
@@ -76,6 +77,8 @@ namespace game
         worldgenerator(int seed, const worldsettings &settings = worldsettings());
 
         worldtectonicsample tectonics(int x, int y, float cavedepth = 0) const;
+        float coasttransitionwidth(int x, int y) const;
+        float maxcoasttransitionwidth() const;
         float fracturecorridor(int x, int y) const;
         int height(int x, int y, worldtectonicsample *tectonics = NULL) const;
         int biome(int x, int y, int height) const;

@@ -159,6 +159,9 @@ namespace game
         // broad and subordinate so changing one frequency scales all geology.
         setupnoise(geology, seed, settings.geologyfrequency, 2, 0.35f);
         setupnoise(hills, seed ^ 0x4A39B70D, settings.geologyfrequency * 3.5f, 2, 0.30f);
+        setupnoise(coastshape, seed ^ 0x57C8E219, settings.geologyfrequency * 8.0f, 1);
+        setupnoise(covenoise, seed ^ 0x2B61D4A7, settings.geologyfrequency * 2.0f, 1);
+        setupnoise(beachnoise, seed ^ 0x73A9C52D, settings.geologyfrequency * 4.0f, 1);
         // A slow field bounds each mountain range. Ridged medium-scale noise
         // builds the massif, while a faster field forms saddles and local peaks.
         setupnoise(mountainrange, seed ^ 0x18F47C53, settings.geologyfrequency * 1.5f, 1);
@@ -190,6 +193,32 @@ namespace game
         const float oceanratio = coverage > 0.0f ? settings.oceancoverage / coverage : 0.5f;
         return oceanratio <= 0.0f ? -0.98f :
                oceanratio >= 1.0f ? 0.98f : oceanratio - 0.5f;
+    }
+
+    static float samplecontinental(const worldgenerator &generator, float noisex, float noisey)
+    {
+        const float base = generator.geology.GetNoise(noisex, noisey),
+                    threshold = landthreshold(generator.settings),
+                    amplitude = generator.settings.geologyfrequency * 48.0f,
+                    coastband = max(amplitude * 3.0f, 0.08f),
+                    coastweight = 1.0f - smoothstep(amplitude, coastband,
+                                                   fabs(base - threshold));
+        return base + generator.covenoise.GetNoise(noisex, noisey) * amplitude * coastweight;
+    }
+
+    static void samplecoastprofile(const worldgenerator &generator, float noisex, float noisey,
+                                   float &beachspan, float &grassrun, float &grasslevel)
+    {
+        const float beachshape = clamp(generator.beachnoise.GetNoise(noisex, noisey)
+                                       * 0.5f + 0.5f, 0.0f, 1.0f),
+                    grassshape = clamp(generator.coastshape.GetNoise(noisex, noisey)
+                                       * 0.5f + 0.5f, 0.0f, 1.0f);
+        // A single sand or dirt terrace is always at least one metre wide.
+        // Rare high beach values produce broad coves; low values form short,
+        // steeper transitions.
+        beachspan = 1.0f + 7.0f * powf(beachshape, 3.0f);
+        grassrun = 2.0f + 10.0f * powf(beachshape, 1.5f);
+        grasslevel = 4.0f + 4.0f * grassshape;
     }
 
     static worldtectonicsample sampletectonics(const worldgenerator &generator, int x, int y,
@@ -320,8 +349,21 @@ namespace game
 
     worldtectonicsample worldgenerator::tectonics(int x, int y, float cavedepth) const
     {
-        const float continental = geology.GetNoise(x + 10000.5f, y - 10000.5f);
+        const float continental = samplecontinental(*this, x + 10000.5f, y - 10000.5f);
         return sampletectonics(*this, x, y, continental, cavedepth);
+    }
+
+    float worldgenerator::coasttransitionwidth(int x, int y) const
+    {
+        float beachspan, grassrun, grasslevel;
+        samplecoastprofile(*this, x + 10000.5f, y - 10000.5f,
+                           beachspan, grassrun, grasslevel);
+        return 3.0f * beachspan + grassrun;
+    }
+
+    float worldgenerator::maxcoasttransitionwidth() const
+    {
+        return 36.0f;
     }
 
     float worldgenerator::fracturecorridor(int x, int y) const
@@ -332,7 +374,7 @@ namespace game
     int worldgenerator::height(int x, int y, worldtectonicsample *tectonics) const
     {
         const float noisex = x + 10000.5f, noisey = y - 10000.5f;
-        const float continental = geology.GetNoise(noisex, noisey);
+        const float continental = samplecontinental(*this, noisex, noisey);
         const float threshold = landthreshold(settings);
         const worldtectonicsample tectonicsample = sampletectonics(*this, x, y, continental, 0);
         if(tectonics) *tectonics = tectonicsample;
@@ -346,6 +388,35 @@ namespace game
             const float hill = clamp(hills.GetNoise(noisex, noisey) * 0.5f + 0.5f, 0.0f, 1.0f);
             elevation = settings.maxcontinentheight
                       * coastrise * (0.55f + 0.30f * inland + 0.15f * hill);
+
+            // Build a deliberate beach cross-section near the continental edge.
+            // A local gradient converts continental density into approximate metres
+            // inland, keeping the profile deterministic and continuous across chunks.
+            if(elevation < 8.0f)
+            {
+                const float gradientstep = 2.0f,
+                            gradientx = (samplecontinental(*this, noisex + gradientstep, noisey)
+                                       - samplecontinental(*this, noisex - gradientstep, noisey))
+                                      / (2.0f * gradientstep),
+                            gradienty = (samplecontinental(*this, noisex, noisey + gradientstep)
+                                       - samplecontinental(*this, noisex, noisey - gradientstep))
+                                      / (2.0f * gradientstep),
+                            gradient = max(sqrtf(gradientx * gradientx + gradienty * gradienty),
+                                           settings.geologyfrequency * 0.35f),
+                            shoredistance = max((continental - threshold) / gradient, 0.0f);
+                float beachspan, grassrun, grasslevel;
+                samplecoastprofile(*this, noisex, noisey, beachspan, grassrun, grasslevel);
+                const float drysandend = 2.0f * beachspan,
+                            dirtend = 3.0f * beachspan;
+                float coastfloor;
+                if(shoredistance < beachspan) coastfloor = 0.0f;
+                else if(shoredistance < drysandend) coastfloor = 1.0f;
+                else if(shoredistance < dirtend) coastfloor = 2.0f;
+                else coastfloor = 2.0f + (grasslevel - 2.0f)
+                                                * smoothstep(dirtend, dirtend + grassrun,
+                                                             shoredistance);
+                elevation = max(elevation, coastfloor);
+            }
             elevation = clamp(elevation, 0.0f, settings.maxcontinentheight)
                       + settings.maxlanduplift * tectonicsample.landuplift;
         }

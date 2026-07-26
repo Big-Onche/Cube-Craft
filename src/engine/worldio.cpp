@@ -2453,7 +2453,8 @@ static void generateworldcoastmap(worldgencontext &ctx, int chunkx, int chunky)
     memset(ctx.coastmap, 0, sizeof(ctx.coastmap));
     if(ctx.settings.coastwidth <= 0) return;
 
-    const int maxcoastwidth = ctx.settings.coastwidth + ctx.settings.coastvariation,
+    const int maxcoastwidth = max(ctx.settings.coastwidth + ctx.settings.coastvariation,
+                                  int(ceil(ctx.generator.maxcoasttransitionwidth()))),
               halo = maxcoastwidth + 1,
               mapsize = WORLD_CHUNK_BLOCKS + 2 * halo,
               maparea = mapsize * mapsize,
@@ -2505,10 +2506,14 @@ static void generateworldcoastmap(worldgencontext &ctx, int chunkx, int chunky)
     {
         const float noisex = float(chunkx) * WORLD_CHUNK_BLOCKS + x + 10000.5f,
                     noisey = float(chunky) * WORLD_CHUNK_BLOCKS + y - 10000.5f,
-                    width = max(ctx.settings.coastwidth
-                              + ctx.generator.biomeblend.GetNoise(noisex, noisey)
-                                * ctx.settings.coastvariation,
-                                0.0f);
+                    configuredwidth = max(ctx.settings.coastwidth
+                                        + ctx.generator.biomeblend.GetNoise(noisex, noisey)
+                                          * ctx.settings.coastvariation,
+                                          0.0f),
+                    profilewidth = ctx.generator.coasttransitionwidth(
+                        chunkx * WORLD_CHUNK_BLOCKS + x,
+                        chunky * WORLD_CHUNK_BLOCKS + y),
+                    width = max(configuredwidth, profilewidth);
         ctx.coastmap[y * WORLD_CHUNK_BLOCKS + x] =
             distance[(y + halo) * mapsize + x + halo] <= int(floor(width * 3.0f + 0.5f));
     }
@@ -3113,7 +3118,8 @@ static bool placeworldtrees(worldgencontext &ctx, cube *root, int chunkx, int ch
               beachmin = (ctx.settings.sealevel
                         + min(ctx.settings.beachminheight, ctx.settings.beachmaxheight)) * WORLD_BLOCK_SIZE,
               beachmax = (ctx.settings.sealevel
-                        + max(ctx.settings.beachminheight, ctx.settings.beachmaxheight)) * WORLD_BLOCK_SIZE;
+                        + max(ctx.settings.beachminheight, ctx.settings.beachmaxheight)) * WORLD_BLOCK_SIZE,
+              coasttreemax = (ctx.settings.sealevel + 2) * WORLD_BLOCK_SIZE;
 
     {
         ZoneScopedN("Chunks/Select tree blocks");
@@ -3131,7 +3137,8 @@ static bool placeworldtrees(worldgencontext &ctx, cube *root, int chunkx, int ch
             if(biome != game::WORLD_BIOME_FOREST && biome != game::WORLD_BIOME_PLAINS) continue;
             if(inside ? ctx.rockmap[index] != 0
                       : generateworldrock(ctx, chunkx, chunky, x, y, height)) continue;
-            if(ctx.settings.coastwidth > 0 && height >= beachmin && height <= beachmax) continue;
+            if(ctx.settings.coastwidth > 0 && height >= beachmin
+            && height <= max(beachmax, coasttreemax)) continue;
             if(generateworldcaveentrance(ctx, chunkx, chunky, x, y, height)) continue;
 
             const float density = biome == game::WORLD_BIOME_FOREST
