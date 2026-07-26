@@ -393,11 +393,14 @@ static void drawatmosphere()
     sunmatrix.mul(invprojmatrix);
     LOCALPARAM(sunmatrix, sunmatrix);
 
-    // optical depth scales for 3 different shells of atmosphere - air, haze, ozone
-    const float earthradius = 6371e3f, earthairheight = 8.4e3f, earthhazeheight = 1.25e3f, earthozoneheight = 50e3f;
+    // Physical dimensions used by the spherical single-scattering integration.
+    const float earthradius = 6371e3f, earthairheight = 8.4e3f, earthhazeheight = 1.25e3f,
+                earthozoneheight = 50e3f, earthatmosphereheight = 100e3f;
     float planetradius = earthradius*atmoplanetsize;
     vec atmoshells = vec(earthairheight, earthhazeheight, earthozoneheight).mul(atmoheight).add(planetradius).square().sub(planetradius*planetradius);
-    LOCALPARAM(opticaldepthparams, vec4(atmoshells, planetradius));
+    LOCALPARAMF(atmosphereparams, planetradius, 1 + earthatmosphereheight*atmoheight/planetradius,
+                earthairheight*atmoheight/planetradius, earthhazeheight*atmoheight/planetradius);
+    LOCALPARAMF(ozoneparams, 25e3f*atmoheight/planetradius, 15e3f*atmoheight/planetradius);
 
     // Henyey-Greenstein approximation, 1/(4pi) * (1 - g^2)/(1 + g^2 - 2gcos)]^1.5
     // Hoffman-Preetham variation uses (1-g)^2 instead of 1-g^2 which avoids excessive glare
@@ -415,21 +418,24 @@ static void drawatmosphere()
     LOCALPARAM(betamie, betam);
     LOCALPARAM(betaozone, betao);
 
-    // extinction in direction of sun
+    // The atmospheric source is neutral solar irradiance. Gameplay sunlight is
+    // already tinted and dimmed at dawn/dusk, so reusing it here applies sunset
+    // extinction twice and incorrectly removes blue from the entire sky.
+    vec suncolor = !atmosunlight.iszero() ? atmosunlight.tocolor() : vec(1.0f, 0.98f, 0.92f);
+    suncolor.mul(atmosunlightscale);
+    extern float hdrgamma;
+    vec sunscale = vec(suncolor).mul(ldrscale).pow(hdrgamma).mul(atmobright * 16);
+    LOCALPARAM(sunlight, vec4(sunscale, atmoalpha));
+    LOCALPARAM(sundir, sunlightdir);
+
+    // Ground-level extinction is only used to color the visible solar disk.
+    // Sky scattering itself evaluates the sun path at each integration sample.
     float sunoffset = sunlightdir.z*planetradius;
     vec sundepth = vec(atmoshells).add(sunoffset*sunoffset).sqrt().sub(sunoffset);
     vec sunweight = vec(betar).mul(sundepth.x).madd(betam, sundepth.y).madd(betao, sundepth.z - sundepth.x);
-    vec sunextinction = vec(sunweight).neg().exp2();
-    vec suncolor = !atmosunlight.iszero() ? atmosunlight.tocolor().mul(atmosunlightscale) : sunlight.tocolor().mul(sunlightscale);
-    // assume sunlight color is gamma encoded, so decode to linear light, then apply extinction
-    extern float hdrgamma;
-    vec sunscale = vec(suncolor).mul(ldrscale).pow(hdrgamma).mul(atmobright * 16).mul(sunextinction);
     float maxsunweight = max(max(sunweight.x, sunweight.y), sunweight.z);
     if(maxsunweight > 127) sunweight.mul(127/maxsunweight);
     sunweight.add(1e-4f);
-    LOCALPARAM(sunweight, sunweight);
-    LOCALPARAM(sunlight, vec4(sunscale, atmoalpha));
-    LOCALPARAM(sundir, sunlightdir);
 
     // invert extinction at zenith to get an approximation of how bright the sun disk should be
     vec zenithdepth = vec(atmoshells).add(planetradius*planetradius).sqrt().sub(planetradius);
@@ -600,4 +606,3 @@ bool hasskybox()
 {
     return skybox[0] || atmo || fogdomemax || cloudbox[0] || cloudlayer[0];
 }
-
