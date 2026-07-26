@@ -92,8 +92,7 @@ namespace game
         return t * t * (3.0f - 2.0f * t);
     }
 
-    static void setupnoise(FastNoiseLite &noise, int seed, float frequency, int octaves,
-                           float gain = 0.5f)
+    static void setupnoise(FastNoiseLite &noise, int seed, float frequency, int octaves, float gain = 0.5f)
     {
         noise.SetSeed(seed);
         noise.SetNoiseType(FastNoiseLite::NoiseType_OpenSimplex2S);
@@ -180,25 +179,21 @@ namespace game
         // A slow field bounds each mountain range. Ridged medium-scale noise
         // builds the massif, while a faster field forms saddles and local peaks.
         setupnoise(mountainrange, seed ^ 0x18F47C53, settings.geologyfrequency * 1.5f, 1);
-        setupnoise(mountainnoise, seed ^ 0x3D72A95B, settings.geologyfrequency * 2.5f,
-                   2, 0.25f);
+        setupnoise(mountainnoise, seed ^ 0x3D72A95B, settings.geologyfrequency * 2.5f, 2, 0.25f);
         setupnoise(mountainpeaks, seed ^ 0x25B46D81, settings.geologyfrequency * 4.5f, 1);
         setupnoise(tectonicnoise, seed ^ 0x68E31DA4, settings.tectonicfrequency, 1);
-        setupwarp(tectonicwarp, seed ^ 0x6C8E9CF5, settings.tectonicfrequency * 0.5f,
-                  settings.tectonicwarpamplitude);
+        setupwarp(tectonicwarp, seed ^ 0x6C8E9CF5, settings.tectonicfrequency * 0.5f, settings.tectonicwarpamplitude);
         setupnoise(temperature, seed ^ 0x51D7348B, settings.temperaturefrequency, 3);
         setupnoise(moisture, seed ^ 0x2F6E2B1D, settings.moisturefrequency, 3);
         setupnoise(biomevariation, seed ^ 0x749A7C15, settings.biomevariationfrequency, 3);
-        setupnoise(biomeblend, seed ^ 0x13C6E91F,
-                   settings.biomeblend > 0 ? 1.0f / settings.biomeblend : 1.0f, 1);
+        setupnoise(biomeblend, seed ^ 0x13C6E91F, settings.biomeblend > 0 ? 1.0f / settings.biomeblend : 1.0f, 1);
         setupnoise(rockiness, seed ^ 0x5E4A19C3, settings.rockfrequency, 2);
         setupnoise(caves, seed ^ 0x7A84F12D, settings.cavefrequency, 2);
         setupnoise(largecaves, seed ^ 0x36B9C7E5, settings.largecavefrequency, 2);
         setupnoise(tunnela, seed ^ 0x19F3A6C7, settings.tunnelfrequency, 2);
         setupnoise(tunnelb, seed ^ 0x5C2D8E91, settings.tunnelfrequency, 2);
         setupnoise(lakeshape, seed ^ 0x43E7B5D9, settings.lavalakeshapefrequency, 2);
-        setupnoise(fracturecorridors, seed ^ 0x278D4A6B,
-                   settings.tunnelfrequency * 0.35f, 1);
+        setupnoise(fracturecorridors, seed ^ 0x278D4A6B,settings.tunnelfrequency * 0.35f, 1);
         setupnoise(fracturevertical, seed ^ 0x71B5C3D9, settings.tunnelfrequency, 1);
     }
 
@@ -206,8 +201,8 @@ namespace game
     {
         const float coverage = settings.oceancoverage + settings.terraincoverage;
         const float oceanratio = coverage > 0.0f ? settings.oceancoverage / coverage : 0.5f;
-        return oceanratio <= 0.0f ? -0.98f :
-               oceanratio >= 1.0f ? 0.98f : oceanratio - 0.5f;
+
+        return oceanratio <= 0.0f ? -0.98f : oceanratio >= 1.0f ? 0.98f : oceanratio - 0.5f;
     }
 
     static float samplecontinental(const worldgenerator &generator, float noisex, float noisey)
@@ -216,18 +211,16 @@ namespace game
                     threshold = landthreshold(generator.settings),
                     amplitude = generator.settings.geologyfrequency * 48.0f,
                     coastband = max(amplitude * 3.0f, 0.08f),
-                    coastweight = 1.0f - smoothstep(amplitude, coastband,
-                                                   fabs(base - threshold));
+                    coastweight = 1.0f - smoothstep(amplitude, coastband, fabs(base - threshold));
+
         return base + generator.covenoise.GetNoise(noisex, noisey) * amplitude * coastweight;
     }
 
-    static void samplecoastprofile(const worldgenerator &generator, float noisex, float noisey,
-                                   float &beachspan, float &plainrun, float &plainlevel)
+    static void samplecoastprofile(const worldgenerator &generator, float noisex, float noisey, float &beachspan, float &plainrun, float &plainlevel)
     {
-        const float beachshape = clamp(generator.beachnoise.GetNoise(noisex, noisey)
-                                       * 0.5f + 0.5f, 0.0f, 1.0f),
-                    grassshape = clamp(generator.coastshape.GetNoise(noisex, noisey)
-                                       * 0.5f + 0.5f, 0.0f, 1.0f);
+        const float beachshape = clamp(generator.beachnoise.GetNoise(noisex, noisey) * 0.5f + 0.5f, 0.0f, 1.0f),
+                    grassshape = clamp(generator.coastshape.GetNoise(noisex, noisey) * 0.5f + 0.5f, 0.0f, 1.0f);
+
         // Broad beaches keep both sand terraces wide. Past them, ordinary coasts
         // settle into a low grass plain before returning to continental relief.
         beachspan = 1.0f + 7.0f * powf(beachshape, 3.0f);
@@ -237,140 +230,97 @@ namespace game
 
     static float samplecliffstrength(const worldgenerator &generator, float noisex, float noisey)
     {
-        const float selector = clamp(generator.cliffnoise.GetNoise(noisex, noisey)
-                                     * 0.5f + 0.5f, 0.0f, 1.0f),
+        const float selector = clamp(generator.cliffnoise.GetNoise(noisex, noisey) * 0.5f + 0.5f, 0.0f, 1.0f),
                     chance = clamp(generator.settings.cliffchance * 0.01f, 0.0f, 1.0f),
                     center = 1.0f - chance;
+
         if(chance <= 0.0f) return 0.0f;
         if(chance >= 1.0f) return 1.0f;
+
         // Cliffs occur in coherent coastal sections, not as per-column accidents.
         // An eight-percent feather on each side keeps their boundaries gradual.
         return smoothstep(center - 0.08f, center + 0.08f, selector);
     }
 
-    static worldtectonicsample sampletectonics(const worldgenerator &generator, int x, int y,
-                                               float continental, float cavedepth)
+    static worldtectonicsample sampletectonics(const worldgenerator &generator, int x, int y, float continental, float cavedepth)
     {
         const worldsettings &settings = generator.settings;
         const float threshold = landthreshold(settings),
                     landdensity = continental - threshold,
-                    protection = max(0.02f, settings.coastprotectionwidth
-                                           * settings.geologyfrequency * 0.75f);
+                    protection = max(0.02f, settings.coastprotectionwidth * settings.geologyfrequency * 0.75f);
+
         float tectonicx = x + 10000.5f, tectonicy = y - 10000.5f;
         generator.tectonicwarp.DomainWarp(tectonicx, tectonicy);
-        const float ridge = powf(clamp(1.0f - fabs(generator.tectonicnoise.GetNoise(tectonicx,
-                                                                                    tectonicy)),
-                                       0.0f, 1.0f),
-                                 max(settings.tectonicridgepower, 0.1f));
-        worldtectonicsample sample;
-        sample.activity = smoothstep(settings.tectonicactivitythreshold,
-                                     min(settings.tectonicactivitythreshold + 0.35f, 1.0f),
-                                     ridge);
 
-        const float oceandistance = clamp(-landdensity / max(threshold + 1.0f, 0.001f),
-                                          0.0f, 1.0f),
+        const float ridge = powf(clamp(1.0f - fabs(generator.tectonicnoise.GetNoise(tectonicx, tectonicy)), 0.0f, 1.0f), max(settings.tectonicridgepower, 0.1f));
+
+        worldtectonicsample sample;
+        sample.activity = smoothstep(settings.tectonicactivitythreshold, min(settings.tectonicactivitythreshold + 0.35f, 1.0f), ridge);
+
+        const float oceandistance = clamp(-landdensity / max(threshold + 1.0f, 0.001f), 0.0f, 1.0f),
                     oceanshelf = smoothstep(0.0f, 0.25f, oceandistance),
                     deepocean = smoothstep(0.15f, 0.85f, oceandistance),
-                    normaloceandepth = settings.maxoceandepth
-                                     * (0.25f * oceanshelf + 0.75f * deepocean),
+                    normaloceandepth = settings.maxoceandepth * (0.25f * oceanshelf + 0.75f * deepocean),
+
                     // Give tall relief enough inland distance to fade before the
                     // protected coast instead of clipping a mountain into a wall.
                     landmask = smoothstep(protection, protection + 0.40f, landdensity),
                     oceandensitymask = smoothstep(protection, protection + 0.16f, -landdensity),
-                    deepoceanmask = oceandensitymask
-                                  * smoothstep(40.0f, 100.0f, normaloceandepth),
-                    hill = clamp(generator.hills.GetNoise(x + 10000.5f, y - 10000.5f)
-                               * 0.5f + 0.5f, 0.0f, 1.0f),
-                    rangenoise = generator.mountainrange.GetNoise(x + 10000.5f,
-                                                                  y - 10000.5f),
-                    ridgenoise = generator.mountainnoise.GetNoise(x + 10000.5f,
-                                                                  y - 10000.5f),
-                    peaknoise = generator.mountainpeaks.GetNoise(x + 10000.5f,
-                                                                  y - 10000.5f),
+                    deepoceanmask = oceandensitymask * smoothstep(40.0f, 100.0f, normaloceandepth),
+                    hill = clamp(generator.hills.GetNoise(x + 10000.5f, y - 10000.5f) * 0.5f + 0.5f, 0.0f, 1.0f),
+                    rangenoise = generator.mountainrange.GetNoise(x + 10000.5f, y - 10000.5f),
+                    ridgenoise = generator.mountainnoise.GetNoise(x + 10000.5f, y - 10000.5f),
+                    peaknoise = generator.mountainpeaks.GetNoise(x + 10000.5f, y - 10000.5f),
+
                     // Tectonics amplify finite ranges rather than becoming terrain.
                     // Their broad base creates foothills and high valleys; intersecting
                     // ridges then form connected massifs, saddles, and sharp summits.
-                    mountainactivity = smoothstep(settings.tectonicactivitythreshold,
-                                                  1.0f, ridge),
-                    tectonicproximity = smoothstep(
-                        max(settings.tectonicactivitythreshold * 0.20f, 0.02f),
-                        min(settings.tectonicactivitythreshold + 0.25f, 1.0f), ridge),
-                    reliefcoverage = max(settings.plainscoverage + settings.hillscoverage
-                                       + settings.mountainscoverage
-                                       + settings.highsummitscoverage, 0.001f),
+                    mountainactivity = smoothstep(settings.tectonicactivitythreshold, 1.0f, ridge),
+                    tectonicproximity = smoothstep(max(settings.tectonicactivitythreshold * 0.20f, 0.02f), min(settings.tectonicactivitythreshold + 0.25f, 1.0f), ridge),
+                    reliefcoverage = max(settings.plainscoverage + settings.hillscoverage + settings.mountainscoverage + settings.highsummitscoverage, 0.001f),
                     hillstart = settings.plainscoverage / reliefcoverage,
-                    mountainstart = (settings.plainscoverage + settings.hillscoverage)
-                                  / reliefcoverage,
+                    mountainstart = (settings.plainscoverage + settings.hillscoverage) / reliefcoverage,
                     summitshare = settings.highsummitscoverage / reliefcoverage,
+
                     // OpenSimplex has a narrow upper tail. Expanding only the summit
                     // share keeps the percentage control responsive without broadening
                     // ordinary mountain coverage.
-                    summitstart = max(mountainstart,
-                                      1.0f - powf(summitshare, 0.80f)),
+                    summitstart = max(mountainstart, 1.0f - powf(summitshare, 0.80f)),
+
                     // The independent range field spans the full selector even in calm
                     // regions, so tectonics is never a prerequisite for mountains.
                     // Proximity and activity only bias the result upward; nested bands
                     // guarantee that every summit remains inside mountains and hills.
-                    basereliefselector = clamp(0.5f
-                                             + 0.5f * erff(rangenoise / 0.70f),
-                                               0.0f, 1.0f),
-                    tectonicbias = clamp(0.20f * tectonicproximity
-                                       + 0.10f * mountainactivity, 0.0f, 0.30f),
-                    reliefselector = basereliefselector
-                                   + (1.0f - basereliefselector) * tectonicbias,
+                    basereliefselector = clamp(0.5f + 0.5f * erff(rangenoise / 0.70f), 0.0f, 1.0f),
+                    tectonicbias = clamp(0.20f * tectonicproximity + 0.10f * mountainactivity, 0.0f, 0.30f),
+                    reliefselector = basereliefselector + (1.0f - basereliefselector) * tectonicbias,
                     coveragefade = 0.055f,
-                    hillregion = settings.hillscoverage + settings.mountainscoverage
-                               + settings.highsummitscoverage > 0.0f
-                               ? smoothstep(hillstart - coveragefade,
-                                            hillstart + coveragefade, reliefselector) : 0.0f,
-                    mountainregion = settings.mountainscoverage
-                                   + settings.highsummitscoverage > 0.0f
-                                   ? smoothstep(mountainstart - coveragefade,
-                                                mountainstart + coveragefade,
-                                                reliefselector) : 0.0f,
-                    summitregion = settings.highsummitscoverage > 0.0f
-                                 ? smoothstep(summitstart - coveragefade,
-                                              summitstart + coveragefade,
-                                              reliefselector) : 0.0f,
-                    foothillzone = hillregion * (0.65f + 0.20f * tectonicproximity
-                                                + 0.15f * mountainactivity),
-                    rangezone = mountainregion * (0.70f + 0.15f * tectonicproximity
-                                                 + 0.15f * mountainactivity),
-                    summitzone = summitregion * (0.65f + 0.10f * tectonicproximity
-                                                + 0.25f * mountainactivity),
-                    primaryridge = powf(clamp(1.10f
-                                           - sqrtf(ridgenoise * ridgenoise + 0.01f),
-                                               0.0f, 1.0f), 2.0f),
-                    secondaryridge = powf(clamp(1.12f
-                                             - sqrtf(peaknoise * peaknoise + 0.0144f),
-                                                 0.0f, 1.0f), 2.4f),
+                    hillregion = settings.hillscoverage + settings.mountainscoverage + settings.highsummitscoverage > 0.0f ? smoothstep(hillstart - coveragefade, hillstart + coveragefade, reliefselector) : 0.0f,
+                    mountainregion = settings.mountainscoverage + settings.highsummitscoverage > 0.0f ? smoothstep(mountainstart - coveragefade, mountainstart + coveragefade, reliefselector) : 0.0f,
+                    summitregion = settings.highsummitscoverage > 0.0f ? smoothstep(summitstart - coveragefade, summitstart + coveragefade, reliefselector) : 0.0f,
+                    foothillzone = hillregion * (0.65f + 0.20f * tectonicproximity + 0.15f * mountainactivity),
+                    rangezone = mountainregion * (0.70f + 0.15f * tectonicproximity + 0.15f * mountainactivity),
+                    summitzone = summitregion * (0.65f + 0.10f * tectonicproximity + 0.25f * mountainactivity),
+                    primaryridge = powf(clamp(1.10f - sqrtf(ridgenoise * ridgenoise + 0.01f), 0.0f, 1.0f), 2.0f),
+                    secondaryridge = powf(clamp(1.12f - sqrtf(peaknoise * peaknoise + 0.0144f), 0.0f, 1.0f), 2.4f),
                     plainhillshape = smoothstep(0.48f, 0.78f, hill),
-                    backgroundrelief = 0.025f * plainhillshape
-                                     * (1.0f - 0.80f * foothillzone),
+                    backgroundrelief = 0.025f * plainhillshape * (1.0f - 0.80f * foothillzone),
                     highplateau = 0.22f * foothillzone * (0.85f + 0.15f * hill),
-                    mainridges = 0.40f * rangezone * primaryridge
-                               * (0.58f + 0.42f * secondaryridge),
-                    surroundingpeaks = 0.14f * rangezone
-                                     * powf(secondaryridge, 1.3f)
-                                     * (0.35f + 0.65f * primaryridge),
-                    localsummits = 0.21f * summitzone
-                                 * powf(primaryridge, 1.4f)
-                                 * powf(secondaryridge, 1.2f),
+                    mainridges = 0.40f * rangezone * primaryridge * (0.58f + 0.42f * secondaryridge),
+                    surroundingpeaks = 0.14f * rangezone * powf(secondaryridge, 1.3f) * (0.35f + 0.65f * primaryridge),
+                    localsummits = 0.21f * summitzone * powf(primaryridge, 1.4f) * powf(secondaryridge, 1.2f),
                     trenchpotential = sample.activity * deepoceanmask;
-        sample.landuplift = clamp(landmask * (backgroundrelief + highplateau
-                                           + mainridges + surroundingpeaks
-                                           + localsummits),
-                                  0.0f, 1.0f);
-        sample.oceantrench = clamp(trenchpotential * powf(sample.activity, 0.35f),
-                                   0.0f, 1.0f);
+
+        sample.landuplift = clamp(landmask * (backgroundrelief + highplateau+ mainridges + surroundingpeaks + localsummits), 0.0f, 1.0f);
+        sample.oceantrench = clamp(trenchpotential * powf(sample.activity, 0.35f), 0.0f, 1.0f);
 
         const float protecteddepth = max(float(settings.cavemindepth), 12.0f),
                     fulldepth = max(float(settings.cavefulldepth), 20.0f),
-                    depthmask = smoothstep(protecteddepth, max(fulldepth, protecteddepth + 1.0f),
-                                           cavedepth),
+                    depthmask = smoothstep(protecteddepth, max(fulldepth, protecteddepth + 1.0f), cavedepth),
                     foundationprotection = 1.0f - sample.landuplift * 0.70f;
-        sample.caveexpansion = clamp(sample.activity * depthmask * foundationprotection
-                                   * settings.tectoniccavestrength, 0.0f, 1.0f);
+
+        sample.caveexpansion = clamp(sample.activity * depthmask * foundationprotection * settings.tectoniccavestrength, 0.0f, 1.0f);
+
         return sample;
     }
 
@@ -383,8 +333,8 @@ namespace game
     float worldgenerator::coasttransitionwidth(int x, int y) const
     {
         float beachspan, plainrun, plainlevel;
-        samplecoastprofile(*this, x + 10000.5f, y - 10000.5f,
-                           beachspan, plainrun, plainlevel);
+        samplecoastprofile(*this, x + 10000.5f, y - 10000.5f, beachspan, plainrun, plainlevel);
+
         return 2.0f * beachspan + plainrun + 14.0f;
     }
 
@@ -408,20 +358,17 @@ namespace game
         float elevation;
         if(continental >= threshold)
         {
-            const float distance = clamp((continental - threshold) / max(1.0f - threshold, 0.001f),
-                                         0.0f, 1.0f);
+            const float distance = clamp((continental - threshold) / max(1.0f - threshold, 0.001f), 0.0f, 1.0f);
             const float coastrise = smoothstep(0.0f, 0.28f, distance);
             const float inland = smoothstep(0.0f, 0.72f, distance);
             const float hill = clamp(hills.GetNoise(noisex, noisey) * 0.5f + 0.5f, 0.0f, 1.0f);
-            elevation = settings.maxcontinentheight
-                      * coastrise * (0.55f + 0.30f * inland + 0.15f * hill);
+            elevation = settings.maxcontinentheight * coastrise * (0.55f + 0.30f * inland + 0.15f * hill);
             const float continentalelevation = elevation;
 
             // Build a deliberate beach cross-section near the continental edge.
             // A local gradient converts continental density into approximate metres
             // inland, keeping the profile deterministic and continuous across chunks.
-            const float coastprofilelimit = max(16.0f,
-                min(settings.cliffmaxheight, settings.maxcontinentheight));
+            const float coastprofilelimit = max(16.0f, min(settings.cliffmaxheight, settings.maxcontinentheight));
             if(elevation < coastprofilelimit)
             {
                 const float gradientstep = 2.0f,
@@ -431,53 +378,42 @@ namespace game
                             gradienty = (samplecontinental(*this, noisex, noisey + gradientstep)
                                        - samplecontinental(*this, noisex, noisey - gradientstep))
                                       / (2.0f * gradientstep),
-                            gradient = max(sqrtf(gradientx * gradientx + gradienty * gradienty),
-                                           settings.geologyfrequency * 0.35f),
+                            gradient = max(sqrtf(gradientx * gradientx + gradienty * gradienty), settings.geologyfrequency * 0.35f),
                             shoredistance = max((continental - threshold) / gradient, 0.0f);
+
                 float beachspan, plainrun, plainlevel;
                 samplecoastprofile(*this, noisex, noisey, beachspan, plainrun, plainlevel);
+
                 const float cliffstrength = samplecliffstrength(*this, noisex, noisey),
                             // Cliff sections progressively consume the beach. At full
                             // strength the first land column can already be exposed rock.
                             effectivebeachspan = beachspan * (1.0f - cliffstrength),
                             beachend = 2.0f * effectivebeachspan,
-                            sandstepratio = 0.5f + clamp(
-                                coastshape.GetNoise(noisex, noisey) * 0.5f + 0.5f,
-                                0.0f, 1.0f) / 6.0f,
+                            sandstepratio = 0.5f + clamp(coastshape.GetNoise(noisex, noisey) * 0.5f + 0.5f, 0.0f, 1.0f) / 6.0f,
                             sandstepstart = beachend * sandstepratio,
                             grassriseend = beachend + min(8.0f, plainrun * 0.5f),
                             plainend = beachend + plainrun,
                             blendend = plainend + 14.0f;
+
                 float normalelevation;
-                if(effectivebeachspan > 0.01f && shoredistance < sandstepstart)
-                    normalelevation = 0.0f;
-                else if(effectivebeachspan > 0.01f && shoredistance < beachend)
-                    normalelevation = 1.0f;
-                else if(shoredistance < grassriseend)
-                    // The first grass column is always level 2 on ordinary coasts.
-                    // Its slow rise prevents a rounded level-3 plain from skipping
-                    // an entire vertical cube immediately after the sand.
-                    normalelevation = 2.0f + (plainlevel - 2.0f)
-                                             * smoothstep(beachend, grassriseend,
-                                                          shoredistance);
+                if(effectivebeachspan > 0.01f && shoredistance < sandstepstart) normalelevation = 0.0f;
+                else if(effectivebeachspan > 0.01f && shoredistance < beachend) normalelevation = 1.0f;
+                // The first grass column is always level 2 on ordinary coasts.
+                // Its slow rise prevents a rounded level-3 plain from skipping
+                // an entire vertical cube immediately after the sand.
+                else if(shoredistance < grassriseend) normalelevation = 2.0f + (plainlevel - 2.0f) * smoothstep(beachend, grassriseend, shoredistance);
                 else if(shoredistance < plainend) normalelevation = plainlevel;
-                else normalelevation = plainlevel
-                                     + (continentalelevation - plainlevel)
-                                     * smoothstep(plainend, blendend, shoredistance);
+                else normalelevation = plainlevel + (continentalelevation - plainlevel) * smoothstep(plainend, blendend, shoredistance);
 
                 // High original relief is allowed to return sooner, while ordinary
                 // shores retain the deliberately broad 2–3 metre grass plain.
-                const float reliefpermission = smoothstep(9.0f, 16.0f,
-                                                          continentalelevation);
-                normalelevation += (max(continentalelevation, normalelevation)
-                                  - normalelevation) * reliefpermission;
+                const float reliefpermission = smoothstep(9.0f, 16.0f, continentalelevation);
+                normalelevation += (max(continentalelevation, normalelevation) - normalelevation) * reliefpermission;
 
-                const float cliffshape = clamp(coastshape.GetNoise(noisex, noisey)
-                                             * 0.5f + 0.5f, 0.0f, 1.0f),
+                const float cliffshape = clamp(coastshape.GetNoise(noisex, noisey) * 0.5f + 0.5f, 0.0f, 1.0f),
                             // Keep the current 7–16 metre distribution at the
                             // default while making the configured value a hard cap.
-                            cliffheight = settings.cliffmaxheight
-                                        * (0.4375f + 0.5625f * cliffshape),
+                            cliffheight = settings.cliffmaxheight * (0.4375f + 0.5625f * cliffshape),
                             cliffrise = smoothstep(-0.75f, 2.0f, shoredistance),
                             // Hold a genuine plateau behind the rock face, then
                             // blend it into the continental surface. Unlike the old
@@ -486,27 +422,21 @@ namespace game
                             cliffplateauend = max(plainend, 22.0f),
                             cliffblendend = cliffplateauend + 32.0f,
                             inlandtarget = max(continentalelevation, normalelevation),
-                            cliffblend = smoothstep(cliffplateauend, cliffblendend,
-                                                   shoredistance),
-                            cliffplateau = cliffheight
-                                         + (inlandtarget - cliffheight) * cliffblend,
-                            cliffelevation = max(inlandtarget,
-                                                 cliffplateau * cliffrise);
-                elevation = normalelevation
-                          + (cliffelevation - normalelevation) * cliffstrength;
+                            cliffblend = smoothstep(cliffplateauend, cliffblendend, shoredistance),
+                            cliffplateau = cliffheight + (inlandtarget - cliffheight) * cliffblend,
+                            cliffelevation = max(inlandtarget, cliffplateau * cliffrise);
+
+                elevation = normalelevation+ (cliffelevation - normalelevation) * cliffstrength;
             }
-            elevation = clamp(elevation, 0.0f, settings.maxcontinentheight)
-                      + settings.maxlanduplift * tectonicsample.landuplift;
+            elevation = clamp(elevation, 0.0f, settings.maxcontinentheight)+ settings.maxlanduplift * tectonicsample.landuplift;
         }
         else
         {
-            const float distance = clamp((threshold - continental) / max(threshold + 1.0f, 0.001f),
-                                         0.0f, 1.0f);
+            const float distance = clamp((threshold - continental) / max(threshold + 1.0f, 0.001f), 0.0f, 1.0f);
             const float shelf = smoothstep(0.0f, 0.25f, distance);
             const float deepocean = smoothstep(0.15f, 0.85f, distance);
             elevation = -settings.maxoceandepth * (0.25f * shelf + 0.75f * deepocean);
-            elevation = clamp(elevation, -settings.maxoceandepth, 0.0f)
-                      - settings.maxoceansubsidence * tectonicsample.oceantrench;
+            elevation = clamp(elevation, -settings.maxoceandepth, 0.0f) - settings.maxoceansubsidence * tectonicsample.oceantrench;
         }
         return clamp(int(floor(settings.sealevel + elevation + 0.5f)), -255, 255);
     }
@@ -517,38 +447,25 @@ namespace game
 
         const float noisex = x + 10000.5f, noisey = y - 10000.5f;
         const float variation = biomevariation.GetNoise(noisex, noisey);
-        const float temperaturevalue = temperature.GetNoise(noisex, noisey)
-                                     + variation * settings.biomevariationstrength;
-        const float moisturevalue = clamp(moisture.GetNoise(noisex, noisey)
-                                        - variation * settings.biomevariationstrength,
-                                          -1.0f, 1.0f);
+        const float temperaturevalue = temperature.GetNoise(noisex, noisey) + variation * settings.biomevariationstrength;
+        const float moisturevalue = clamp(moisture.GetNoise(noisex, noisey) - variation * settings.biomevariationstrength, -1.0f, 1.0f);
 
         if(settings.biomeblend <= 0)
         {
             if(height > settings.snowheight) return WORLD_BIOME_SNOW;
-            if(temperaturevalue > settings.deserttemperature &&
-               moisturevalue < settings.desertmoisture) return WORLD_BIOME_DESERT;
+            if(temperaturevalue > settings.deserttemperature && moisturevalue < settings.desertmoisture) return WORLD_BIOME_DESERT;
             if(moisturevalue > settings.forestmoisture) return WORLD_BIOME_FOREST;
             return WORLD_BIOME_PLAINS;
         }
 
         const float blendblocks = settings.biomeblend;
-        const float temperatureblend = max(blendblocks * settings.temperaturefrequency * 2.0f,
-                                           0.001f);
+        const float temperatureblend = max(blendblocks * settings.temperaturefrequency * 2.0f, 0.001f);
         const float moistureblend = max(blendblocks * settings.moisturefrequency * 2.0f, 0.001f);
-        const float selector = clamp((biomeblend.GetNoise(noisex, noisey) + 1.0f) * 0.5f,
-                                     0.0f, 1.0f);
-        const float snowweight = smoothstep(settings.snowheight - blendblocks * 0.5f,
-                                            settings.snowheight + blendblocks * 0.5f, height);
-        const float hotweight = smoothstep(settings.deserttemperature - temperatureblend,
-                                           settings.deserttemperature + temperatureblend,
-                                           temperaturevalue);
-        const float dryweight = 1.0f - smoothstep(settings.desertmoisture - moistureblend,
-                                                  settings.desertmoisture + moistureblend,
-                                                  moisturevalue);
-        const float forestweight = smoothstep(settings.forestmoisture - moistureblend,
-                                              settings.forestmoisture + moistureblend,
-                                              moisturevalue);
+        const float selector = clamp((biomeblend.GetNoise(noisex, noisey) + 1.0f) * 0.5f, 0.0f, 1.0f);
+        const float snowweight = smoothstep(settings.snowheight - blendblocks * 0.5f, settings.snowheight + blendblocks * 0.5f, height);
+        const float hotweight = smoothstep(settings.deserttemperature - temperatureblend, settings.deserttemperature + temperatureblend, temperaturevalue);
+        const float dryweight = 1.0f - smoothstep(settings.desertmoisture - moistureblend, settings.desertmoisture + moistureblend, moisturevalue);
+        const float forestweight = smoothstep(settings.forestmoisture - moistureblend, settings.forestmoisture + moistureblend, moisturevalue);
         if(snowweight > selector) return WORLD_BIOME_SNOW;
         if(hotweight * dryweight > selector) return WORLD_BIOME_DESERT;
         if(forestweight > selector) return WORLD_BIOME_FOREST;
@@ -557,12 +474,8 @@ namespace game
 
     bool worldgenerator::cliff(int x, int y, int height) const
     {
-        const float noisex = x + 10000.5f, noisey = y - 10000.5f,
-                    continental = samplecontinental(*this, noisex, noisey),
-                    threshold = landthreshold(settings),
-                    cliffstrength = samplecliffstrength(*this, noisex, noisey);
-        if(continental >= threshold && height >= settings.sealevel + 2
-           && cliffstrength > 0.25f)
+        const float noisex = x + 10000.5f, noisey = y - 10000.5f,continental = samplecontinental(*this, noisex, noisey), threshold = landthreshold(settings), cliffstrength = samplecliffstrength(*this, noisex, noisey);
+        if(continental >= threshold && height >= settings.sealevel + 2&& cliffstrength > 0.25f)
         {
             const float gradientstep = 2.0f,
                         gradientx = (samplecontinental(*this, noisex + gradientstep, noisey)
@@ -578,6 +491,7 @@ namespace game
                         // three metres. Do not extend its stone material across
                         // the much wider, flat inland plateau.
                         facewidth = 2.5f + 0.5f * cliffstrength;
+
             if(shoredistance <= facewidth) return true;
         }
         return false;
@@ -591,8 +505,7 @@ namespace game
         if(height >= high) return true;
 
         const float rockweight = smoothstep(low, high, height);
-        const float selector = clamp(rockiness.GetNoise(x + 10000.5f, y - 10000.5f) * 1.25f
-                                   + 0.5f, 0.0f, 1.0f);
+        const float selector = clamp(rockiness.GetNoise(x + 10000.5f, y - 10000.5f) * 1.25f + 0.5f, 0.0f, 1.0f);
         return rockweight > selector;
     }
 
