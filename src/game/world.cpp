@@ -10,6 +10,10 @@ FVAR(worldmaxcontinentheight, 1.0f, 96.0f, 255.0f);
 FVAR(worldmaxoceandepth, 1.0f, 32.0f, 255.0f);
 FVAR(worldoceancoverage, 0.0f, 55.0f, 100.0f);
 FVAR(worldterraincoverage, 0.0f, 45.0f, 100.0f);
+FVAR(worldplainscoverage, 0.0f, 45.0f, 100.0f);
+FVAR(worldhillscoverage, 0.0f, 32.0f, 100.0f);
+FVAR(worldmountainscoverage, 0.0f, 18.0f, 100.0f);
+FVAR(worldhighsummitscoverage, 0.0f, 5.0f, 100.0f);
 
 FVAR(worldtectonicfrequency, 0.0001f, 0.0014f, 0.01f);
 FVAR(worldtectonicwarpamplitude, 0.0f, 64.0f, 512.0f);
@@ -104,6 +108,9 @@ namespace game
         : geologyfrequency(worldgeologyfrequency),
           maxcontinentheight(worldmaxcontinentheight), maxoceandepth(worldmaxoceandepth),
           oceancoverage(worldoceancoverage), terraincoverage(worldterraincoverage),
+          plainscoverage(worldplainscoverage), hillscoverage(worldhillscoverage),
+          mountainscoverage(worldmountainscoverage),
+          highsummitscoverage(worldhighsummitscoverage),
           tectonicfrequency(worldtectonicfrequency),
           tectonicwarpamplitude(worldtectonicwarpamplitude),
           tectonicridgepower(worldtectonicridgepower),
@@ -157,7 +164,7 @@ namespace game
         setupnoise(mountainrange, seed ^ 0x18F47C53, settings.geologyfrequency * 1.5f, 1);
         setupnoise(mountainnoise, seed ^ 0x3D72A95B, settings.geologyfrequency * 2.5f,
                    2, 0.25f);
-        setupnoise(mountainpeaks, seed ^ 0x25B46D81, settings.geologyfrequency * 5.0f, 1);
+        setupnoise(mountainpeaks, seed ^ 0x25B46D81, settings.geologyfrequency * 4.5f, 1);
         setupnoise(tectonicnoise, seed ^ 0x68E31DA4, settings.tectonicfrequency, 1);
         setupwarp(tectonicwarp, seed ^ 0x6C8E9CF5, settings.tectonicfrequency * 0.5f,
                   settings.tectonicwarpamplitude);
@@ -212,15 +219,14 @@ namespace game
                                      * (0.25f * oceanshelf + 0.75f * deepocean),
                     // Give tall relief enough inland distance to fade before the
                     // protected coast instead of clipping a mountain into a wall.
-                    landmask = smoothstep(protection, protection + 0.28f, landdensity),
+                    landmask = smoothstep(protection, protection + 0.40f, landdensity),
                     oceandensitymask = smoothstep(protection, protection + 0.16f, -landdensity),
                     deepoceanmask = oceandensitymask
                                   * smoothstep(40.0f, 100.0f, normaloceandepth),
                     hill = clamp(generator.hills.GetNoise(x + 10000.5f, y - 10000.5f)
                                * 0.5f + 0.5f, 0.0f, 1.0f),
-                    rangevalue = clamp(generator.mountainrange.GetNoise(x + 10000.5f,
-                                                                        y - 10000.5f)
-                                     * 0.5f + 0.5f, 0.0f, 1.0f),
+                    rangenoise = generator.mountainrange.GetNoise(x + 10000.5f,
+                                                                  y - 10000.5f),
                     ridgenoise = generator.mountainnoise.GetNoise(x + 10000.5f,
                                                                   y - 10000.5f),
                     peaknoise = generator.mountainpeaks.GetNoise(x + 10000.5f,
@@ -230,10 +236,52 @@ namespace game
                     // ridges then form connected massifs, saddles, and sharp summits.
                     mountainactivity = smoothstep(settings.tectonicactivitythreshold,
                                                   1.0f, ridge),
-                    foothillregion = smoothstep(0.26f, 0.74f, rangevalue),
-                    rangecore = smoothstep(0.36f, 0.76f, rangevalue),
-                    foothillzone = foothillregion * (0.08f + 0.92f * mountainactivity),
-                    rangezone = rangecore * (0.04f + 0.96f * mountainactivity),
+                    tectonicproximity = smoothstep(
+                        max(settings.tectonicactivitythreshold * 0.20f, 0.02f),
+                        min(settings.tectonicactivitythreshold + 0.25f, 1.0f), ridge),
+                    reliefcoverage = max(settings.plainscoverage + settings.hillscoverage
+                                       + settings.mountainscoverage
+                                       + settings.highsummitscoverage, 0.001f),
+                    hillstart = settings.plainscoverage / reliefcoverage,
+                    mountainstart = (settings.plainscoverage + settings.hillscoverage)
+                                  / reliefcoverage,
+                    summitshare = settings.highsummitscoverage / reliefcoverage,
+                    // OpenSimplex has a narrow upper tail. Expanding only the summit
+                    // share keeps the percentage control responsive without broadening
+                    // ordinary mountain coverage.
+                    summitstart = max(mountainstart,
+                                      1.0f - powf(summitshare, 0.80f)),
+                    // The independent range field spans the full selector even in calm
+                    // regions, so tectonics is never a prerequisite for mountains.
+                    // Proximity and activity only bias the result upward; nested bands
+                    // guarantee that every summit remains inside mountains and hills.
+                    basereliefselector = clamp(0.5f
+                                             + 0.5f * erff(rangenoise / 0.70f),
+                                               0.0f, 1.0f),
+                    tectonicbias = clamp(0.20f * tectonicproximity
+                                       + 0.10f * mountainactivity, 0.0f, 0.30f),
+                    reliefselector = basereliefselector
+                                   + (1.0f - basereliefselector) * tectonicbias,
+                    coveragefade = 0.055f,
+                    hillregion = settings.hillscoverage + settings.mountainscoverage
+                               + settings.highsummitscoverage > 0.0f
+                               ? smoothstep(hillstart - coveragefade,
+                                            hillstart + coveragefade, reliefselector) : 0.0f,
+                    mountainregion = settings.mountainscoverage
+                                   + settings.highsummitscoverage > 0.0f
+                                   ? smoothstep(mountainstart - coveragefade,
+                                                mountainstart + coveragefade,
+                                                reliefselector) : 0.0f,
+                    summitregion = settings.highsummitscoverage > 0.0f
+                                 ? smoothstep(summitstart - coveragefade,
+                                              summitstart + coveragefade,
+                                              reliefselector) : 0.0f,
+                    foothillzone = hillregion * (0.65f + 0.20f * tectonicproximity
+                                                + 0.15f * mountainactivity),
+                    rangezone = mountainregion * (0.70f + 0.15f * tectonicproximity
+                                                 + 0.15f * mountainactivity),
+                    summitzone = summitregion * (0.65f + 0.10f * tectonicproximity
+                                                + 0.25f * mountainactivity),
                     primaryridge = powf(clamp(1.10f
                                            - sqrtf(ridgenoise * ridgenoise + 0.01f),
                                                0.0f, 1.0f), 2.0f),
@@ -243,13 +291,13 @@ namespace game
                     plainhillshape = smoothstep(0.48f, 0.78f, hill),
                     backgroundrelief = 0.025f * plainhillshape
                                      * (1.0f - 0.80f * foothillzone),
-                    highplateau = 0.18f * foothillzone * (0.85f + 0.15f * hill),
-                    mainridges = 0.46f * rangezone * primaryridge
+                    highplateau = 0.22f * foothillzone * (0.85f + 0.15f * hill),
+                    mainridges = 0.40f * rangezone * primaryridge
                                * (0.58f + 0.42f * secondaryridge),
-                    surroundingpeaks = 0.14f * foothillzone
+                    surroundingpeaks = 0.14f * rangezone
                                      * powf(secondaryridge, 1.3f)
                                      * (0.35f + 0.65f * primaryridge),
-                    localsummits = 0.22f * powf(rangezone, 1.2f)
+                    localsummits = 0.21f * summitzone
                                  * powf(primaryridge, 1.4f)
                                  * powf(secondaryridge, 1.2f),
                     trenchpotential = sample.activity * deepoceanmask;
@@ -396,6 +444,10 @@ namespace game
             "worldmaxoceandepth %.9g\n"
             "worldoceancoverage %.9g\n"
             "worldterraincoverage %.9g\n"
+            "worldplainscoverage %.9g\n"
+            "worldhillscoverage %.9g\n"
+            "worldmountainscoverage %.9g\n"
+            "worldhighsummitscoverage %.9g\n"
             "worldtectonicfrequency %.9g\n"
             "worldtectonicwarpamplitude %.9g\n"
             "worldtectonicridgepower %.9g\n"
@@ -449,6 +501,8 @@ namespace game
             "worldlavalakeshapevariation %.9g\n",
             activeworldseed, worldgeologyfrequency, worldmaxcontinentheight, worldmaxoceandepth,
             worldoceancoverage, worldterraincoverage,
+            worldplainscoverage, worldhillscoverage,
+            worldmountainscoverage, worldhighsummitscoverage,
             worldtectonicfrequency, worldtectonicwarpamplitude, worldtectonicridgepower,
             worldtectonicactivitythreshold, worldmaxlanduplift, worldmaxoceansubsidence,
             worldtectoniccavestrength, worldtectonicfracturestrength, worldcoastprotectionwidth,

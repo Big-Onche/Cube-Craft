@@ -39,6 +39,7 @@ namespace game
     {
         float geologyfrequency, maxcontinentheight, maxoceandepth;
         float oceancoverage, terraincoverage;
+        float plainscoverage, hillscoverage, mountainscoverage, highsummitscoverage;
         float tectonicfrequency, tectonicwarpamplitude, tectonicridgepower;
         float tectonicactivitythreshold, maxlanduplift, maxoceansubsidence;
         float tectoniccavestrength, tectonicfracturestrength, coastprotectionwidth;
