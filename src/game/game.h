@@ -29,7 +29,8 @@ struct gameentity : extentity {};
 enum
 {
     M_EDIT = 1<<0,
-    M_LOCAL = 1<<1
+    M_LOCAL = 1<<1,
+    M_CREATIVE = 1<<2
 };
 
 static struct gamemodeinfo
@@ -39,6 +40,7 @@ static struct gamemodeinfo
     const char *info;
 } gamemodes[] =
 {
+    { "creative", "Creative", M_CREATIVE, "Build freely with fixed-size voxel blocks." },
     { "edit", "Edit", M_EDIT, "Cooperative map editing." }
 };
 
@@ -46,6 +48,7 @@ static struct gamemodeinfo
 #define NUMGAMEMODES ((int)(sizeof(gamemodes)/sizeof(gamemodes[0])))
 #define m_valid(mode) ((mode) >= STARTGAMEMODE && (mode) < STARTGAMEMODE + NUMGAMEMODES)
 #define m_edit (m_valid(game::gamemode) && (gamemodes[game::gamemode - STARTGAMEMODE].flags&M_EDIT))
+#define m_creative (m_valid(game::gamemode) && (gamemodes[game::gamemode - STARTGAMEMODE].flags&M_CREATIVE))
 #define m_mp(mode) (m_valid(mode) && !(gamemodes[(mode) - STARTGAMEMODE].flags&M_LOCAL))
 
 enum { MM_OPEN = 0, MM_PRIVATE, MM_PASSWORD, MM_INVALID = -1 };

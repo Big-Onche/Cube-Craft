@@ -142,7 +142,7 @@ namespace game
 
     void changemap(const char *name, int mode)
     {
-        gamemode = STARTGAMEMODE;
+        gamemode = m_valid(mode) ? mode : STARTGAMEMODE;
 #ifndef STANDALONE
         if(!remote && !isconnected()) localconnect();
 #endif
@@ -298,7 +298,217 @@ namespace game
     }
     void preload() { entities::preloadentities(); }
     float abovegameplayhud(int w, int h) { return 1.0f; }
-    void gameplayhud(int w, int h) {}
+
+    enum
+    {
+        CREATIVE_GRID = 16,
+        CREATIVE_REACH = CREATIVE_GRID * 8
+    };
+
+    static int creativeblock = 0, creativeactionmillis = 0;
+
+    static int clampcreativeblock()
+    {
+        int count = numworldcubes();
+        creativeblock = count > 0 ? clamp(creativeblock, 0, count - 1) : 0;
+        return creativeblock;
+    }
+
+    static bool creativeenabled()
+    {
+        return m_creative && !editmode && player1 && player1->state == CS_ALIVE;
+    }
+
+    static bool creativehit(selinfo &hit)
+    {
+        if(!creativeenabled()) return false;
+
+        const vec origin = camera1 ? camera1->o : player1->o;
+        vec hitpos;
+        float dist = raycubepos(origin, camdir, hitpos, CREATIVE_REACH,
+                                RAY_CLIPMAT | RAY_SKIPFIRST, CREATIVE_GRID);
+        if(dist >= CREATIVE_REACH) return false;
+
+        // Step just through the hit surface so flooring selects the occupied cell.
+        vec inside = vec(camdir).mul(dist + 0.05f).add(origin);
+        if(!insideworld(inside)) return false;
+
+        hit.o = ivec(inside).mask(~(CREATIVE_GRID - 1));
+        hit.s = ivec(1, 1, 1);
+        hit.grid = CREATIVE_GRID;
+        hit.cx = hit.cy = hit.corner = 0;
+        hit.cxs = hit.cys = 2;
+
+        float boxdist = 0;
+        if(!rayboxintersect(vec(hit.o), vec(CREATIVE_GRID), origin, camdir, boxdist, hit.orient))
+            return false;
+        return hit.validate();
+    }
+
+    static ivec creativeplacecell(const selinfo &hit)
+    {
+        ivec target = hit.o;
+        int d = hit.orient >> 1;
+        target[d] += (hit.orient & 1) ? CREATIVE_GRID : -CREATIVE_GRID;
+        return target;
+    }
+
+    static bool creativeplayeroverlap(const ivec &cell)
+    {
+        if(!player1) return false;
+        const float bx1 = cell.x, by1 = cell.y, bz1 = cell.z,
+                    bx2 = cell.x + CREATIVE_GRID, by2 = cell.y + CREATIVE_GRID,
+                    bz2 = cell.z + CREATIVE_GRID,
+                    px1 = player1->o.x - player1->xradius,
+                    py1 = player1->o.y - player1->yradius,
+                    pz1 = player1->o.z - player1->eyeheight,
+                    px2 = player1->o.x + player1->xradius,
+                    py2 = player1->o.y + player1->yradius,
+                    pz2 = player1->o.z + player1->aboveeye;
+        return bx1 < px2 && bx2 > px1 && by1 < py2 && by2 > py1 && bz1 < pz2 && bz2 > pz1;
+    }
+
+    static void creativeplace()
+    {
+        selinfo hit;
+        if(!creativehit(hit) || numworldcubes() <= 0) return;
+
+        ivec target = creativeplacecell(hit);
+        if(!insideworld(target) || !insideworld(ivec(target).add(CREATIVE_GRID - 1)) ||
+           creativeplayeroverlap(target))
+            return;
+
+        // Extrude exactly one 16-unit voxel, then deliberately paint every face.
+        mpeditface(-1, 1, hit, true);
+        mpedittex(getworldcubeslot(clampcreativeblock()), 1, hit, true);
+        creativeactionmillis = lastmillis;
+    }
+
+    static void creativeremove()
+    {
+        selinfo hit;
+        if(!creativehit(hit)) return;
+        mpdelcube(hit, true);
+        creativeactionmillis = lastmillis;
+    }
+
+    ICOMMAND(creativeattack, "D", (int *down), { if(*down) creativeremove(); });
+    ICOMMAND(creativeplaceblock, "D", (int *down), { if(*down) creativeplace(); });
+    ICOMMAND(creativeselect, "i", (int *index),
+    {
+        int count = numworldcubes();
+        if(count > 0) creativeblock = clamp(*index, 0, count - 1);
+    });
+    ICOMMAND(creativecycle, "i", (int *dir),
+    {
+        int count = numworldcubes();
+        if(count > 0)
+        {
+            creativeblock = (clampcreativeblock() - *dir) % count;
+            if(creativeblock < 0) creativeblock += count;
+        }
+    });
+    ICOMMAND(getcreativeblock, "", (), intret(clampcreativeblock()));
+    ICOMMAND(creativeblockcount, "", (), intret(numworldcubes()));
+    ICOMMAND(creativeblockslot, "i", (int *index), intret(getworldcubeslot(*index)));
+    ICOMMAND(creativeblockname, "i", (int *index), result(getworldcubename(*index)));
+
+    static void hudtexquad(float x1, float y1, float x2, float y2,
+                           float x3, float y3, float x4, float y4)
+    {
+        gle::begin(GL_QUADS);
+        gle::attribf(x1, y1); gle::attribf(0, 0);
+        gle::attribf(x2, y2); gle::attribf(1, 0);
+        gle::attribf(x3, y3); gle::attribf(1, 1);
+        gle::attribf(x4, y4); gle::attribf(0, 1);
+        gle::end();
+    }
+
+    static void hudrect(float x, float y, float w, float h)
+    {
+        hudtexquad(x, y, x + w, y, x + w, y + h, x, y + h);
+    }
+
+    static void drawheldblock(int w, int h)
+    {
+        int count = numworldcubes();
+        if(count <= 0) return;
+
+        int selected = clampcreativeblock();
+        float scale = min(w, h) / 720.0f,
+              bob = lastmillis - creativeactionmillis < 180
+                  ? sin((lastmillis - creativeactionmillis) / 180.0f * M_PI) * 18.0f * scale
+                  : 0.0f,
+              cx = w - 145.0f * scale, cy = h - (150.0f - bob) * scale,
+              s = 72.0f * scale;
+
+        gle::defvertex(2);
+        gle::deftexcoord0();
+        resethudshader();
+
+        // A simple blocky right forearm behind the held item.
+        settexture("media/texture/base/white.png", 3);
+        gle::colorf(0.28f, 0.32f, 0.38f, 1);
+        hudtexquad(w - 12 * scale, h, w - 115 * scale, h - 90 * scale,
+                   w - 82 * scale, h - 124 * scale, w + 25 * scale, h - 38 * scale);
+        gle::colorf(0.82f, 0.61f, 0.43f, 1);
+        hudtexquad(w - 82 * scale, h - 124 * scale, w - 128 * scale, h - 104 * scale,
+                   w - 107 * scale, h - 69 * scale, w - 65 * scale, h - 88 * scale);
+
+        settexture(getworldcubetexture(selected), 3);
+        // The same selected texture is intentionally used on every visible face.
+        gle::colorf(1, 1, 1, 1);
+        hudtexquad(cx, cy - s * 0.72f, cx + s, cy - s * 0.25f,
+                   cx, cy + s * 0.22f, cx - s, cy - s * 0.25f);
+        gle::colorf(0.72f, 0.72f, 0.72f, 1);
+        hudtexquad(cx - s, cy - s * 0.25f, cx, cy + s * 0.22f,
+                   cx, cy + s * 1.22f, cx - s, cy + s * 0.75f);
+        gle::colorf(0.52f, 0.52f, 0.52f, 1);
+        hudtexquad(cx, cy + s * 0.22f, cx + s, cy - s * 0.25f,
+                   cx + s, cy + s * 0.75f, cx, cy + s * 1.22f);
+        gle::colorf(1, 1, 1, 1);
+    }
+
+    static void drawcreativehotbar(int w, int h)
+    {
+        int count = numworldcubes();
+        if(count <= 0) return;
+
+        int selected = clampcreativeblock();
+        float cell = min(w, h) / 13.5f, gap = cell * 0.08f,
+              total = count * cell + (count - 1) * gap,
+              x = (w - total) * 0.5f, y = h - cell - 18;
+
+        gle::defvertex(2);
+        gle::deftexcoord0();
+        resethudshader();
+        loopi(count)
+        {
+            settexture("media/texture/base/white.png", 3);
+            if(i == selected) gle::colorf(0.92f, 0.78f, 0.28f, 0.96f);
+            else gle::colorf(0.08f, 0.08f, 0.08f, 0.72f);
+            hudrect(x - 4, y - 4, cell + 8, cell + 8);
+
+            settexture(getworldcubetexture(i), 3);
+            gle::colorf(1, 1, 1, 1);
+            hudrect(x, y, cell, cell);
+            x += cell + gap;
+        }
+
+        const char *name = getworldcubename(selected);
+        float textscale = 0.55f, textx = (w - text_width(name) * textscale) * 0.5f;
+        pushhudtranslate(textx, y - 42, textscale);
+        draw_text(name, 0, 0);
+        pophudmatrix();
+        gle::colorf(1, 1, 1, 1);
+    }
+
+    void gameplayhud(int w, int h)
+    {
+        if(!creativeenabled()) return;
+        drawheldblock(w, h);
+        drawcreativehotbar(w, h);
+    }
     bool canjump() { return true; }
     bool cancrouch() { return true; }
     bool allowmove(physent *d) { return true; }
@@ -381,8 +591,9 @@ namespace game
             {
                 string name;
                 getstring(name, p, sizeof(name));
+                int mode = getint(p);
                 getint(p);
-                getint(p);
+                gamemode = m_valid(mode) ? mode : STARTGAMEMODE;
                 copystring(clientmap, name);
                 if(name[0]) load_world(name);
                 break;
@@ -547,12 +758,15 @@ namespace game
     });
     ICOMMAND(map, "sN", (char *name, int *numargs),
     {
-        if(*numargs > 0 && name[0]) changemap(name, STARTGAMEMODE);
-        else if(clientmap[0]) changemap(clientmap, STARTGAMEMODE);
+        if(*numargs > 0 && name[0]) changemap(name, gamemode);
+        else if(clientmap[0]) changemap(clientmap, gamemode);
         else emptymap(0, true, NULL);
     });
     ICOMMAND(m_timed, "i", (int *mode), intret(0));
-    ICOMMANDN(m_edit, _icmd_m_edit_cmd, "i", (int *mode), intret(m_valid(*mode) ? 1 : 0));
+    ICOMMANDN(m_edit, _icmd_m_edit_cmd, "i", (int *mode),
+              intret(m_valid(*mode) && (gamemodes[*mode - STARTGAMEMODE].flags&M_EDIT) ? 1 : 0));
+    ICOMMANDN(m_creative, _icmd_m_creative_cmd, "i", (int *mode),
+              intret(m_valid(*mode) && (gamemodes[*mode - STARTGAMEMODE].flags&M_CREATIVE) ? 1 : 0));
     ICOMMANDN(m_ctf, _icmd_m_ctf_cmd, "i", (int *mode), intret(0));
     ICOMMANDN(m_teammode, _icmd_m_teammode_cmd, "i", (int *mode), intret(0));
     ICOMMAND(getfollow, "", (), intret(-1));

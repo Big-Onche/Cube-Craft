@@ -123,6 +123,29 @@ static int worldgrasstexture = DEFAULT_GEOM, worldgrasssidetexture = DEFAULT_GEO
            worldwoodtexture = DEFAULT_GEOM, worldleaftexture = DEFAULT_GEOM;
 static void updateleavesalpha();
 static void setworldleavesalpha(cube *root, bool enabled);
+
+int numworldcubes()
+{
+    return worldcubedefinitions.length();
+}
+
+int getworldcubeslot(int index)
+{
+    return worldcubedefinitions.inrange(index) ? worldcubedefinitions[index]->slot : DEFAULT_GEOM;
+}
+
+const char *getworldcubename(int index)
+{
+    return worldcubedefinitions.inrange(index) ? worldcubedefinitions[index]->name : "";
+}
+
+const char *getworldcubetexture(int index)
+{
+    static string texturepath;
+    if(!worldcubedefinitions.inrange(index)) return "";
+    formatstring(texturepath, "media/texture/%s", worldcubedefinitions[index]->texture);
+    return texturepath;
+}
 VARFP(leavesalpha, 0, 1, 1, updateleavesalpha());
 
 static bool isworldleaftexture(const cube &c)

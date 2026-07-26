@@ -112,6 +112,12 @@ extern void mpremip(bool local);
 extern bool mpeditvslot(int delta, int allfaces, selinfo &sel, ucharbuf &buf);
 extern void mpcalclight(bool local);
 
+// Data-driven voxel types registered by worldcube in config/world.cfg.
+extern int numworldcubes();
+extern int getworldcubeslot(int index);
+extern const char *getworldcubename(int index);
+extern const char *getworldcubetexture(int index);
+
 // command
 extern int variable(const char *name, int min, int cur, int max, int *storage, identfun fun, int flags);
 extern float fvariable(const char *name, float min, float cur, float max, float *storage, identfun fun, int flags);

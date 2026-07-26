@@ -273,7 +273,7 @@ cube &blockcube(int x, int y, int z, const block3 &b, int rgrid) // looks up a w
 
 #define loopxy(b)        loop(y,(b).s[C[dimension((b).orient)]]) loop(x,(b).s[R[dimension((b).orient)]])
 #define loopxyz(b, r, f) { loop(z,(b).s[D[dimension((b).orient)]]) loopxy((b)) { cube &c = blockcube(x,y,z,b,r); f; } }
-#define loopselxyz(f)    { if(local) makeundo(); loopxyz(sel, sel.grid, f); changed(sel); }
+#define loopselxyz(f)    { if(local) makeundoifneeded(sel); loopxyz(sel, sel.grid, f); changed(sel); }
 #define selcube(x, y, z) blockcube(x, y, z, sel, sel.grid)
 
 ////////////// cursor ///////////////
@@ -880,11 +880,16 @@ void makeundo(selinfo &s)
     if(u) addundo(u);
 }
 
+void makeundoifneeded(selinfo &s)
+{
+    if(lastsel==s || s.s.iszero()) return;
+    lastsel=s;
+    makeundo(s);
+}
+
 void makeundo()                        // stores state of selected cubes before editing
 {
-    if(lastsel==sel || sel.s.iszero()) return;
-    lastsel=sel;
-    makeundo(sel);
+    makeundoifneeded(sel);
 }
 
 static inline int countblock(cube *c, int n = 8)
