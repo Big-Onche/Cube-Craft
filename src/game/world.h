@@ -25,10 +25,23 @@ namespace game
         WORLD_BIOME_PLAINS
     };
 
+    struct worldtectonicsample
+    {
+        float activity, landuplift, oceantrench, caveexpansion;
+
+        worldtectonicsample()
+            : activity(0), landuplift(0), oceantrench(0), caveexpansion(0)
+        {
+        }
+    };
+
     struct worldsettings
     {
         float geologyfrequency, maxcontinentheight, maxoceandepth;
         float oceancoverage, terraincoverage;
+        float tectonicfrequency, tectonicwarpamplitude, tectonicridgepower;
+        float tectonicactivitythreshold, maxlanduplift, maxoceansubsidence;
+        float tectoniccavestrength, tectonicfracturestrength, coastprotectionwidth;
         float temperaturefrequency, moisturefrequency, biomevariationfrequency;
         float biomevariationstrength, rockfrequency;
         float deserttemperature, desertmoisture, forestmoisture;
@@ -51,15 +64,18 @@ namespace game
 
     struct worldgenerator
     {
-        FastNoiseLite geology, hills;
+        FastNoiseLite geology, hills, mountaindetail, tectonicnoise, tectonicwarp;
         FastNoiseLite temperature, moisture, biomevariation, biomeblend, rockiness;
         FastNoiseLite caves, largecaves, tunnela, tunnelb, lakeshape;
+        FastNoiseLite fracturecorridors, fracturevertical;
         worldsettings settings;
         int seed;
 
         worldgenerator(int seed, const worldsettings &settings = worldsettings());
 
-        int height(int x, int y) const;
+        worldtectonicsample tectonics(int x, int y, float cavedepth = 0) const;
+        float fracturecorridor(int x, int y) const;
+        int height(int x, int y, worldtectonicsample *tectonics = NULL) const;
         int biome(int x, int y, int height) const;
         bool rock(int x, int y, int height) const;
     };

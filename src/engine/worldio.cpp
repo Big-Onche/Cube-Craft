@@ -406,12 +406,15 @@ struct worlddebugstats
     double absolutex, absolutey, absolutez;
     int rendered;
     int loadingqueue, generationqueue;
+    float tectonicactivity, tectonicuplift, tectonictrench, tectoniccaveexpansion;
 };
 
 static void getworlddebugstats(const vec &position, worlddebugstats &stats)
 {
     stats.rendered = 0;
     stats.loadingqueue = stats.generationqueue = 0;
+    stats.tectonicactivity = stats.tectonicuplift = stats.tectonictrench =
+        stats.tectoniccaveexpansion = 0;
 
     if(!worldchunks.empty())
     {
@@ -444,6 +447,20 @@ static void getworlddebugstats(const vec &position, worlddebugstats &stats)
         stats.absolutey = position.y;
     }
     stats.absolutez = position.z;
+    if(!worldchunks.empty())
+    {
+        const int blockx = int(floor(stats.absolutex / WORLD_BLOCK_SIZE)),
+                  blocky = int(floor(stats.absolutey / WORLD_BLOCK_SIZE)),
+                  logicalz = int(floor(position.z / WORLD_BLOCK_SIZE)) + WORLD_MIN_HEIGHT;
+        game::worldgenerator generator(game::getworldseed());
+        const int surfaceheight = generator.height(blockx, blocky);
+        const game::worldtectonicsample tectonics =
+            generator.tectonics(blockx, blocky, max(surfaceheight - logicalz, 0));
+        stats.tectonicactivity = tectonics.activity;
+        stats.tectonicuplift = tectonics.landuplift;
+        stats.tectonictrench = tectonics.oceantrench;
+        stats.tectoniccaveexpansion = tectonics.caveexpansion;
+    }
 }
 
 static worlddebugstats worlddebugcache;
@@ -465,6 +482,12 @@ static void debugcoordinateresult(double coordinate)
     result(value);
 }
 
+static void debugworldvalueresult(float value)
+{
+    defformatstring(formatted, "%.3f", clamp(value, 0.0f, 1.0f));
+    result(formatted);
+}
+
 ICOMMAND(getdebugcamx, "", (), debugcoordinateresult(currentworlddebugstats().absolutex));
 ICOMMAND(getdebugcamy, "", (), debugcoordinateresult(currentworlddebugstats().absolutey));
 ICOMMAND(getdebugcamz, "", (), debugcoordinateresult(currentworlddebugstats().absolutez));
@@ -474,6 +497,14 @@ ICOMMAND(getdebugrenderedfull, "", (), intret(currentworlddebugstats().rendered)
 ICOMMAND(getdebugtargetchunks, "", (), intret((2 * maxchunkdist + 1) * (2 * maxchunkdist + 1)));
 ICOMMAND(getdebugloadingqueue, "", (), intret(currentworlddebugstats().loadingqueue));
 ICOMMAND(getdebuggenerationqueue, "", (), intret(currentworlddebugstats().generationqueue));
+ICOMMAND(getdebugtectonicactivity, "", (),
+         debugworldvalueresult(currentworlddebugstats().tectonicactivity));
+ICOMMAND(getdebugtectonicuplift, "", (),
+         debugworldvalueresult(currentworlddebugstats().tectonicuplift));
+ICOMMAND(getdebugtectonictrench, "", (),
+         debugworldvalueresult(currentworlddebugstats().tectonictrench));
+ICOMMAND(getdebugtectoniccave, "", (),
+         debugworldvalueresult(currentworlddebugstats().tectoniccaveexpansion));
 
 void clearworldchunks()
 {
@@ -2111,6 +2142,9 @@ struct worldgencontext
     uchar biomemap[WORLD_CHUNK_BLOCKS * WORLD_CHUNK_BLOCKS];
     uchar coastmap[WORLD_CHUNK_BLOCKS * WORLD_CHUNK_BLOCKS];
     uchar rockmap[WORLD_CHUNK_BLOCKS * WORLD_CHUNK_BLOCKS];
+    uchar tectonicactivitymap[WORLD_CHUNK_BLOCKS * WORLD_CHUNK_BLOCKS];
+    uchar tectonicupliftmap[WORLD_CHUNK_BLOCKS * WORLD_CHUNK_BLOCKS];
+    uchar fracturecorridormap[WORLD_CHUNK_BLOCKS * WORLD_CHUNK_BLOCKS];
     int seed, grasstexture, grasssidetexture, grassbottomtexture;
     int dirttexture, stonetexture, sandtexture, snowtexture, woodtexture, leaftexture;
     bool prepared, remip;
@@ -2406,11 +2440,12 @@ static float worldsmoothstep(float low, float high, float value)
 }
 
 static int generateworldheight(const worldgencontext &ctx, int chunkx, int chunky,
-                               int blockx, int blocky)
+                               int blockx, int blocky,
+                               game::worldtectonicsample *tectonics = NULL)
 {
     const int x = chunkx * WORLD_CHUNK_BLOCKS + blockx,
               y = chunky * WORLD_CHUNK_BLOCKS + blocky;
-    return ctx.generator.height(x, y) * WORLD_BLOCK_SIZE;
+    return ctx.generator.height(x, y, tectonics) * WORLD_BLOCK_SIZE;
 }
 
 static void generateworldcoastmap(worldgencontext &ctx, int chunkx, int chunky)
@@ -2505,7 +2540,16 @@ static bool generateworldheightmap(worldgencontext &ctx, int chunkx, int chunky)
             loop(x, WORLD_CHUNK_BLOCKS)
             {
                 const int index = y * WORLD_CHUNK_BLOCKS + x;
-                ctx.heightmap[index] = generateworldheight(ctx, chunkx, chunky, x, y);
+                game::worldtectonicsample tectonics;
+                ctx.heightmap[index] = generateworldheight(ctx, chunkx, chunky, x, y, &tectonics);
+                ctx.tectonicactivitymap[index] = uchar(clamp(int(floor(tectonics.activity
+                                                               * 255.0f + 0.5f)), 0, 255));
+                ctx.tectonicupliftmap[index] = uchar(clamp(int(floor(tectonics.landuplift
+                                                             * 255.0f + 0.5f)), 0, 255));
+                const int worldx = chunkx * WORLD_CHUNK_BLOCKS + x,
+                          worldy = chunky * WORLD_CHUNK_BLOCKS + y;
+                ctx.fracturecorridormap[index] = uchar(clamp(int(floor(
+                    ctx.generator.fracturecorridor(worldx, worldy) * 255.0f + 0.5f)), 0, 255));
             }
         }
     }
@@ -2843,12 +2887,26 @@ static bool generateworldcheesecaves(worldgencontext &ctx, uchar *carvemap, int 
         if(ctx.iscanceled()) return false;
         loop(x, WORLD_CHUNK_BLOCKS)
         {
-            const int surfaceheight = ctx.heightmap[y * WORLD_CHUNK_BLOCKS + x] / WORLD_BLOCK_SIZE,
+            const int index = y * WORLD_CHUNK_BLOCKS + x,
+                      surfaceheight = ctx.heightmap[index] / WORLD_BLOCK_SIZE,
                       caveceiling = min(surfaceheight - 1, WORLD_MAX_HEIGHT - 1);
+            const float tectonicactivity = ctx.tectonicactivitymap[index] / 255.0f,
+                        tectonicuplift = ctx.tectonicupliftmap[index] / 255.0f,
+                        fracturecorridor = ctx.fracturecorridormap[index] / 255.0f,
+                        foundationprotection = 1.0f - tectonicuplift * 0.70f,
+                        tectonicprotecteddepth = max(float(mindepth), 12.0f),
+                        tectonicfulldepth = max(float(fulldepth), 20.0f);
             for(int logicalz = minheight; logicalz <= caveceiling; ++logicalz)
             {
                 const float depth = float(surfaceheight - logicalz),
                             depthweight = worldsmoothstep(float(mindepth), float(fulldepth), depth),
+                            tectonicdepthweight = worldsmoothstep(tectonicprotecteddepth,
+                                                                 max(tectonicfulldepth,
+                                                                     tectonicprotecteddepth + 1.0f),
+                                                                 depth),
+                            tectonicbase = tectonicactivity * tectonicdepthweight
+                                         * foundationprotection,
+                            caveexpansion = tectonicbase * ctx.settings.tectoniccavestrength,
                             tunnelweight = worldsmoothstep(1.0f, float(mindepth), depth),
                             veinwidth = ctx.settings.caveentrancewidth
                                       + (ctx.settings.tunnelwidth - ctx.settings.caveentrancewidth)
@@ -2859,12 +2917,21 @@ static bool generateworldcheesecaves(worldgencontext &ctx, uchar *carvemap, int 
                             largecavethreshold = ctx.settings.largecavethreshold
                                                + (ctx.settings.largecavedeepthreshold
                                                 - ctx.settings.largecavethreshold) * deepweight
-                                               + surfacepenalty;
+                                               + surfacepenalty - caveexpansion * 0.22f,
+                            fracturewidth = ctx.settings.tectonicfracturestrength
+                                          * tectonicbase * 0.06f;
                 const float noisex = float(chunkx) * WORLD_CHUNK_BLOCKS + x + 17500.5f,
                             noisey = float(chunky) * WORLD_CHUNK_BLOCKS + y - 17500.5f,
                             noisez = logicalz + 3500.5f;
                 bool carve = fabs(ctx.generator.tunnela.GetNoise(noisex, noisey, noisez)) < veinwidth &&
                              fabs(ctx.generator.tunnelb.GetNoise(noisex, noisey, noisez)) < veinwidth;
+                if(!carve && fracturecorridor < fracturewidth)
+                {
+                    const float fracturez = logicalz * 0.18f + 5000.5f;
+                    carve = ctx.generator.fracturevertical.GetNoise(noisex + 13500.0f,
+                                                                    noisey - 13500.0f,
+                                                                    fracturez) > -0.25f;
+                }
                 if(!carve && depth >= mindepth)
                     carve = ctx.generator.caves.GetNoise(noisex, noisey, noisez)
                                 > ctx.settings.cavethreshold + surfacepenalty ||
