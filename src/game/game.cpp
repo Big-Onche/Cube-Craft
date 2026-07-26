@@ -159,6 +159,9 @@ namespace game
 
     void updateworld()
     {
+#ifndef STANDALONE
+        environment::update();
+#endif
         updateworldchunks();
         physicsframe();
         if(player1)
@@ -284,6 +287,7 @@ namespace game
     {
         copystring(clientmap, name ? name : "");
 #ifndef STANDALONE
+        environment::reset();
         if(!initing)
         {
             if(!remote && !isconnected()) localconnect();

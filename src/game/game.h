@@ -110,6 +110,14 @@ namespace game
     extern void changemap(const char *name, int mode);
     extern bool addmsg(int type, const char *fmt = NULL, ...);
     extern void c2sinfo(bool force = false);
+
+#ifndef STANDALONE
+    namespace environment
+    {
+        extern void reset();
+        extern void update();
+    }
+#endif
 }
 
 namespace server

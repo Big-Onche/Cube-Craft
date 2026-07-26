@@ -59,6 +59,7 @@
 		D1FCB16E18832B7500AFC227 /* ai.cpp in Sources */ = {isa = PBXBuildFile; fileRef = D1FCB12718832B7500AFC227 /* ai.cpp */; };
 		D1FCB16F18832B7500AFC227 /* client.cpp in Sources */ = {isa = PBXBuildFile; fileRef = D1FCB12A18832B7500AFC227 /* client.cpp */; };
 		D1FCB17018832B7500AFC227 /* entities.cpp in Sources */ = {isa = PBXBuildFile; fileRef = D1FCB12C18832B7500AFC227 /* entities.cpp */; };
+		E17A000118832B7500AFC227 /* environment.cpp in Sources */ = {isa = PBXBuildFile; fileRef = E17A000218832B7500AFC227 /* environment.cpp */; };
 		D1FCB17118832B7500AFC227 /* game.cpp in Sources */ = {isa = PBXBuildFile; fileRef = D1FCB12E18832B7500AFC227 /* game.cpp */; };
 		D1FCB17218832B7500AFC227 /* pch.cpp in Sources */ = {isa = PBXBuildFile; fileRef = D1FCB13018832B7500AFC227 /* pch.cpp */; };
 		D1FCB17318832B7500AFC227 /* render.cpp in Sources */ = {isa = PBXBuildFile; fileRef = D1FCB13118832B7500AFC227 /* render.cpp */; };
@@ -171,6 +172,7 @@
 		D1FCB12B18832B7500AFC227 /* ctf.h */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.h; path = ctf.h; sourceTree = "<group>"; };
 		D1FCB12C18832B7500AFC227 /* entities.cpp */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.cpp.cpp; path = entities.cpp; sourceTree = "<group>"; };
 		D1FCB12D18832B7500AFC227 /* extinfo.h */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.h; path = extinfo.h; sourceTree = "<group>"; };
+		E17A000218832B7500AFC227 /* environment.cpp */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.cpp.cpp; path = environment.cpp; sourceTree = "<group>"; };
 		D1FCB12E18832B7500AFC227 /* game.cpp */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.cpp.cpp; path = game.cpp; sourceTree = "<group>"; };
 		D1FCB12F18832B7500AFC227 /* game.h */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.h; path = game.h; sourceTree = "<group>"; };
 		A1B2C3D4E5F60718293A4B5E /* world.h */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.h; path = world.h; sourceTree = "<group>"; };
@@ -406,6 +408,7 @@
 				D1FCB12B18832B7500AFC227 /* ctf.h */,
 				D1FCB12C18832B7500AFC227 /* entities.cpp */,
 				D1FCB12D18832B7500AFC227 /* extinfo.h */,
+				E17A000218832B7500AFC227 /* environment.cpp */,
 				D1FCB12E18832B7500AFC227 /* game.cpp */,
 				D1FCB12F18832B7500AFC227 /* game.h */,
 				A1B2C3D4E5F60718293A4B5E /* world.h */,
@@ -556,6 +559,7 @@
 				D1FCB16E18832B7500AFC227 /* ai.cpp in Sources */,
 				D1FCB16F18832B7500AFC227 /* client.cpp in Sources */,
 				D1FCB17018832B7500AFC227 /* entities.cpp in Sources */,
+				E17A000118832B7500AFC227 /* environment.cpp in Sources */,
 				D1FCB17118832B7500AFC227 /* game.cpp in Sources */,
 				D1FCB17218832B7500AFC227 /* pch.cpp in Sources */,
 				D1FCB17318832B7500AFC227 /* render.cpp in Sources */,

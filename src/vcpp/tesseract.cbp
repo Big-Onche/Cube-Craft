@@ -209,6 +209,7 @@
 		<Unit filename="../engine/worldio.cpp" />
 		<Unit filename="../game/client.cpp" />
 		<Unit filename="../game/entities.cpp" />
+		<Unit filename="../game/environment.cpp" />
 		<Unit filename="../game/game.cpp" />
 		<Unit filename="../game/game.h">
 			<Option compile="1" />

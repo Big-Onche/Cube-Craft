@@ -115,6 +115,7 @@ CLIENT_OBJS= \
 	engine/worldio.o \
 	game/client.o \
 	game/entities.o \
+	game/environment.o \
 	game/game.o \
 	game/server.o \
 	game/world.o
