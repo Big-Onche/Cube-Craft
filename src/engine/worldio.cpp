@@ -2141,6 +2141,7 @@ struct worldgencontext
     int heightmap[WORLD_CHUNK_BLOCKS * WORLD_CHUNK_BLOCKS];
     uchar biomemap[WORLD_CHUNK_BLOCKS * WORLD_CHUNK_BLOCKS];
     uchar coastmap[WORLD_CHUNK_BLOCKS * WORLD_CHUNK_BLOCKS];
+    uchar cliffmap[WORLD_CHUNK_BLOCKS * WORLD_CHUNK_BLOCKS];
     uchar rockmap[WORLD_CHUNK_BLOCKS * WORLD_CHUNK_BLOCKS];
     uchar tectonicactivitymap[WORLD_CHUNK_BLOCKS * WORLD_CHUNK_BLOCKS];
     uchar tectonicupliftmap[WORLD_CHUNK_BLOCKS * WORLD_CHUNK_BLOCKS];
@@ -2535,6 +2536,14 @@ static bool generateworldrock(const worldgencontext &ctx, int chunkx, int chunky
     return ctx.generator.rock(x, y, height / WORLD_BLOCK_SIZE);
 }
 
+static bool generateworldcliff(const worldgencontext &ctx, int chunkx, int chunky,
+                               int blockx, int blocky, int height)
+{
+    const int x = chunkx * WORLD_CHUNK_BLOCKS + blockx,
+              y = chunky * WORLD_CHUNK_BLOCKS + blocky;
+    return ctx.generator.cliff(x, y, height / WORLD_BLOCK_SIZE);
+}
+
 static bool generateworldheightmap(worldgencontext &ctx, int chunkx, int chunky)
 {
     {
@@ -2572,6 +2581,8 @@ static bool generateworldheightmap(worldgencontext &ctx, int chunkx, int chunky)
                 const int index = y * WORLD_CHUNK_BLOCKS + x;
                 ctx.biomemap[index] = generateworldbiome(ctx, chunkx, chunky, x, y,
                                                          ctx.heightmap[index]);
+                ctx.cliffmap[index] = generateworldcliff(ctx, chunkx, chunky, x, y,
+                                                         ctx.heightmap[index]);
                 ctx.rockmap[index] = generateworldrock(ctx, chunkx, chunky, x, y, ctx.heightmap[index]);
             }
         }
@@ -2599,8 +2610,13 @@ static bool worldrock(const worldgencontext &ctx, int localx, int localy)
     return ctx.rockmap[localy / WORLD_BLOCK_SIZE * WORLD_CHUNK_BLOCKS + localx / WORLD_BLOCK_SIZE] != 0;
 }
 
+static bool worldcliff(const worldgencontext &ctx, int localx, int localy)
+{
+    return ctx.cliffmap[localy / WORLD_BLOCK_SIZE * WORLD_CHUNK_BLOCKS + localx / WORLD_BLOCK_SIZE] != 0;
+}
+
 static int worldcolumncubetype(const worldgencontext &ctx, int z, int size, int height,
-                               int biome, bool coast, bool rock)
+                               int biome, bool coast, bool cliff, bool rock)
 {
     const int surface = WORLD_GROUND_HEIGHT + height,
               watertop = WORLD_GROUND_HEIGHT + ctx.settings.sealevel * WORLD_BLOCK_SIZE,
@@ -2615,6 +2631,14 @@ static int worldcolumncubetype(const worldgencontext &ctx, int z, int size, int 
     if(z >= max(surface, watertop)) return WORLD_EMPTY;
     if(surface < watertop && z >= surface && z + size <= watertop) return WORLD_WATER;
     if(z + size <= dirtbottom) return WORLD_STONE;
+    if(cliff)
+    {
+        // Every exposed stair of the cliff belongs to the rock face. Normal
+        // surface rules resume immediately behind this band, producing a grassy
+        // plateau without grass caps scattered down the vertical wall.
+        if(z >= dirtbottom && z + size <= surface) return WORLD_STONE;
+        return WORLD_MIXED;
+    }
     if(rock)
     {
         if(biome == game::WORLD_BIOME_SNOW && z >= grassbottom && z + size <= surface) return WORLD_SNOW;
@@ -2650,7 +2674,7 @@ static int worldcubetype(const worldgencontext &ctx, const ivec &o, int size)
     {
         int columntype = worldcolumncubetype(ctx, o.z, size, worldheight(ctx, x, y),
                                             worldbiome(ctx, x, y), worldcoast(ctx, x, y),
-                                            worldrock(ctx, x, y));
+                                            worldcliff(ctx, x, y), worldrock(ctx, x, y));
         if(columntype == WORLD_MIXED || (type >= 0 && type != columntype)) return WORLD_MIXED;
         type = columntype;
     }
@@ -2677,7 +2701,7 @@ static int worldrepresentativecubetype(const worldgencontext &ctx, const ivec &o
         z = clamp(visibletop - 1, 0, WORLD_MAP_SIZE - 1);
 
     return worldcolumncubetype(ctx, z, 1, height, biome, worldcoast(ctx, x, y),
-                               worldrock(ctx, x, y));
+                               worldcliff(ctx, x, y), worldrock(ctx, x, y));
 }
 
 static bool generateworldcube(worldgencontext &ctx, cube &c, const ivec &o, int size, int mingridsize)

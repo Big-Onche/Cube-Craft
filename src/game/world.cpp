@@ -24,6 +24,8 @@ FVAR(worldmaxoceansubsidence, 0.0f, 100.0f, 255.0f);
 FVAR(worldtectoniccavestrength, 0.0f, 0.35f, 1.0f);
 FVAR(worldtectonicfracturestrength, 0.0f, 0.40f, 1.0f);
 FVAR(worldcoastprotectionwidth, 0.0f, 32.0f, 256.0f);
+FVAR(worldcliffchance, 0.0f, 24.0f, 100.0f);
+FVAR(worldcliffmaxheight, 2.0f, 21.0f, 255.0f);
 
 FVAR(worldtemperaturefrequency, 0.000001f, 0.0004f, 1.0f);
 FVAR(worldmoisturefrequency, 0.000001f, 0.0006f, 1.0f);
@@ -119,6 +121,7 @@ namespace game
           tectoniccavestrength(worldtectoniccavestrength),
           tectonicfracturestrength(worldtectonicfracturestrength),
           coastprotectionwidth(worldcoastprotectionwidth),
+          cliffchance(worldcliffchance), cliffmaxheight(worldcliffmaxheight),
           temperaturefrequency(worldtemperaturefrequency),
           moisturefrequency(worldmoisturefrequency),
           biomevariationfrequency(worldbiomevariationfrequency),
@@ -162,6 +165,7 @@ namespace game
         setupnoise(coastshape, seed ^ 0x57C8E219, settings.geologyfrequency * 8.0f, 1);
         setupnoise(covenoise, seed ^ 0x2B61D4A7, settings.geologyfrequency * 2.0f, 1);
         setupnoise(beachnoise, seed ^ 0x73A9C52D, settings.geologyfrequency * 4.0f, 1);
+        setupnoise(cliffnoise, seed ^ 0x4E91A73B, settings.geologyfrequency * 3.0f, 1);
         // A slow field bounds each mountain range. Ridged medium-scale noise
         // builds the massif, while a faster field forms saddles and local peaks.
         setupnoise(mountainrange, seed ^ 0x18F47C53, settings.geologyfrequency * 1.5f, 1);
@@ -207,18 +211,30 @@ namespace game
     }
 
     static void samplecoastprofile(const worldgenerator &generator, float noisex, float noisey,
-                                   float &beachspan, float &grassrun, float &grasslevel)
+                                   float &beachspan, float &plainrun, float &plainlevel)
     {
         const float beachshape = clamp(generator.beachnoise.GetNoise(noisex, noisey)
                                        * 0.5f + 0.5f, 0.0f, 1.0f),
                     grassshape = clamp(generator.coastshape.GetNoise(noisex, noisey)
                                        * 0.5f + 0.5f, 0.0f, 1.0f);
-        // A single sand or dirt terrace is always at least one metre wide.
-        // Rare high beach values produce broad coves; low values form short,
-        // steeper transitions.
+        // Broad beaches keep both sand terraces wide. Past them, ordinary coasts
+        // settle into a low grass plain before returning to continental relief.
         beachspan = 1.0f + 7.0f * powf(beachshape, 3.0f);
-        grassrun = 2.0f + 10.0f * powf(beachshape, 1.5f);
-        grasslevel = 4.0f + 4.0f * grassshape;
+        plainrun = 14.0f + 16.0f * (1.0f - powf(beachshape, 1.5f));
+        plainlevel = 2.0f + grassshape;
+    }
+
+    static float samplecliffstrength(const worldgenerator &generator, float noisex, float noisey)
+    {
+        const float selector = clamp(generator.cliffnoise.GetNoise(noisex, noisey)
+                                     * 0.5f + 0.5f, 0.0f, 1.0f),
+                    chance = clamp(generator.settings.cliffchance * 0.01f, 0.0f, 1.0f),
+                    center = 1.0f - chance;
+        if(chance <= 0.0f) return 0.0f;
+        if(chance >= 1.0f) return 1.0f;
+        // Cliffs occur in coherent coastal sections, not as per-column accidents.
+        // An eight-percent feather on each side keeps their boundaries gradual.
+        return smoothstep(center - 0.08f, center + 0.08f, selector);
     }
 
     static worldtectonicsample sampletectonics(const worldgenerator &generator, int x, int y,
@@ -355,15 +371,15 @@ namespace game
 
     float worldgenerator::coasttransitionwidth(int x, int y) const
     {
-        float beachspan, grassrun, grasslevel;
+        float beachspan, plainrun, plainlevel;
         samplecoastprofile(*this, x + 10000.5f, y - 10000.5f,
-                           beachspan, grassrun, grasslevel);
-        return 3.0f * beachspan + grassrun;
+                           beachspan, plainrun, plainlevel);
+        return 2.0f * beachspan + plainrun + 14.0f;
     }
 
     float worldgenerator::maxcoasttransitionwidth() const
     {
-        return 36.0f;
+        return 60.0f;
     }
 
     float worldgenerator::fracturecorridor(int x, int y) const
@@ -388,11 +404,14 @@ namespace game
             const float hill = clamp(hills.GetNoise(noisex, noisey) * 0.5f + 0.5f, 0.0f, 1.0f);
             elevation = settings.maxcontinentheight
                       * coastrise * (0.55f + 0.30f * inland + 0.15f * hill);
+            const float continentalelevation = elevation;
 
             // Build a deliberate beach cross-section near the continental edge.
             // A local gradient converts continental density into approximate metres
             // inland, keeping the profile deterministic and continuous across chunks.
-            if(elevation < 8.0f)
+            const float coastprofilelimit = max(16.0f,
+                min(settings.cliffmaxheight, settings.maxcontinentheight));
+            if(elevation < coastprofilelimit)
             {
                 const float gradientstep = 2.0f,
                             gradientx = (samplecontinental(*this, noisex + gradientstep, noisey)
@@ -404,18 +423,54 @@ namespace game
                             gradient = max(sqrtf(gradientx * gradientx + gradienty * gradienty),
                                            settings.geologyfrequency * 0.35f),
                             shoredistance = max((continental - threshold) / gradient, 0.0f);
-                float beachspan, grassrun, grasslevel;
-                samplecoastprofile(*this, noisex, noisey, beachspan, grassrun, grasslevel);
-                const float drysandend = 2.0f * beachspan,
-                            dirtend = 3.0f * beachspan;
-                float coastfloor;
-                if(shoredistance < beachspan) coastfloor = 0.0f;
-                else if(shoredistance < drysandend) coastfloor = 1.0f;
-                else if(shoredistance < dirtend) coastfloor = 2.0f;
-                else coastfloor = 2.0f + (grasslevel - 2.0f)
-                                                * smoothstep(dirtend, dirtend + grassrun,
-                                                             shoredistance);
-                elevation = max(elevation, coastfloor);
+                float beachspan, plainrun, plainlevel;
+                samplecoastprofile(*this, noisex, noisey, beachspan, plainrun, plainlevel);
+                const float cliffstrength = samplecliffstrength(*this, noisex, noisey),
+                            // Cliff sections progressively consume the beach. At full
+                            // strength the first land column can already be exposed rock.
+                            effectivebeachspan = beachspan * (1.0f - cliffstrength),
+                            drysandend = 2.0f * effectivebeachspan,
+                            plainend = drysandend + plainrun,
+                            blendend = plainend + 14.0f;
+                float normalelevation;
+                if(effectivebeachspan > 0.01f && shoredistance < effectivebeachspan)
+                    normalelevation = 0.0f;
+                else if(effectivebeachspan > 0.01f && shoredistance < drysandend)
+                    normalelevation = 1.0f;
+                else if(shoredistance < plainend) normalelevation = plainlevel;
+                else normalelevation = plainlevel
+                                     + (continentalelevation - plainlevel)
+                                     * smoothstep(plainend, blendend, shoredistance);
+
+                // High original relief is allowed to return sooner, while ordinary
+                // shores retain the deliberately broad 2–3 metre grass plain.
+                const float reliefpermission = smoothstep(9.0f, 16.0f,
+                                                          continentalelevation);
+                normalelevation += (max(continentalelevation, normalelevation)
+                                  - normalelevation) * reliefpermission;
+
+                const float cliffshape = clamp(coastshape.GetNoise(noisex, noisey)
+                                             * 0.5f + 0.5f, 0.0f, 1.0f),
+                            // Keep the current 7–16 metre distribution at the
+                            // default while making the configured value a hard cap.
+                            cliffheight = settings.cliffmaxheight
+                                        * (0.4375f + 0.5625f * cliffshape),
+                            cliffrise = smoothstep(-0.75f, 2.0f, shoredistance),
+                            // Hold a genuine plateau behind the rock face, then
+                            // blend it into the continental surface. Unlike the old
+                            // fade-to-zero profile, this cannot dig a trough between
+                            // the cliff and the inland terrain.
+                            cliffplateauend = max(plainend, 22.0f),
+                            cliffblendend = cliffplateauend + 32.0f,
+                            inlandtarget = max(continentalelevation, normalelevation),
+                            cliffblend = smoothstep(cliffplateauend, cliffblendend,
+                                                   shoredistance),
+                            cliffplateau = cliffheight
+                                         + (inlandtarget - cliffheight) * cliffblend,
+                            cliffelevation = max(inlandtarget,
+                                                 cliffplateau * cliffrise);
+                elevation = normalelevation
+                          + (cliffelevation - normalelevation) * cliffstrength;
             }
             elevation = clamp(elevation, 0.0f, settings.maxcontinentheight)
                       + settings.maxlanduplift * tectonicsample.landuplift;
@@ -477,6 +532,34 @@ namespace game
         return WORLD_BIOME_PLAINS;
     }
 
+    bool worldgenerator::cliff(int x, int y, int height) const
+    {
+        const float noisex = x + 10000.5f, noisey = y - 10000.5f,
+                    continental = samplecontinental(*this, noisex, noisey),
+                    threshold = landthreshold(settings),
+                    cliffstrength = samplecliffstrength(*this, noisex, noisey);
+        if(continental >= threshold && height >= settings.sealevel + 2
+           && cliffstrength > 0.25f)
+        {
+            const float gradientstep = 2.0f,
+                        gradientx = (samplecontinental(*this, noisex + gradientstep, noisey)
+                                   - samplecontinental(*this, noisex - gradientstep, noisey))
+                                  / (2.0f * gradientstep),
+                        gradienty = (samplecontinental(*this, noisex, noisey + gradientstep)
+                                   - samplecontinental(*this, noisex, noisey - gradientstep))
+                                  / (2.0f * gradientstep),
+                        gradient = max(sqrtf(gradientx * gradientx + gradienty * gradienty),
+                                       settings.geologyfrequency * 0.35f),
+                        shoredistance = (continental - threshold) / gradient,
+                        // The geometric cliff reaches its crest after roughly
+                        // three metres. Do not extend its stone material across
+                        // the much wider, flat inland plateau.
+                        facewidth = 2.5f + 0.5f * cliffstrength;
+            if(shoredistance <= facewidth) return true;
+        }
+        return false;
+    }
+
     bool worldgenerator::rock(int x, int y, int height) const
     {
         const float low = min(settings.stonelow, settings.stonehigh);
@@ -528,6 +611,8 @@ namespace game
             "worldtectoniccavestrength %.9g\n"
             "worldtectonicfracturestrength %.9g\n"
             "worldcoastprotectionwidth %.9g\n"
+            "worldcliffchance %.9g\n"
+            "worldcliffmaxheight %.9g\n"
             "worldtemperaturefrequency %.9g\n"
             "worldmoisturefrequency %.9g\n"
             "worldbiomevariationfrequency %.9g\n"
@@ -577,6 +662,7 @@ namespace game
             worldtectonicfrequency, worldtectonicwarpamplitude, worldtectonicridgepower,
             worldtectonicactivitythreshold, worldmaxlanduplift, worldmaxoceansubsidence,
             worldtectoniccavestrength, worldtectonicfracturestrength, worldcoastprotectionwidth,
+            worldcliffchance, worldcliffmaxheight,
             worldtemperaturefrequency, worldmoisturefrequency,
             worldbiomevariationfrequency, worldbiomevariationstrength, worldrockfrequency,
             worldsealevel, worldsnowheight, worldstonelow, worldstonehigh,

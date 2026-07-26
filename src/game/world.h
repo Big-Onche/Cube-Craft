@@ -43,6 +43,7 @@ namespace game
         float tectonicfrequency, tectonicwarpamplitude, tectonicridgepower;
         float tectonicactivitythreshold, maxlanduplift, maxoceansubsidence;
         float tectoniccavestrength, tectonicfracturestrength, coastprotectionwidth;
+        float cliffchance, cliffmaxheight;
         float temperaturefrequency, moisturefrequency, biomevariationfrequency;
         float biomevariationstrength, rockfrequency;
         float deserttemperature, desertmoisture, forestmoisture;
@@ -65,7 +66,7 @@ namespace game
 
     struct worldgenerator
     {
-        FastNoiseLite geology, hills, coastshape, covenoise, beachnoise;
+        FastNoiseLite geology, hills, coastshape, covenoise, beachnoise, cliffnoise;
         FastNoiseLite mountainrange, mountainnoise, mountainpeaks;
         FastNoiseLite tectonicnoise, tectonicwarp;
         FastNoiseLite temperature, moisture, biomevariation, biomeblend, rockiness;
@@ -82,6 +83,7 @@ namespace game
         float fracturecorridor(int x, int y) const;
         int height(int x, int y, worldtectonicsample *tectonics = NULL) const;
         int biome(int x, int y, int height) const;
+        bool cliff(int x, int y, int height) const;
         bool rock(int x, int y, int height) const;
     };
 
