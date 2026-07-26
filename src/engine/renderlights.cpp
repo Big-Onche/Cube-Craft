@@ -2488,10 +2488,17 @@ void radiancehints::bindparams()
     GLOBALPARAMF(rhbounds, 0.5f*(rhgrid + rhborder)/float(rhgrid + 2*rhborder));
 }
 
+extern int skylightenabled;
+
+static inline bool useskylight()
+{
+    return skylightenabled && !skylight.iszero();
+}
+
 bool useradiancehints()
 {
     return csmshadowmap && gidist &&
-           ((!sunlight.iszero() && gi && giscale) || !skylight.iszero());
+           ((!sunlight.iszero() && gi && giscale) || useskylight());
 }
 
 FVAR(avatarshadowdist, 0, 12, 100);
@@ -2665,7 +2672,7 @@ Shader *loaddeferredlightshader(const char *type = NULL)
     shadow[shadowlen] = '\0';
 
     int usecsm = 0, userh = 0;
-    if((!sunlight.iszero() || !skylight.iszero()) && csmshadowmap)
+    if((!sunlight.iszero() || useskylight()) && csmshadowmap)
     {
         usecsm = csmsplits;
         sun[sunlen++] = 'c';
@@ -2675,13 +2682,13 @@ Shader *loaddeferredlightshader(const char *type = NULL)
         if(!minimap)
         {
             if(avatar && ao && aosun) sun[sunlen++] = 'A';
-            bool useskylight = !skylight.iszero();
-            if(gidist && ((gi && giscale && !sunlight.iszero()) || useskylight))
+            bool usesky = useskylight();
+            if(gidist && ((gi && giscale && !sunlight.iszero()) || usesky))
             {
                 userh = rhsplits;
                 sun[sunlen++] = 'r';
                 sun[sunlen++] = '0' + rhsplits;
-                if(useskylight) sun[sunlen++] = 'k';
+                if(usesky) sun[sunlen++] = 'k';
             }
         }
     }
@@ -3001,7 +3008,8 @@ static inline void setlightglobals(bool transparent = false)
             GLOBALPARAM(sunlightdir, sunlightdir);
             GLOBALPARAMF(sunlightcolor, sunlight.x*lightscale*sunlightscale, sunlight.y*lightscale*sunlightscale, sunlight.z*lightscale*sunlightscale);
             GLOBALPARAMF(giscale, gi ? 2*giscale : 0);
-            GLOBALPARAMF(skylightcolor, 2*giaoscale*skylight.x*lightscale*skylightscale, 2*giaoscale*skylight.y*lightscale*skylightscale, 2*giaoscale*skylight.z*lightscale*skylightscale);
+            float skyscale = skylightenabled ? 2*giaoscale*lightscale*skylightscale : 0;
+            GLOBALPARAMF(skylightcolor, skylight.x*skyscale, skylight.y*skyscale, skylight.z*skyscale);
         }
     }
 
@@ -4428,7 +4436,7 @@ void rendercsmshadowmaps()
 
     csm.rendered = 0;
 
-    if((sunlight.iszero() && skylight.iszero()) || !csmshadowmap) return;
+    if((sunlight.iszero() && !useskylight()) || !csmshadowmap) return;
 
     csm.rendered = 1;
 
