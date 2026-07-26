@@ -429,14 +429,26 @@ namespace game
                             // Cliff sections progressively consume the beach. At full
                             // strength the first land column can already be exposed rock.
                             effectivebeachspan = beachspan * (1.0f - cliffstrength),
-                            drysandend = 2.0f * effectivebeachspan,
-                            plainend = drysandend + plainrun,
+                            beachend = 2.0f * effectivebeachspan,
+                            sandstepratio = 0.5f + clamp(
+                                coastshape.GetNoise(noisex, noisey) * 0.5f + 0.5f,
+                                0.0f, 1.0f) / 6.0f,
+                            sandstepstart = beachend * sandstepratio,
+                            grassriseend = beachend + min(8.0f, plainrun * 0.5f),
+                            plainend = beachend + plainrun,
                             blendend = plainend + 14.0f;
                 float normalelevation;
-                if(effectivebeachspan > 0.01f && shoredistance < effectivebeachspan)
+                if(effectivebeachspan > 0.01f && shoredistance < sandstepstart)
                     normalelevation = 0.0f;
-                else if(effectivebeachspan > 0.01f && shoredistance < drysandend)
+                else if(effectivebeachspan > 0.01f && shoredistance < beachend)
                     normalelevation = 1.0f;
+                else if(shoredistance < grassriseend)
+                    // The first grass column is always level 2 on ordinary coasts.
+                    // Its slow rise prevents a rounded level-3 plain from skipping
+                    // an entire vertical cube immediately after the sand.
+                    normalelevation = 2.0f + (plainlevel - 2.0f)
+                                             * smoothstep(beachend, grassriseend,
+                                                          shoredistance);
                 else if(shoredistance < plainend) normalelevation = plainlevel;
                 else normalelevation = plainlevel
                                      + (continentalelevation - plainlevel)
