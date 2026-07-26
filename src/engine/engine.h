@@ -669,6 +669,11 @@ extern void startmap(const char *name);
 struct mapmodelinfo { string name; model *m, *collide; };
 
 extern vector<mapmodelinfo> mapmodels;
+extern int registermapmodelpath(const char *name);
+extern int createworldmapmodelentity(const vec &o, int model, int yaw);
+extern bool updateworldmapmodelentity(int id, const vec &o, int model, int yaw);
+extern bool isworldmapmodelentity(int id, int model);
+extern void destroyworldmapmodelentity(int id);
 
 extern float transmdlsx1, transmdlsy1, transmdlsx2, transmdlsy2;
 extern uint transmdltiles[LIGHTTILE_MAXH];

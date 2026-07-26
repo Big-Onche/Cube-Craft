@@ -317,6 +317,16 @@ vector<mapmodelinfo> mapmodels;
 static const char * const mmprefix = "mapmodel/";
 static const int mmprefixlen = strlen(mmprefix);
 
+int registermapmodelpath(const char *name)
+{
+    if(!name || !name[0]) return -1;
+    loopv(mapmodels) if(!strcmp(mapmodels[i].name, name)) return i;
+    mapmodelinfo &mmi = mapmodels.add();
+    copystring(mmi.name, name);
+    mmi.m = mmi.collide = NULL;
+    return mapmodels.length() - 1;
+}
+
 void mapmodel(char *name)
 {
     mapmodelinfo &mmi = mapmodels.add();
@@ -336,7 +346,15 @@ const char *mapmodelname(int i) { return mapmodels.inrange(i) ? mapmodels[i].nam
 ICOMMAND(mmodel, "s", (char *name), mapmodel(name));
 COMMAND(mapmodel, "s");
 COMMAND(mapmodelreset, "i");
-ICOMMAND(mapmodelname, "ii", (int *index, int *prefix), { if(mapmodels.inrange(*index)) result(mapmodels[*index].name[0] ? mapmodels[*index].name + (*prefix ? 0 : mmprefixlen) : ""); });
+ICOMMAND(mapmodelname, "ii", (int *index, int *prefix),
+{
+    if(mapmodels.inrange(*index))
+    {
+        const char *name = mapmodels[*index].name;
+        if(!*prefix && !strncmp(name, mmprefix, mmprefixlen)) name += mmprefixlen;
+        result(name);
+    }
+});
 ICOMMAND(mapmodelloaded, "i", (int *index), { intret(mapmodels.inrange(*index) && mapmodels[*index].m ? 1 : 0); });
 ICOMMAND(nummapmodels, "", (), { intret(mapmodels.length()); });
 ICOMMAND(mapmodelfind, "s", (char *name), { int found = -1; loopv(mapmodels) if(strstr(mapmodels[i].name, name)) { found = i; break; } intret(found); });

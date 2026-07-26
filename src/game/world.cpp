@@ -48,6 +48,9 @@ FVAR(worlddesertmoisture, -1.0f, -0.18f, 1.0f);
 FVAR(worldforestmoisture, -1.0f, 0.10f, 1.0f);
 FVAR(worldforesttreedensity, 0.0f, 0.04f, 0.25f);
 FVAR(worldplainstreedensity, 0.0f, 0.0017f, 0.25f);
+FVAR(worldgrassfrequency, 0.00001f, 0.02f, 1.0f);
+FVAR(worldgrassdensity, 0.0f, 0.35f, 1.0f);
+FVAR(worldgrassmaxoffset, 0.0f, 0.18f, 0.45f);
 VAR(worldpinestartheight, -255, 50, 255);
 VAR(worldpinefullheight, -255, 100, 255);
 
@@ -130,6 +133,8 @@ namespace game
           deserttemperature(worlddeserttemperature), desertmoisture(worlddesertmoisture),
           forestmoisture(worldforestmoisture),
           foresttreedensity(worldforesttreedensity), plainstreedensity(worldplainstreedensity),
+          grassfrequency(worldgrassfrequency), grassdensity(worldgrassdensity),
+          grassmaxoffset(worldgrassmaxoffset),
           cavefrequency(worldcavefrequency), cavethreshold(worldcavethreshold),
           largecavefrequency(worldlargecavefrequency),
           largecavethreshold(worldlargecavethreshold),
@@ -644,6 +649,9 @@ namespace game
             "worldforestmoisture %.9g\n"
             "worldforesttreedensity %.9g\n"
             "worldplainstreedensity %.9g\n"
+            "worldgrassfrequency %.9g\n"
+            "worldgrassdensity %.9g\n"
+            "worldgrassmaxoffset %.9g\n"
             "worldpinestartheight %d\n"
             "worldpinefullheight %d\n"
             "worldcavefrequency %.9g\n"
@@ -682,6 +690,7 @@ namespace game
             worldbeachminheight, worldbeachmaxheight,
             worlddeserttemperature, worlddesertmoisture, worldforestmoisture,
             worldforesttreedensity, worldplainstreedensity,
+            worldgrassfrequency, worldgrassdensity, worldgrassmaxoffset,
             worldpinestartheight, worldpinefullheight,
             worldcavefrequency, worldcavethreshold, worldlargecavefrequency,
             worldlargecavethreshold, worldlargecavedeepthreshold,

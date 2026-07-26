@@ -390,6 +390,8 @@ static cube *prepareworldchunk(worldchunkjob &job);
 static void freepreparedworldchunk(cube *root);
 static int worldchunkloader(void *);
 static void shutdownworldchunkloader();
+static void updateworldscatterers();
+static void clearworldscattererentities();
 static int pruneworldchunkcache(int chunkx, int chunky, int limit);
 static bool saveworldconfig();
 static void worldchunkname(char *name, size_t len, const worldchunk &chunk);
@@ -509,6 +511,7 @@ ICOMMAND(getdebugtectoniccave, "", (),
 void clearworldchunks()
 {
     ZoneScopedN("Chunks/Clear all chunks");
+    clearworldscattererentities();
     shutdownworldchunkloader();
     worldchunkvaupdates.setsize(0);
     worldchunkvaupdateset.clear();
@@ -1796,6 +1799,7 @@ static void rebaseworldchunks(int chunkx, int chunky, bool translateplayer = tru
     ZoneTextF("%d_%d", chunkx, chunky);
     worldchunkvaupdates.setsize(0);
     worldchunkvaupdateset.clear();
+    clearworldscattererentities();
     loopv(worldchunks) if(worldchunkmounted(worldchunks[i])) unmountworldchunk(worldchunks[i]);
     if(worldsectionowners.numelems)
     {
@@ -2014,7 +2018,10 @@ void updateworldchunks(bool force)
     if(!force) processworldchunkupdates(chunkx, chunky, worldchunkaheadx, worldchunkaheady);
     if(!force && chunkx == lastplayerchunkx && chunky == lastplayerchunky &&
        maxchunkdist == lastchunkdist)
+    {
+        updateworldscatterers();
         return;
+    }
 
     int viewdist = maxchunkdist;
     bool rebase = localchunkx - viewdist <= 0 || localchunkx + viewdist >= WORLD_RUNTIME_CHUNKS - 1 ||
@@ -2025,6 +2032,7 @@ void updateworldchunks(bool force)
         mountworldchunksafetyregion(chunkx, chunky);
     }
     rebuildworldchunks(chunkx, chunky, worldchunkaheadx, worldchunkaheady, force && !rebase, true);
+    updateworldscatterers();
 }
 
 static bool parseworldcoordinate(const char *text, double &coordinate)
@@ -2774,6 +2782,232 @@ static float worldtreeunit(uint hash)
 {
     return float(hash & 0x00FFFFFFU) / float(0x01000000U);
 }
+
+static uint hashworldgrass(uint seed, uint worldx, uint worldy, uint salt)
+{
+    uint hash = seed ^ salt;
+    hash ^= worldx * 0x9E3779B9U;
+    hash ^= worldy * 0x85EBCA6BU;
+    hash ^= hash >> 16;
+    hash *= 0x7FEB352DU;
+    hash ^= hash >> 15;
+    hash *= 0x846CA68BU;
+    hash ^= hash >> 16;
+    return hash;
+}
+
+struct worldgrasscandidate
+{
+    ivec key;
+    vec position;
+    int yaw;
+    bool matched;
+
+    worldgrasscandidate(const ivec &key, const vec &position, int yaw)
+        : key(key), position(position), yaw(yaw), matched(false)
+    {
+    }
+};
+
+struct worldgrassentity
+{
+    ivec key;
+    int id;
+
+    worldgrassentity(const ivec &key, int id) : key(key), id(id) {}
+};
+
+static vector<worldgrassentity> worldgrassentities;
+static int worldgrassmodel = -1;
+
+struct worldgrasscollectcontext
+{
+    FastNoiseLite distribution;
+    game::worldsettings settings;
+    vector<worldgrasscandidate> &candidates;
+    vec focus;
+    float radiussquared;
+    int minx, miny, maxx, maxy, remaining;
+    uint seed;
+
+    worldgrasscollectcontext(const vec &focus, float radius, int limit,
+                             vector<worldgrasscandidate> &candidates)
+        : candidates(candidates), focus(focus), radiussquared(radius * radius),
+          minx(max(int(floorf((focus.x - radius) / WORLD_BLOCK_SIZE))
+                   * WORLD_BLOCK_SIZE, 0)),
+          miny(max(int(floorf((focus.y - radius) / WORLD_BLOCK_SIZE))
+                   * WORLD_BLOCK_SIZE, 0)),
+          maxx(min(int(ceilf((focus.x + radius) / WORLD_BLOCK_SIZE))
+                   * WORLD_BLOCK_SIZE, worldsize)),
+          maxy(min(int(ceilf((focus.y + radius) / WORLD_BLOCK_SIZE))
+                   * WORLD_BLOCK_SIZE, worldsize)),
+          remaining(limit), seed(uint(game::getworldseed()))
+    {
+        distribution.SetSeed(game::getworldseed() ^ 0x6E624EB7);
+        distribution.SetNoiseType(FastNoiseLite::NoiseType_OpenSimplex2S);
+        distribution.SetFrequency(settings.grassfrequency);
+        distribution.SetFractalType(FastNoiseLite::FractalType_FBm);
+        distribution.SetFractalOctaves(2);
+        distribution.SetFractalLacunarity(1.8f);
+        distribution.SetFractalGain(0.5f);
+    }
+};
+
+static bool worldgrassnodeinrange(const worldgrasscollectcontext &ctx,
+                                  const ivec &o, int size)
+{
+    if(o.z >= WORLD_MAP_SIZE || o.x >= ctx.maxx || o.y >= ctx.maxy ||
+       o.x + size <= ctx.minx || o.y + size <= ctx.miny)
+        return false;
+    const float dx = ctx.focus.x < o.x ? o.x - ctx.focus.x :
+                     ctx.focus.x > o.x + size ? ctx.focus.x - (o.x + size) : 0.0f,
+                dy = ctx.focus.y < o.y ? o.y - ctx.focus.y :
+                     ctx.focus.y > o.y + size ? ctx.focus.y - (o.y + size) : 0.0f;
+    return dx * dx + dy * dy <= ctx.radiussquared;
+}
+
+static void collectworldgrassnode(worldgrasscollectcontext &ctx, const cube &c,
+                                  const ivec &o, int size)
+{
+    if(ctx.remaining <= 0 || !worldgrassnodeinrange(ctx, o, size)) return;
+    if(c.children)
+    {
+        const int childsize = size >> 1;
+        loopi(8)
+            collectworldgrassnode(ctx, c.children[i], ivec(i, o, childsize),
+                                  childsize);
+        return;
+    }
+    if(size < WORLD_BLOCK_SIZE || isempty(c) || !isentirelysolid(c) ||
+       c.material != MAT_AIR || c.texture[O_TOP] != worldgrasstexture)
+        return;
+
+    const int top = o.z + size;
+    if(top >= worldsize) return;
+    const int startx = max(o.x, ctx.minx), starty = max(o.y, ctx.miny),
+              endx = min(o.x + size, ctx.maxx), endy = min(o.y + size, ctx.maxy);
+    for(int y = starty; y < endy && ctx.remaining > 0; y += WORLD_BLOCK_SIZE)
+    for(int x = startx; x < endx && ctx.remaining > 0; x += WORLD_BLOCK_SIZE)
+    {
+        const float centerx = x + WORLD_BLOCK_SIZE * 0.5f,
+                    centery = y + WORLD_BLOCK_SIZE * 0.5f,
+                    dx = centerx - ctx.focus.x, dy = centery - ctx.focus.y;
+        if(dx * dx + dy * dy > ctx.radiussquared) continue;
+
+        ivec aboveorigin;
+        int abovesize;
+        const cube &above = lookupcube(ivec(x + WORLD_BLOCK_SIZE / 2,
+                                            y + WORLD_BLOCK_SIZE / 2, top),
+                                       0, aboveorigin, abovesize);
+        if(!isempty(above) || above.material != MAT_AIR) continue;
+
+        const uint worldx = uint(worldfirstchunkx) * uint(WORLD_CHUNK_BLOCKS)
+                          + uint(x / WORLD_BLOCK_SIZE),
+                   worldy = uint(worldfirstchunky) * uint(WORLD_CHUNK_BLOCKS)
+                          + uint(y / WORLD_BLOCK_SIZE);
+        const float noisex = float(double(worldfirstchunkx) * WORLD_CHUNK_BLOCKS
+                                 + x / WORLD_BLOCK_SIZE) + 0.5f,
+                    noisey = float(double(worldfirstchunky) * WORLD_CHUNK_BLOCKS
+                                 + y / WORLD_BLOCK_SIZE) + 0.5f,
+                    noise = clamp(ctx.distribution.GetNoise(noisex, noisey)
+                                  * 0.5f + 0.5f, 0.0f, 1.0f),
+                    patch = worldsmoothstep(0.2f, 0.8f, noise),
+                    density = clamp(ctx.settings.grassdensity
+                                    * (0.12f + 1.88f * patch * patch),
+                                    0.0f, 1.0f);
+        if(worldtreeunit(hashworldgrass(ctx.seed, worldx, worldy, 0xA511E9B3U))
+           >= density)
+            continue;
+
+        const int yaw = int(worldtreeunit(hashworldgrass(ctx.seed, worldx, worldy,
+                                                         0x63D83595U)) * 360.0f);
+        const float angle = worldtreeunit(hashworldgrass(ctx.seed, worldx, worldy,
+                                                         0xC2B2AE35U))
+                          * 2.0f * M_PI,
+                    offsetunit = worldtreeunit(hashworldgrass(ctx.seed, worldx, worldy,
+                                                              0x27D4EB2FU)),
+                    offset = ctx.settings.grassmaxoffset * WORLD_BLOCK_SIZE
+                           * offsetunit * offsetunit;
+        ctx.candidates.add(worldgrasscandidate(
+            ivec(int(worldx), int(worldy), top),
+            vec(centerx + cosf(angle) * offset,
+                centery + sinf(angle) * offset, float(top)),
+            yaw));
+        --ctx.remaining;
+    }
+}
+
+static void clearworldscattererentities()
+{
+    loopv(worldgrassentities) destroyworldmapmodelentity(worldgrassentities[i].id);
+    worldgrassentities.setsize(0);
+    worldgrassmodel = -1;
+}
+
+static void updateworldscatterers()
+{
+    extern int grassdist, maxgrass;
+    const vec *focus = player ? &player->o : camera1 ? &camera1->o : NULL;
+    if(grassdist <= 0 || maxgrass <= 0 || !focus ||
+       worldchunks.empty())
+    {
+        clearworldscattererentities();
+        return;
+    }
+
+    const game::worldsettings settings;
+    if(settings.grassdensity <= 0)
+    {
+        clearworldscattererentities();
+        return;
+    }
+
+    const int model = registermapmodelpath("world/grass");
+    if(model < 0 || !loadmapmodel(model))
+    {
+        clearworldscattererentities();
+        return;
+    }
+    if(worldgrassmodel != model)
+    {
+        clearworldscattererentities();
+        worldgrassmodel = model;
+    }
+
+    vector<worldgrasscandidate> candidates;
+    worldgrasscollectcontext ctx(*focus, float(grassdist), maxgrass, candidates);
+    const int rootsize = worldsize >> 1;
+    loopi(8)
+        collectworldgrassnode(ctx, worldroot[i],
+                              ivec(i, ivec(0, 0, 0), rootsize), rootsize);
+
+    hashtable<ivec, int> desired(1<<12);
+    loopv(candidates) desired[candidates[i].key] = i;
+    for(int i = worldgrassentities.length() - 1; i >= 0; --i)
+    {
+        worldgrassentity &active = worldgrassentities[i];
+        int *candidateindex = desired.access(active.key);
+        if(!candidateindex || !isworldmapmodelentity(active.id, model) ||
+           !updateworldmapmodelentity(active.id, candidates[*candidateindex].position,
+                                      model, candidates[*candidateindex].yaw))
+        {
+            destroyworldmapmodelentity(active.id);
+            worldgrassentities.removeunordered(i);
+            continue;
+        }
+        candidates[*candidateindex].matched = true;
+    }
+
+    loopv(candidates) if(!candidates[i].matched)
+    {
+        int id = createworldmapmodelentity(candidates[i].position, model,
+                                           candidates[i].yaw);
+        if(id < 0) break;
+        worldgrassentities.add(worldgrassentity(candidates[i].key, id));
+    }
+}
+
+ICOMMAND(getworldgrasscount, "", (), intret(worldgrassentities.length()));
 
 static void addworldtreeblock(vector<ivec> &blocks, int blockx, int blocky, int blockz)
 {

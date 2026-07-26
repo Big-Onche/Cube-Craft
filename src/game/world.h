@@ -48,6 +48,7 @@ namespace game
         float biomevariationstrength, rockfrequency;
         float deserttemperature, desertmoisture, forestmoisture;
         float foresttreedensity, plainstreedensity;
+        float grassfrequency, grassdensity, grassmaxoffset;
         float cavefrequency, cavethreshold, largecavefrequency;
         float largecavethreshold, largecavedeepthreshold;
         float tunnelfrequency, tunnelwidth, caveentrancewidth;

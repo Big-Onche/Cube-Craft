@@ -257,6 +257,70 @@ static inline void addentityedit(int id)    { modifyoctaent(MODOE_ADD|MODOE_UPDA
 static inline void removeentity(int id)     { modifyoctaent(MODOE_UPDATEBB, id); }
 static inline void removeentityedit(int id) { modifyoctaent(MODOE_UPDATEBB|MODOE_CHANGED, id); }
 
+static const uchar WORLD_MAPMODEL_RESERVED = 0xC7;
+
+bool isworldmapmodelentity(int id, int model)
+{
+    vector<extentity *> &ents = entities::getents();
+    return ents.inrange(id) && ents[id]->type == ET_MAPMODEL &&
+           ents[id]->reserved == WORLD_MAPMODEL_RESERVED &&
+           (model < 0 || ents[id]->attr1 == model);
+}
+
+int createworldmapmodelentity(const vec &o, int model, int yaw)
+{
+    if(!mapmodels.inrange(model) || model > SHRT_MAX || !loadmapmodel(model)) return -1;
+    vector<extentity *> &ents = entities::getents();
+    int id = -1;
+    loopv(ents) if(ents[i]->type == ET_EMPTY) { id = i; break; }
+    if(id < 0)
+    {
+        if(ents.length() >= MAXENTS) return -1;
+        id = ents.length();
+        ents.add(entities::newentity());
+    }
+
+    extentity &e = *ents[id];
+    e.o = o;
+    e.attr1 = model;
+    e.attr2 = yaw;
+    e.attr3 = e.attr4 = e.attr5 = 0;
+    e.type = ET_MAPMODEL;
+    e.reserved = WORLD_MAPMODEL_RESERVED;
+    e.flags = EF_NOSHADOW | EF_NOCOLLIDE;
+    e.attached = NULL;
+    addentity(id);
+    return id;
+}
+
+bool updateworldmapmodelentity(int id, const vec &o, int model, int yaw)
+{
+    if(!isworldmapmodelentity(id, -1) || !mapmodels.inrange(model) ||
+       model > SHRT_MAX || !loadmapmodel(model))
+        return false;
+    extentity &e = *entities::getents()[id];
+    if(e.attr1 == model && e.attr2 == yaw && e.o.x == o.x && e.o.y == o.y && e.o.z == o.z)
+        return true;
+    removeentity(id);
+    e.o = o;
+    e.attr1 = model;
+    e.attr2 = yaw;
+    e.attr3 = e.attr4 = e.attr5 = 0;
+    addentity(id);
+    return true;
+}
+
+void destroyworldmapmodelentity(int id)
+{
+    if(!isworldmapmodelentity(id, -1)) return;
+    extentity &e = *entities::getents()[id];
+    removeentity(id);
+    e.type = ET_EMPTY;
+    e.reserved = 0;
+    e.flags = 0;
+    e.attached = NULL;
+}
+
 void freeoctaentities(cube &c)
 {
     if(!c.ext) return;
