@@ -43,7 +43,7 @@ namespace game
         };
 
         static double cyclemillis = START_HOUR * CYCLE_MILLIS / 24.0;
-        static bool initialized = false;
+        static bool initialized = false, timefrozen = false;
 
         static float smoothstep(float value)
         {
@@ -118,30 +118,45 @@ namespace game
         {
             cyclemillis = START_HOUR * CYCLE_MILLIS / 24.0;
             initialized = true;
+            timefrozen = false;
             applylighting(true);
         }
 
         void update()
         {
             if(!initialized) reset();
-            if(curtime <= 0) return;
+            if(timefrozen || curtime <= 0) return;
             cyclemillis += curtime;
             while(cyclemillis >= CYCLE_MILLIS) cyclemillis -= CYCLE_MILLIS;
             applylighting(false);
         }
 
-        ICOMMAND(time, "iN", (int *hour, int *numargs),
+        ICOMMAND(time, "sN", (char *value, int *numargs),
         {
-            if(*numargs != 1 || *hour < 0 || *hour > 24)
+            if(*numargs == 1 && cubecaseequal(value, "freeze"))
             {
-                conoutf(CON_ERROR, "usage: /time <hour 0-24>");
+                const double hour = cyclemillis * 24.0 / CYCLE_MILLIS;
+                const int minutes = int(hour * 60.0 + 0.5) % (24 * 60);
+                timefrozen = true;
+                conoutf("time frozen at %02d:%02d", minutes / 60, minutes % 60);
                 return;
             }
 
-            cyclemillis = (*hour == 24 ? 0 : *hour) * CYCLE_MILLIS / 24.0;
+            char *end = NULL;
+            const double hour = *numargs == 1 ? strtod(value, &end) : -1;
+            if(*numargs != 1 || end == value || *end || !(hour >= 0 && hour <= 24))
+            {
+                conoutf(CON_ERROR, "usage: /time <hour 0-24|freeze>");
+                return;
+            }
+
+            const double normalizedhour = hour == 24 ? 0 : hour;
+            cyclemillis = normalizedhour * CYCLE_MILLIS / 24.0;
             initialized = true;
+            timefrozen = false;
             applylighting(true);
-            conoutf("time set to %02d:00", *hour == 24 ? 0 : *hour);
+            const int minutes = int(normalizedhour * 60.0 + 0.5) % (24 * 60);
+            conoutf("time set to %02d:%02d", minutes / 60, minutes % 60);
         });
     }
 }
