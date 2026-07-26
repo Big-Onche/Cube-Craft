@@ -64,7 +64,8 @@ namespace game
 
     struct worldgenerator
     {
-        FastNoiseLite geology, hills, mountaindetail, tectonicnoise, tectonicwarp;
+        FastNoiseLite geology, hills, mountainrange, mountainnoise, mountainpeaks;
+        FastNoiseLite tectonicnoise, tectonicwarp;
         FastNoiseLite temperature, moisture, biomevariation, biomeblend, rockiness;
         FastNoiseLite caves, largecaves, tunnela, tunnelb, lakeshape;
         FastNoiseLite fracturecorridors, fracturevertical;

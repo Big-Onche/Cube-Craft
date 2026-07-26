@@ -152,7 +152,12 @@ namespace game
         // broad and subordinate so changing one frequency scales all geology.
         setupnoise(geology, seed, settings.geologyfrequency, 2, 0.35f);
         setupnoise(hills, seed ^ 0x4A39B70D, settings.geologyfrequency * 3.5f, 2, 0.30f);
-        setupnoise(mountaindetail, seed ^ 0x3D72A95B, settings.geologyfrequency * 5.0f, 1);
+        // A slow field bounds each mountain range. Ridged medium-scale noise
+        // builds the massif, while a faster field forms saddles and local peaks.
+        setupnoise(mountainrange, seed ^ 0x18F47C53, settings.geologyfrequency * 1.5f, 1);
+        setupnoise(mountainnoise, seed ^ 0x3D72A95B, settings.geologyfrequency * 2.5f,
+                   2, 0.25f);
+        setupnoise(mountainpeaks, seed ^ 0x25B46D81, settings.geologyfrequency * 5.0f, 1);
         setupnoise(tectonicnoise, seed ^ 0x68E31DA4, settings.tectonicfrequency, 1);
         setupwarp(tectonicwarp, seed ^ 0x6C8E9CF5, settings.tectonicfrequency * 0.5f,
                   settings.tectonicwarpamplitude);
@@ -205,30 +210,52 @@ namespace game
                     deepocean = smoothstep(0.15f, 0.85f, oceandistance),
                     normaloceandepth = settings.maxoceandepth
                                      * (0.25f * oceanshelf + 0.75f * deepocean),
-                    landmask = smoothstep(protection, protection + 0.14f, landdensity),
+                    // Give tall relief enough inland distance to fade before the
+                    // protected coast instead of clipping a mountain into a wall.
+                    landmask = smoothstep(protection, protection + 0.28f, landdensity),
                     oceandensitymask = smoothstep(protection, protection + 0.16f, -landdensity),
                     deepoceanmask = oceandensitymask
                                   * smoothstep(40.0f, 100.0f, normaloceandepth),
                     hill = clamp(generator.hills.GetNoise(x + 10000.5f, y - 10000.5f)
                                * 0.5f + 0.5f, 0.0f, 1.0f),
-                    detail = clamp(generator.mountaindetail.GetNoise(x + 10000.5f,
-                                                                      y - 10000.5f)
-                                 * 0.5f + 0.5f, 0.0f, 1.0f),
-                    // Tectonic corridors only strengthen mountains; they never become
-                    // height on their own. The broad threshold range turns the existing
-                    // hill field into separate, gently rising mountain footprints.
+                    rangevalue = clamp(generator.mountainrange.GetNoise(x + 10000.5f,
+                                                                        y - 10000.5f)
+                                     * 0.5f + 0.5f, 0.0f, 1.0f),
+                    ridgenoise = generator.mountainnoise.GetNoise(x + 10000.5f,
+                                                                  y - 10000.5f),
+                    peaknoise = generator.mountainpeaks.GetNoise(x + 10000.5f,
+                                                                  y - 10000.5f),
+                    // Tectonics amplify finite ranges rather than becoming terrain.
+                    // Their broad base creates foothills and high valleys; intersecting
+                    // ridges then form connected massifs, saddles, and sharp summits.
                     mountainactivity = smoothstep(settings.tectonicactivitythreshold,
                                                   1.0f, ridge),
-                    mountainmass = smoothstep(0.40f, 0.92f, hill),
-                    tectonicstrength = 0.12f + 0.88f * mountainactivity,
-                    foothills = powf(mountainmass, 1.10f),
-                    // Only a minority of each mountain receives the faster detail
-                    // field, producing individual summits instead of a level crest.
-                    peakselector = powf(smoothstep(0.52f, 0.88f, detail), 1.20f),
-                    peakshape = powf(mountainmass, 1.60f) * peakselector,
+                    foothillregion = smoothstep(0.26f, 0.74f, rangevalue),
+                    rangecore = smoothstep(0.36f, 0.76f, rangevalue),
+                    foothillzone = foothillregion * (0.08f + 0.92f * mountainactivity),
+                    rangezone = rangecore * (0.04f + 0.96f * mountainactivity),
+                    primaryridge = powf(clamp(1.10f
+                                           - sqrtf(ridgenoise * ridgenoise + 0.01f),
+                                               0.0f, 1.0f), 2.0f),
+                    secondaryridge = powf(clamp(1.12f
+                                             - sqrtf(peaknoise * peaknoise + 0.0144f),
+                                                 0.0f, 1.0f), 2.4f),
+                    plainhillshape = smoothstep(0.48f, 0.78f, hill),
+                    backgroundrelief = 0.025f * plainhillshape
+                                     * (1.0f - 0.80f * foothillzone),
+                    highplateau = 0.18f * foothillzone * (0.85f + 0.15f * hill),
+                    mainridges = 0.46f * rangezone * primaryridge
+                               * (0.58f + 0.42f * secondaryridge),
+                    surroundingpeaks = 0.14f * foothillzone
+                                     * powf(secondaryridge, 1.3f)
+                                     * (0.35f + 0.65f * primaryridge),
+                    localsummits = 0.22f * powf(rangezone, 1.2f)
+                                 * powf(primaryridge, 1.4f)
+                                 * powf(secondaryridge, 1.2f),
                     trenchpotential = sample.activity * deepoceanmask;
-        sample.landuplift = clamp(landmask * tectonicstrength
-                                * (0.60f * foothills + 0.40f * peakshape),
+        sample.landuplift = clamp(landmask * (backgroundrelief + highplateau
+                                           + mainridges + surroundingpeaks
+                                           + localsummits),
                                   0.0f, 1.0f);
         sample.oceantrench = clamp(trenchpotential * powf(sample.activity, 0.35f),
                                    0.0f, 1.0f);
