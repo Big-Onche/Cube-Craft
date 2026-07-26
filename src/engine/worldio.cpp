@@ -4237,6 +4237,21 @@ static bool worldchunkfileexists(const char *folder, int x, int y)
     return true;
 }
 
+struct worldspawnmetadata
+{
+    bool valid;
+    double x, y;
+    float z, yaw, pitch;
+
+    worldspawnmetadata() : valid(false), x(0), y(0), z(0), yaw(0), pitch(0) {}
+};
+
+static worldspawnmetadata requestedworldspawn;
+static bool hasrequestedworldspawn = false;
+static bool preparedworldspawn = false;
+static vec preparedworldspawnposition;
+static float preparedworldspawnyaw = 0, preparedworldspawnpitch = 0;
+
 static bool saveworldmetadata(int chunkx, int chunky)
 {
     defformatstring(name, "media/map/%s/world.meta", worldfolder);
@@ -4246,15 +4261,23 @@ static bool saveworldmetadata(int chunkx, int chunky)
         conoutf(CON_WARN, "could not write world metadata to %s", name);
         return false;
     }
-    f->printf("CUBECRAFT_WORLD 1\n");
+    f->printf("CUBECRAFT_WORLD 2\n");
     f->printf("entry %d %d\n", chunkx, chunky);
+    if(player)
+    {
+        const double absolutex = double(worldfirstchunkx) * WORLD_CHUNK_SIZE + player->o.x,
+                     absolutey = double(worldfirstchunky) * WORLD_CHUNK_SIZE + player->o.y;
+        f->printf("spawn %.17g %.17g %.9g %.9g %.9g\n", absolutex, absolutey, player->o.z, player->yaw, player->pitch);
+    }
     delete f;
     return true;
 }
 
-static bool loadworldmetadata(const char *folder, int &chunkx, int &chunky)
+static bool loadworldmetadata(const char *folder, int &chunkx, int &chunky,
+                              worldspawnmetadata &spawn)
 {
     chunkx = chunky = 0;
+    spawn = worldspawnmetadata();
     defformatstring(name, "media/map/%s/world.meta", folder);
     stream *f = openfile(path(name), "r");
     if(f)
@@ -4267,7 +4290,19 @@ static bool loadworldmetadata(const char *folder, int &chunkx, int &chunky)
             {
                 chunkx = x;
                 chunky = y;
-                break;
+                continue;
+            }
+            double spawnx, spawny;
+            float spawnz, yaw = 0, pitch = 0;
+            if(sscanf(line, "spawn %lf %lf %f %f %f",
+                      &spawnx, &spawny, &spawnz, &yaw, &pitch) >= 3)
+            {
+                spawn.valid = true;
+                spawn.x = spawnx;
+                spawn.y = spawny;
+                spawn.z = spawnz;
+                spawn.yaw = yaw;
+                spawn.pitch = pitch;
             }
         }
         delete f;
@@ -4275,7 +4310,210 @@ static bool loadworldmetadata(const char *folder, int &chunkx, int &chunky)
 
     if(worldchunkfileexists(folder, chunkx, chunky)) return true;
     chunkx = chunky = 0;
+    spawn.valid = false;
     return worldchunkfileexists(folder, 0, 0);
+}
+
+static bool dryworldspawnblock(const game::worldgenerator &generator,
+                               const game::worldsettings &settings, int x, int y)
+{
+    const int height = generator.height(x, y);
+    return height >= settings.sealevel && height <= WORLD_MAX_HEIGHT - 3;
+}
+
+static bool chooseworldspawn(double originx, double originy, double &spawnx, double &spawny)
+{
+    const int originblockx = int(floor(originx / WORLD_BLOCK_SIZE)),
+              originblocky = int(floor(originy / WORLD_BLOCK_SIZE));
+    game::worldsettings settings;
+    game::worldgenerator generator(game::getworldseed(), settings);
+
+    if(dryworldspawnblock(generator, settings, originblockx, originblocky))
+    {
+        spawnx = (double(originblockx) + 0.5) * WORLD_BLOCK_SIZE;
+        spawny = (double(originblocky) + 0.5) * WORLD_BLOCK_SIZE;
+        return true;
+    }
+
+    renderprogress(0.82f, "choosing a better spawn point because you had no chance...");
+
+    int bestx = originblockx, besty = originblocky;
+    long long bestdist = LLONG_MAX;
+
+    // Search every nearby block first, then cover a continent-scale area on a
+    // coarse grid. A final local pass turns the best coarse hit into a block-
+    // precise dry spawn without evaluating millions of noise samples.
+    const int exactradius = 64;
+    for(int y = originblocky - exactradius; y <= originblocky + exactradius; ++y)
+    for(int x = originblockx - exactradius; x <= originblockx + exactradius; ++x)
+    {
+        if(!dryworldspawnblock(generator, settings, x, y)) continue;
+        const long long dx = x - originblockx, dy = y - originblocky,
+                        dist = dx * dx + dy * dy;
+        if(dist >= bestdist) continue;
+        bestx = x;
+        besty = y;
+        bestdist = dist;
+    }
+
+    if(bestdist == LLONG_MAX)
+    {
+        const int searchradius = 8192, searchstep = 64;
+        for(int y = originblocky - searchradius; y <= originblocky + searchradius; y += searchstep)
+        for(int x = originblockx - searchradius; x <= originblockx + searchradius; x += searchstep)
+        {
+            if(!dryworldspawnblock(generator, settings, x, y)) continue;
+            const long long dx = x - originblockx, dy = y - originblocky,
+                            dist = dx * dx + dy * dy;
+            if(dist >= bestdist) continue;
+            bestx = x;
+            besty = y;
+            bestdist = dist;
+        }
+    }
+
+    if(bestdist == LLONG_MAX) return false;
+
+    {
+        const int refine = 64;
+        int refinedx = bestx, refinedy = besty;
+        long long refineddist = bestdist;
+        for(int y = besty - refine; y <= besty + refine; ++y)
+        for(int x = bestx - refine; x <= bestx + refine; ++x)
+        {
+            if(!dryworldspawnblock(generator, settings, x, y)) continue;
+            const long long dx = x - originblockx, dy = y - originblocky,
+                            dist = dx * dx + dy * dy;
+            if(dist >= refineddist) continue;
+            refinedx = x;
+            refinedy = y;
+            refineddist = dist;
+        }
+        bestx = refinedx;
+        besty = refinedy;
+    }
+
+    spawnx = (double(bestx) + 0.5) * WORLD_BLOCK_SIZE;
+    spawny = (double(besty) + 0.5) * WORLD_BLOCK_SIZE;
+    return true;
+}
+
+static bool mountworldspawncolumn(worldchunk &chunk, double absolutex, double absolutey)
+{
+    if(!chunk.root || chunk.loading || chunk.corrupted) return false;
+    int localx = int(floor(absolutex - double(chunk.x) * WORLD_CHUNK_SIZE)),
+        localy = int(floor(absolutey - double(chunk.y) * WORLD_CHUNK_SIZE));
+    if(localx < 0 || localx >= WORLD_CHUNK_SIZE ||
+       localy < 0 || localy >= WORLD_CHUNK_SIZE)
+        return false;
+
+    int tilex = localx / WORLD_SECTION_SIZE,
+        tiley = localy / WORLD_SECTION_SIZE,
+        tile = tiley * WORLD_SECTION_COLUMNS + tilex;
+    loopi(WORLD_SECTION_LAYERS) mountworldchunktile(chunk, i, tile);
+    return !chunk.corrupted;
+}
+
+static bool prepareworldspawn(const worldspawnmetadata &saved)
+{
+    if(!player || worldchunks.empty() || !worldroot) return false;
+
+    renderprogress(0.78f, "waiting for ground...");
+
+    double absolutex, absolutey;
+    if(saved.valid)
+    {
+        absolutex = saved.x;
+        absolutey = saved.y;
+    }
+    else
+    {
+        const worldchunk &entry = worldchunks.inrange(activeworldchunk)
+                                ? worldchunks[activeworldchunk] : worldchunks[0];
+        absolutex = double(entry.x) * WORLD_CHUNK_SIZE + WORLD_CHUNK_SIZE / 2;
+        absolutey = double(entry.y) * WORLD_CHUNK_SIZE + WORLD_CHUNK_SIZE / 2;
+        if(!chooseworldspawn(absolutex, absolutey, absolutex, absolutey))
+        {
+            conoutf(CON_ERROR, "could not find dry ground for the player spawn");
+            return false;
+        }
+    }
+
+    int chunkx = int(floor(absolutex / WORLD_CHUNK_SIZE)),
+        chunky = int(floor(absolutey / WORLD_CHUNK_SIZE)),
+        generated = 0,
+        destination = acquireworldchunksync(chunkx, chunky, generated);
+    if(!worldchunks.inrange(destination) || !worldchunks[destination].root)
+    {
+        conoutf(CON_ERROR, "could not prepare spawn chunk %d_%d", chunkx, chunky);
+        return false;
+    }
+
+    rebaseworldchunks(chunkx, chunky, false);
+    const float runtimex = float(absolutex - double(worldfirstchunkx) * WORLD_CHUNK_SIZE),
+                runtimey = float(absolutey - double(worldfirstchunky) * WORLD_CHUNK_SIZE);
+    player->o = vec(runtimex, runtimey, WORLD_MAP_SIZE - 1.0f);
+    if(!mountworldspawncolumn(worldchunks[destination], absolutex, absolutey))
+    {
+        conoutf(CON_ERROR, "could not mount the geometry beneath the spawn point");
+        return false;
+    }
+
+    vec sky(runtimex, runtimey, WORLD_MAP_SIZE - 1.0f);
+    float grounddist = raycube(sky, vec(0, 0, -1), WORLD_MAP_SIZE, RAY_CLIPMAT);
+    if(grounddist >= WORLD_MAP_SIZE)
+    {
+        conoutf(CON_ERROR, "could not find solid ground beneath the spawn point");
+        return false;
+    }
+    const float groundz = sky.z - grounddist;
+
+    if(saved.valid)
+    {
+        player->o = vec(runtimex, runtimey, clamp(saved.z, 0.0f, float(WORLD_MAP_SIZE - 1)));
+        player->yaw = saved.yaw;
+        player->pitch = saved.pitch;
+        player->reset();
+        player->resetinterp();
+    }
+    else
+    {
+        player->o = vec(runtimex, runtimey, groundz + player->eyeheight + 0.1f);
+        player->yaw = player->pitch = 0;
+        player->reset();
+        player->resetinterp();
+    }
+
+    const int material = lookupmaterial(vec(player->o.x, player->o.y,
+                                            max(player->o.z - player->eyeheight + 1, 0.0f)));
+    if(!saved.valid && isliquid(material & MATF_VOLUME))
+    {
+        conoutf(CON_ERROR, "refusing to finish loading with the player spawn in water");
+        return false;
+    }
+
+    lastworldchunkmotion = -1;
+    worldchunkaheadx = chunkx;
+    worldchunkaheady = chunky;
+    worlddebugcachemillis = -1;
+    rebuildworldchunks(chunkx, chunky, chunkx, chunky, true, false);
+
+    preparedworldspawnposition = player->o;
+    preparedworldspawnyaw = player->yaw;
+    preparedworldspawnpitch = player->pitch;
+    preparedworldspawn = true;
+    renderprogress(0.9f, "ground found - putting your boots on...");
+    return true;
+}
+
+static void applypreparedworldspawn()
+{
+    if(!preparedworldspawn || !player) return;
+    player->o = preparedworldspawnposition;
+    player->yaw = preparedworldspawnyaw;
+    player->pitch = preparedworldspawnpitch;
+    player->reset();
+    player->resetinterp();
 }
 
 static int loadingworldchunks()
@@ -4305,6 +4543,8 @@ static bool finishworldchunkloads()
     return true;
 }
 
+void saveworld();
+
 static void createworld(const char *requestedname)
 {
     chooseworldfolder(requestedname);
@@ -4333,8 +4573,14 @@ static void createworld(const char *requestedname)
                         (0 - worldfirstchunky) * WORLD_CHUNK_SIZE + WORLD_CHUNK_SIZE / 2,
                         WORLD_GROUND_HEIGHT + player->eyeheight + 1);
     }
+    preparedworldspawn = false;
+    worldspawnmetadata newspawn;
+    if(!prepareworldspawn(newspawn)) return;
     updateworldchunks(true);
-    if(player) entinmap(player);
+    applypreparedworldspawn();
+
+    renderprogress(0.94f, "saving your new home before handing over the keys...");
+    saveworld();
 
     int mounted = 0;
     loopv(worldchunks) if(worldchunkmounted(worldchunks[i])) mounted++;
@@ -4372,16 +4618,20 @@ static void loadworldcommand(const char *requested)
     string folder;
     normalizeworldfolder(folder, sizeof(folder), requested);
     int chunkx, chunky;
-    if(!loadworldmetadata(folder, chunkx, chunky))
+    worldspawnmetadata spawn;
+    if(!loadworldmetadata(folder, chunkx, chunky, spawn))
     {
         conoutf(CON_ERROR, "could not find a saved world named %s", folder);
         return;
     }
 
     defformatstring(entry, "%s/%d_%d", folder, chunkx, chunky);
+    requestedworldspawn = spawn;
+    hasrequestedworldspawn = true;
     applyloadworlddefaults = true;
     game::changemap(entry);
     applyloadworlddefaults = false;
+    hasrequestedworldspawn = false;
 }
 
 ICOMMAND(loadworld, "s", (char *name), loadworldcommand(name));
@@ -4441,7 +4691,15 @@ void saveworld()
         return;
     }
 
-    int entryx = 0, entryy = 0, entry = findworldchunk(lastplayerchunkx, lastplayerchunky);
+    int entryx = lastplayerchunkx, entryy = lastplayerchunky;
+    if(player)
+    {
+        const double absolutex = double(worldfirstchunkx) * WORLD_CHUNK_SIZE + player->o.x,
+                     absolutey = double(worldfirstchunky) * WORLD_CHUNK_SIZE + player->o.y;
+        entryx = int(floor(absolutex / WORLD_CHUNK_SIZE));
+        entryy = int(floor(absolutey / WORLD_CHUNK_SIZE));
+    }
+    int entry = findworldchunk(entryx, entryy);
     if(!worldchunks.inrange(entry)) entry = activeworldchunk;
     if(worldchunks.inrange(entry))
     {
@@ -4573,7 +4831,18 @@ bool load_world(const char *mname, const char *cname)
         identflags &= ~IDF_OVERRIDDEN;
     }
 
-    if(!cname && hdr.worldsize == WORLD_CHUNK_MAP_SIZE) loadworldchunks(mname);
+    bool streamedworld = false;
+    preparedworldspawn = false;
+    if(!cname && hdr.worldsize == WORLD_CHUNK_MAP_SIZE)
+    {
+        streamedworld = loadworldchunks(mname);
+        if(streamedworld)
+        {
+            worldspawnmetadata spawn;
+            if(hasrequestedworldspawn) spawn = requestedworldspawn;
+            if(!prepareworldspawn(spawn)) return false;
+        }
+    }
 
     {
         ZoneScopedN("Chunks/Build entry geometry");
@@ -4586,14 +4855,7 @@ bool load_world(const char *mname, const char *cname)
 
     startmap(cname ? cname : mname);
 
-    if(!worldchunks.empty() && player && worldchunks.inrange(activeworldchunk))
-    {
-        const worldchunk &chunk = worldchunks[activeworldchunk];
-        player->o = vec((chunk.x - worldfirstchunkx) * WORLD_CHUNK_SIZE + WORLD_CHUNK_SIZE / 2,
-                        (chunk.y - worldfirstchunky) * WORLD_CHUNK_SIZE + WORLD_CHUNK_SIZE / 2,
-                        WORLD_GROUND_HEIGHT + player->eyeheight + 1);
-        entinmap(player);
-    }
+    if(streamedworld) applypreparedworldspawn();
 
     return true;
 }
