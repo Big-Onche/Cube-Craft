@@ -287,7 +287,7 @@ int createworldmapmodelentity(const vec &o, int model, int yaw)
     e.attr3 = e.attr4 = e.attr5 = 0;
     e.type = ET_MAPMODEL;
     e.reserved = WORLD_MAPMODEL_RESERVED;
-    e.flags = EF_NOSHADOW | EF_NOCOLLIDE;
+    e.flags = EF_NOCOLLIDE;
     e.attached = NULL;
     addentity(id);
     return id;

@@ -49,6 +49,7 @@ namespace game
         float deserttemperature, desertmoisture, forestmoisture;
         float foresttreedensity, plainstreedensity;
         float grassfrequency, grassdensity, grassmaxoffset;
+        float flowerchance, roseweight, tulipweight, dandelionweight;
         float cavefrequency, cavethreshold, largecavefrequency;
         float largecavethreshold, largecavedeepthreshold;
         float tunnelfrequency, tunnelwidth, caveentrancewidth;

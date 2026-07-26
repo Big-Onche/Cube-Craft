@@ -51,6 +51,10 @@ FVAR(worldplainstreedensity, 0.0f, 0.0017f, 0.25f);
 FVAR(worldgrassfrequency, 0.00001f, 0.02f, 1.0f);
 FVAR(worldgrassdensity, 0.0f, 0.35f, 1.0f);
 FVAR(worldgrassmaxoffset, 0.0f, 0.18f, 0.45f);
+FVAR(worldflowerchance, 0.0f, 0.18f, 1.0f);
+FVAR(worldroseweight, 0.0f, 1.0f, 100.0f);
+FVAR(worldtulipweight, 0.0f, 1.0f, 100.0f);
+FVAR(worlddandelionweight, 0.0f, 1.0f, 100.0f);
 VAR(worldpinestartheight, -255, 50, 255);
 VAR(worldpinefullheight, -255, 100, 255);
 
@@ -135,6 +139,8 @@ namespace game
           foresttreedensity(worldforesttreedensity), plainstreedensity(worldplainstreedensity),
           grassfrequency(worldgrassfrequency), grassdensity(worldgrassdensity),
           grassmaxoffset(worldgrassmaxoffset),
+          flowerchance(worldflowerchance), roseweight(worldroseweight),
+          tulipweight(worldtulipweight), dandelionweight(worlddandelionweight),
           cavefrequency(worldcavefrequency), cavethreshold(worldcavethreshold),
           largecavefrequency(worldlargecavefrequency),
           largecavethreshold(worldlargecavethreshold),
@@ -652,6 +658,10 @@ namespace game
             "worldgrassfrequency %.9g\n"
             "worldgrassdensity %.9g\n"
             "worldgrassmaxoffset %.9g\n"
+            "worldflowerchance %.9g\n"
+            "worldroseweight %.9g\n"
+            "worldtulipweight %.9g\n"
+            "worlddandelionweight %.9g\n"
             "worldpinestartheight %d\n"
             "worldpinefullheight %d\n"
             "worldcavefrequency %.9g\n"
@@ -691,6 +701,8 @@ namespace game
             worlddeserttemperature, worlddesertmoisture, worldforestmoisture,
             worldforesttreedensity, worldplainstreedensity,
             worldgrassfrequency, worldgrassdensity, worldgrassmaxoffset,
+            worldflowerchance, worldroseweight, worldtulipweight,
+            worlddandelionweight,
             worldpinestartheight, worldpinefullheight,
             worldcavefrequency, worldcavethreshold, worldlargecavefrequency,
             worldlargecavethreshold, worldlargecavedeepthreshold,

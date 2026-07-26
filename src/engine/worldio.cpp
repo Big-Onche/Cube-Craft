@@ -2800,11 +2800,11 @@ struct worldgrasscandidate
 {
     ivec key;
     vec position;
-    int yaw;
+    int model, yaw;
     bool matched;
 
-    worldgrasscandidate(const ivec &key, const vec &position, int yaw)
-        : key(key), position(position), yaw(yaw), matched(false)
+    worldgrasscandidate(const ivec &key, const vec &position, int model, int yaw)
+        : key(key), position(position), model(model), yaw(yaw), matched(false)
     {
     }
 };
@@ -2818,11 +2818,28 @@ struct worldgrassentity
 };
 
 static vector<worldgrassentity> worldgrassentities;
-static int worldgrassmodel = -1;
+
+enum
+{
+    WORLD_SCATTER_GRASS = 0,
+    WORLD_SCATTER_ROSE,
+    WORLD_SCATTER_TULIP,
+    WORLD_SCATTER_DANDELION,
+    WORLD_SCATTER_TYPES
+};
+
+static const char *worldscatterpaths[WORLD_SCATTER_TYPES] =
+{
+    "world/grass", "world/rose", "world/tulip", "world/dandelion"
+};
+static int worldscattermodels[WORLD_SCATTER_TYPES] = { -1, -1, -1, -1 };
+
+VARP(grassmaxdistance, 0, 32, 1024);
+VARP(grassmaxamount, 0, 2048, MAXENTS);
 
 struct worldgrasscollectcontext
 {
-    FastNoiseLite distribution;
+    FastNoiseLite distribution, flowerdistribution[3];
     game::worldsettings settings;
     vector<worldgrasscandidate> &candidates;
     vec focus;
@@ -2850,6 +2867,21 @@ struct worldgrasscollectcontext
         distribution.SetFractalOctaves(2);
         distribution.SetFractalLacunarity(1.8f);
         distribution.SetFractalGain(0.5f);
+
+        static const uint flowersalts[3] =
+        {
+            0x9E21F4A7U, 0xC13FA9A9U, 0x91E10DA5U
+        };
+        loopi(3)
+        {
+            flowerdistribution[i].SetSeed(game::getworldseed() ^ flowersalts[i]);
+            flowerdistribution[i].SetNoiseType(FastNoiseLite::NoiseType_OpenSimplex2S);
+            flowerdistribution[i].SetFrequency(settings.grassfrequency * 0.35f);
+            flowerdistribution[i].SetFractalType(FastNoiseLite::FractalType_FBm);
+            flowerdistribution[i].SetFractalOctaves(2);
+            flowerdistribution[i].SetFractalLacunarity(1.8f);
+            flowerdistribution[i].SetFractalGain(0.5f);
+        }
     }
 };
 
@@ -2864,6 +2896,81 @@ static bool worldgrassnodeinrange(const worldgrasscollectcontext &ctx,
                 dy = ctx.focus.y < o.y ? o.y - ctx.focus.y :
                      ctx.focus.y > o.y + size ? ctx.focus.y - (o.y + size) : 0.0f;
     return dx * dx + dy * dy <= ctx.radiussquared;
+}
+
+static bool worldflowerspaced(const worldgrasscollectcontext &ctx, uint worldx,
+                              uint worldy, int flower)
+{
+    static const uint spacingsalts[3] =
+    {
+        0xD1B54A35U, 0x94D049BBU, 0x369DEA0FU
+    };
+    const uint priority = hashworldgrass(ctx.seed, worldx, worldy,
+                                         spacingsalts[flower]);
+    for(int oy = -1; oy <= 1; ++oy) for(int ox = -1; ox <= 1; ++ox)
+    {
+        if(!ox && !oy) continue;
+        const uint other = hashworldgrass(ctx.seed, worldx + ox, worldy + oy,
+                                          spacingsalts[flower]);
+        if(other < priority ||
+           (other == priority && (oy < 0 || (!oy && ox < 0))))
+            return false;
+    }
+    return true;
+}
+
+static int chooseworldflower(worldgrasscollectcontext &ctx, float noisex,
+                             float noisey, uint worldx, uint worldy)
+{
+    const float weights[3] =
+    {
+        worldscattermodels[WORLD_SCATTER_ROSE] >= 0
+            ? max(ctx.settings.roseweight, 0.0f) : 0.0f,
+        worldscattermodels[WORLD_SCATTER_TULIP] >= 0
+            ? max(ctx.settings.tulipweight, 0.0f) : 0.0f,
+        worldscattermodels[WORLD_SCATTER_DANDELION] >= 0
+            ? max(ctx.settings.dandelionweight, 0.0f) : 0.0f
+    };
+    const float weightsum = weights[0] + weights[1] + weights[2];
+    if(ctx.settings.flowerchance <= 0 || weightsum <= 0) return -1;
+
+    static const uint chancesalts[3] =
+    {
+        0xDB4F0B91U, 0xBBE05633U, 0xA0F2EC75U
+    };
+    static const uint choicesalts[3] =
+    {
+        0x89E18285U, 0xC6BC2796U, 0xCA01F9DDU
+    };
+    int selected = -1;
+    float selectedscore = -1;
+    loopi(3)
+    {
+        const int type = WORLD_SCATTER_ROSE + i;
+        if(weights[i] <= 0) continue;
+
+        const float noise = clamp(ctx.flowerdistribution[i].GetNoise(noisex, noisey)
+                                  * 0.5f + 0.5f, 0.0f, 1.0f),
+                    patch = worldsmoothstep(0.48f, 0.72f, noise),
+                    chance = clamp(ctx.settings.flowerchance
+                                   * (weights[i] / weightsum)
+                                   * (0.05f + 4.95f * patch * patch),
+                                   0.0f, 1.0f);
+        if(worldtreeunit(hashworldgrass(ctx.seed, worldx, worldy,
+                                        chancesalts[i])) >= chance ||
+           !worldflowerspaced(ctx, worldx, worldy, i))
+            continue;
+
+        const float score = patch
+                          + worldtreeunit(hashworldgrass(ctx.seed, worldx, worldy,
+                                                        choicesalts[i])) * 0.05f;
+        if(score > selectedscore)
+        {
+            selected = type;
+            selectedscore = score;
+        }
+    }
+    return selected;
 }
 
 static void collectworldgrassnode(worldgrasscollectcontext &ctx, const cube &c,
@@ -2908,16 +3015,23 @@ static void collectworldgrassnode(worldgrasscollectcontext &ctx, const cube &c,
         const float noisex = float(double(worldfirstchunkx) * WORLD_CHUNK_BLOCKS
                                  + x / WORLD_BLOCK_SIZE) + 0.5f,
                     noisey = float(double(worldfirstchunky) * WORLD_CHUNK_BLOCKS
-                                 + y / WORLD_BLOCK_SIZE) + 0.5f,
+                                 + y / WORLD_BLOCK_SIZE) + 0.5f;
+        int type = chooseworldflower(ctx, noisex, noisey, worldx, worldy);
+        if(type < 0)
+        {
+            if(worldscattermodels[WORLD_SCATTER_GRASS] < 0) continue;
+            const float
                     noise = clamp(ctx.distribution.GetNoise(noisex, noisey)
                                   * 0.5f + 0.5f, 0.0f, 1.0f),
                     patch = worldsmoothstep(0.2f, 0.8f, noise),
                     density = clamp(ctx.settings.grassdensity
                                     * (0.12f + 1.88f * patch * patch),
                                     0.0f, 1.0f);
-        if(worldtreeunit(hashworldgrass(ctx.seed, worldx, worldy, 0xA511E9B3U))
-           >= density)
-            continue;
+            if(worldtreeunit(hashworldgrass(ctx.seed, worldx, worldy, 0xA511E9B3U))
+               >= density)
+                continue;
+            type = WORLD_SCATTER_GRASS;
+        }
 
         const int yaw = int(worldtreeunit(hashworldgrass(ctx.seed, worldx, worldy,
                                                          0x63D83595U)) * 360.0f);
@@ -2932,7 +3046,7 @@ static void collectworldgrassnode(worldgrasscollectcontext &ctx, const cube &c,
             ivec(int(worldx), int(worldy), top),
             vec(centerx + cosf(angle) * offset,
                 centery + sinf(angle) * offset, float(top)),
-            yaw));
+            worldscattermodels[type], yaw));
         --ctx.remaining;
     }
 }
@@ -2941,41 +3055,59 @@ static void clearworldscattererentities()
 {
     loopv(worldgrassentities) destroyworldmapmodelentity(worldgrassentities[i].id);
     worldgrassentities.setsize(0);
-    worldgrassmodel = -1;
+    loopi(WORLD_SCATTER_TYPES) worldscattermodels[i] = -1;
 }
 
 static void updateworldscatterers()
 {
-    extern int grassdist, maxgrass;
     const vec *focus = player ? &player->o : camera1 ? &camera1->o : NULL;
-    if(grassdist <= 0 || maxgrass <= 0 || !focus ||
-       worldchunks.empty())
-    {
-        clearworldscattererentities();
-        return;
-    }
-
     const game::worldsettings settings;
-    if(settings.grassdensity <= 0)
+    const float flowerweights = settings.roseweight + settings.tulipweight
+                              + settings.dandelionweight;
+    const bool grassenabled = settings.grassdensity > 0,
+               flowersenabled = settings.flowerchance > 0 && flowerweights > 0;
+    if(grassmaxdistance <= 0 || grassmaxamount <= 0 ||
+       !focus || worldchunks.empty())
     {
         clearworldscattererentities();
         return;
     }
 
-    const int model = registermapmodelpath("world/grass");
-    if(model < 0 || !loadmapmodel(model))
+    if(!grassenabled && !flowersenabled)
     {
         clearworldscattererentities();
         return;
     }
-    if(worldgrassmodel != model)
+
+    int loadedmodels[WORLD_SCATTER_TYPES];
+    bool modelschanged = false;
+    loopi(WORLD_SCATTER_TYPES)
+    {
+        loadedmodels[i] = registermapmodelpath(worldscatterpaths[i]);
+        if(loadedmodels[i] < 0 || !loadmapmodel(loadedmodels[i]))
+            loadedmodels[i] = -1;
+        if(loadedmodels[i] != worldscattermodels[i]) modelschanged = true;
+    }
+    if(modelschanged)
     {
         clearworldscattererentities();
-        worldgrassmodel = model;
+        loopi(WORLD_SCATTER_TYPES) worldscattermodels[i] = loadedmodels[i];
+    }
+    if((!grassenabled ||
+        worldscattermodels[WORLD_SCATTER_GRASS] < 0) &&
+       (!flowersenabled ||
+        (worldscattermodels[WORLD_SCATTER_ROSE] < 0 &&
+         worldscattermodels[WORLD_SCATTER_TULIP] < 0 &&
+         worldscattermodels[WORLD_SCATTER_DANDELION] < 0)))
+    {
+        clearworldscattererentities();
+        return;
     }
 
     vector<worldgrasscandidate> candidates;
-    worldgrasscollectcontext ctx(*focus, float(grassdist), maxgrass, candidates);
+    worldgrasscollectcontext ctx(*focus,
+                                 grassmaxdistance * WORLD_BLOCK_SIZE,
+                                 grassmaxamount, candidates);
     const int rootsize = worldsize >> 1;
     loopi(8)
         collectworldgrassnode(ctx, worldroot[i],
@@ -2987,9 +3119,11 @@ static void updateworldscatterers()
     {
         worldgrassentity &active = worldgrassentities[i];
         int *candidateindex = desired.access(active.key);
-        if(!candidateindex || !isworldmapmodelentity(active.id, model) ||
+        if(!candidateindex ||
+           !isworldmapmodelentity(active.id, candidates[*candidateindex].model) ||
            !updateworldmapmodelentity(active.id, candidates[*candidateindex].position,
-                                      model, candidates[*candidateindex].yaw))
+                                      candidates[*candidateindex].model,
+                                      candidates[*candidateindex].yaw))
         {
             destroyworldmapmodelentity(active.id);
             worldgrassentities.removeunordered(i);
@@ -3000,14 +3134,41 @@ static void updateworldscatterers()
 
     loopv(candidates) if(!candidates[i].matched)
     {
-        int id = createworldmapmodelentity(candidates[i].position, model,
+        int id = createworldmapmodelentity(candidates[i].position,
+                                           candidates[i].model,
                                            candidates[i].yaw);
         if(id < 0) break;
         worldgrassentities.add(worldgrassentity(candidates[i].key, id));
     }
 }
 
-ICOMMAND(getworldgrasscount, "", (), intret(worldgrassentities.length()));
+ICOMMAND(getworldgrasscount, "", (),
+{
+    int count = 0;
+    const int model = worldscattermodels[WORLD_SCATTER_GRASS];
+    if(model >= 0) loopv(worldgrassentities)
+        if(isworldmapmodelentity(worldgrassentities[i].id, model)) ++count;
+    intret(count);
+});
+
+ICOMMAND(getworldflowercount, "", (),
+{
+    int count = 0;
+    loopv(worldgrassentities)
+    {
+        loopj(3)
+        {
+            const int model = worldscattermodels[WORLD_SCATTER_ROSE + j];
+            if(model >= 0 &&
+               isworldmapmodelentity(worldgrassentities[i].id, model))
+            {
+                ++count;
+                break;
+            }
+        }
+    }
+    intret(count);
+});
 
 static void addworldtreeblock(vector<ivec> &blocks, int blockx, int blocky, int blockz)
 {
