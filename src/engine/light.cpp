@@ -1,12 +1,17 @@
 #include "engine.h"
 
-CVAR1R(ambient, 0x252525);
+CVAR1R(ambient, 0x0A0A0A);
 FVARR(ambientscale, 0, 1, 16);
 
-CVAR1R(skylight, 0);
+extern void setupsunlight();
+CVAR1FR(skylight, 0xBEE1FF,
+{
+    setupsunlight();
+    cleardeferredlightshaders();
+    clearshadowcache();
+});
 FVARR(skylightscale, 0, 1, 16);
 
-extern void setupsunlight();
 CVAR1FR(sunlight, 0,
 {
     setupsunlight();
@@ -555,4 +560,3 @@ void initlights()
     clearshadowcache();
     loaddeferredlightshaders();
 }
-

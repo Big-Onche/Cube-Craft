@@ -588,7 +588,7 @@ void bindmsdepth()
 void setupmsbuffer(int w, int h)
 {
     if(!msfbo) glGenFramebuffers_(1, &msfbo);
-    
+
     glBindFramebuffer_(GL_FRAMEBUFFER, msfbo);
 
     stencilformat = ghasstencil > 1 ? GL_DEPTH24_STENCIL8 : (ghasstencil ? GL_STENCIL_INDEX8 : 0);
@@ -613,7 +613,7 @@ void setupmsbuffer(int w, int h)
     if(!msnormaltex) glGenTextures(1, &msnormaltex);
 
     maskgbuffer(msaalight ? "cndg" : "cnd");
- 
+
     static const GLenum depthformats[] = { GL_RGBA8, GL_R16F, GL_R32F };
     GLenum depthformat = gdepthformat ? depthformats[gdepthformat-1] : (ghasstencil > 1 ? stencilformat : GL_DEPTH_COMPONENT24);
     glBindTexture(GL_TEXTURE_2D_MULTISAMPLE, msdepthtex);
@@ -629,7 +629,7 @@ void setupmsbuffer(int w, int h)
         glBindTexture(GL_TEXTURE_2D_MULTISAMPLE, msglowtex);
         glTexImage2DMultisample_(GL_TEXTURE_2D_MULTISAMPLE, msaasamples, hasAFBO ? hdrformat : GL_RGBA8, w, h, GL_TRUE);
     }
-    
+
     bindmsdepth();
     glFramebufferTexture2D_(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D_MULTISAMPLE, mscolortex, 0);
     glFramebufferTexture2D_(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT1, GL_TEXTURE_2D_MULTISAMPLE, msnormaltex, 0);
@@ -1507,7 +1507,7 @@ VARF(rhsplits, 1, 2, RH_MAXSPLITS, { cleardeferredlightshaders(); cleanupradianc
 VARF(rhborder, 0, 1, 1, cleanupradiancehints());
 VARF(rsmsize, 64, 384, 2048, cleanupradiancehints());
 VARF(rhnearplane, 1, 1, 16, clearradiancehintscache());
-VARF(rhfarplane, 64, 1024, 16384, clearradiancehintscache());
+VARF(rhfarplane, 64, 4096, 16384, clearradiancehintscache());
 FVARF(rsmpradiustweak, 1e-3f, 1, 1e3f, clearradiancehintscache());
 FVARF(rhpradiustweak, 1e-3f, 1, 1e3f, clearradiancehintscache());
 FVARF(rsmdepthrange, 0, 1024, 1e6f, clearradiancehintscache());
@@ -1528,8 +1528,8 @@ VARFP(rhtaps, 0, 20, 32, cleanupradiancehints());
 VAR(rhdyntex, 0, 0, 1);
 VAR(rhdynmm, 0, 0, 1);
 VARFR(gidist, 0, 384, 1024, { clearradiancehintscache(); cleardeferredlightshaders(); if(!gidist) cleanupradiancehints(); });
-FVARFR(giscale, 0, 1.5f, 1e3f, { cleardeferredlightshaders(); if(!giscale) cleanupradiancehints(); });
-FVARR(giaoscale, 0, 3, 1e3f);
+FVARFR(giscale, 0, 0.6f, 1e3f, { cleardeferredlightshaders(); if(!giscale) cleanupradiancehints(); });
+FVARR(giaoscale, 0, 2, 1e3f);
 VARFP(gi, 0, 1, 1, { cleardeferredlightshaders(); cleanupradiancehints(); });
 
 VAR(debugrsm, 0, 0, 2);
@@ -1593,7 +1593,7 @@ struct lightinfo
     int spot;
     float sx1, sy1, sx2, sy2, sz1, sz2;
     occludequery *query;
-    
+
     lightinfo() {}
     lightinfo(const vec &o, const vec &color, float radius, ushort flags = 0, const vec &dir = vec(0, 0, 0), int spot = 0)
       : ent(-1), shadowmap(-1), flags(flags), batched(~0),
@@ -1616,7 +1616,7 @@ struct lightinfo
         }
         calcscissor();
     }
-        
+
     void calcspot()
     {
         quat orient(dir, vec(0, 0, dir.z < 0 ? -1 : 1));
@@ -1991,7 +1991,7 @@ struct lightbatchkey
     uchar flags, numlights;
     ushort lights[MAXLIGHTTILEBATCH];
 };
- 
+
 struct lightbatch : lightbatchkey
 {
     vector<lightrect> rects;
@@ -2217,7 +2217,7 @@ void cascadedshadowmap::bindparams()
     vec4 *csmtcv = csmtc.reserve<vec4>(csmsplits);
     vec *csmoffsetv = csmoffset.reserve<vec>(csmsplits);
     loopi(csmsplits)
-    {   
+    {
         cascadedshadowmap::splitinfo &split = splits[i];
         if(split.idx < 0) continue;
         const shadowmapinfo &sm = shadowmaps[split.idx];
@@ -2490,7 +2490,8 @@ void radiancehints::bindparams()
 
 bool useradiancehints()
 {
-    return !sunlight.iszero() && csmshadowmap && gi && giscale && gidist;
+    return csmshadowmap && gidist &&
+           ((!sunlight.iszero() && gi && giscale) || !skylight.iszero());
 }
 
 FVAR(avatarshadowdist, 0, 12, 100);
@@ -2664,25 +2665,28 @@ Shader *loaddeferredlightshader(const char *type = NULL)
     shadow[shadowlen] = '\0';
 
     int usecsm = 0, userh = 0;
-    if(!sunlight.iszero() && csmshadowmap)
+    if((!sunlight.iszero() || !skylight.iszero()) && csmshadowmap)
     {
         usecsm = csmsplits;
         sun[sunlen++] = 'c';
         if(smalpha && alphashadow) sun[sunlen++] = 'C';
+        if(!sunlight.iszero()) sun[sunlen++] = 'u';
         sun[sunlen++] = '0' + csmsplits;
         if(!minimap)
         {
             if(avatar && ao && aosun) sun[sunlen++] = 'A';
-            if(gi && giscale && gidist)
+            bool useskylight = !skylight.iszero();
+            if(gidist && ((gi && giscale && !sunlight.iszero()) || useskylight))
             {
                 userh = rhsplits;
                 sun[sunlen++] = 'r';
                 sun[sunlen++] = '0' + rhsplits;
+                if(useskylight) sun[sunlen++] = 'k';
             }
         }
     }
-    if(!minimap) 
-    { 
+    if(!minimap)
+    {
         if(avatar && ao) sun[sunlen++] = 'a';
         if(lighttilebatch && (!usecsm || batchsunlight > (userh ? 1 : 0))) sun[sunlen++] = 'b';
     }
@@ -2850,7 +2854,7 @@ namespace lightsphere
         xtraverts += numindices;
         glde++;
     }
-    
+
     void disable()
     {
         gle::disablevertex();
@@ -2903,7 +2907,7 @@ static inline void lightquads(float z, float sx1, float sy1, float sx2, float sy
         {
             while(x < x2 && !(startmask&(1<<x))) ++x;
             if(x >= x2) break;
-            int startx = x; 
+            int startx = x;
             do ++x; while(x < x2 && startmask&(1<<x));
             lightquads(z, sx1, sy1, sx2, sy2, startx, starty, x, y);
         }
@@ -2996,7 +3000,7 @@ static inline void setlightglobals(bool transparent = false)
         {
             GLOBALPARAM(sunlightdir, sunlightdir);
             GLOBALPARAMF(sunlightcolor, sunlight.x*lightscale*sunlightscale, sunlight.y*lightscale*sunlightscale, sunlight.z*lightscale*sunlightscale);
-            GLOBALPARAMF(giscale, 2*giscale);
+            GLOBALPARAMF(giscale, gi ? 2*giscale : 0);
             GLOBALPARAMF(skylightcolor, 2*giaoscale*skylight.x*lightscale*skylightscale, 2*giaoscale*skylight.y*lightscale*skylightscale, 2*giaoscale*skylight.z*lightscale*skylightscale);
         }
     }
@@ -3300,7 +3304,7 @@ void renderlights(float bsx1 = -1, float bsy1 = -1, float bsx2 = 1, float bsy2 =
 
     if(hasDBT && depthtestlights > 1) glEnable(GL_DEPTH_BOUNDS_TEST_EXT);
 
-    bool sunpass = !lighttilebatch || drawtex == DRAWTEX_MINIMAP || (csm.rendered && batchsunlight <= (gi && giscale && gidist ? 1 : 0));
+    bool sunpass = !lighttilebatch || drawtex == DRAWTEX_MINIMAP || (csm.rendered && batchsunlight <= (useradiancehints() ? 1 : 0));
     if(sunpass)
     {
         if(depthtestlights && depth) { glDisable(GL_DEPTH_TEST); depth = false; }
@@ -3350,7 +3354,7 @@ void rendervolumetric()
     {
         const lightinfo &l = lights[lightorder[i]];
         if(!l.volumetric() || l.checkquery()) continue;
-        
+
         l.addscissor(bsx1, bsy1, bsx2, bsy2);
     }
     if(bsx1 >= bsx2 || bsy1 >= bsy2) return;
@@ -3465,7 +3469,7 @@ void rendervolumetric()
 
         lightsphere::draw();
     }
-    
+
     if(!outside)
     {
         outside = true;
@@ -3551,7 +3555,7 @@ void rendervolumetric()
         swap(volfbo[0], volfbo[1]);
         swap(voltex[0], voltex[1]);
     }
- 
+
     if(avatar) glDisable(GL_STENCIL_TEST);
 
     glDisable(GL_SCISSOR_TEST);
@@ -3751,7 +3755,7 @@ static void batchlights(const batchstack &initstack)
     {
         batchstack s = stack[--numstack];
         if(numstack + 5 > sizeof(stack)/sizeof(stack[0])) { batchlights(s); continue; }
-        
+
         ++lightbatchstacksused;
         int groups[BF_NOSUN] = { 0 };
         lightrect split(s);
@@ -3788,9 +3792,9 @@ static void batchlights(const batchstack &initstack)
             {
                 int best = -1;
                 ushort bestidx = USHRT_MAX;
-                for(int j = inside; j < batched; ++j) { const batchrect &r = batchrects[j]; if(r.group == g && r.idx < bestidx) { best = j; bestidx = r.idx; } }        
+                for(int j = inside; j < batched; ++j) { const batchrect &r = batchrects[j]; if(r.group == g && r.idx < bestidx) { best = j; bestidx = r.idx; } }
                 key.lights[i] = lightorder[bestidx];
-                swap(batchrects[best], batchrects[--batched]); 
+                swap(batchrects[best], batchrects[--batched]);
             }
 
             lightbatch &batch = lightbatcher[key];
@@ -3992,7 +3996,7 @@ void radiancehints::renderslices()
         if(rhcache)
         {
             loopi(4) swap(rhtex[i], rhtex[i+4]);
-            uint clearmasks[RH_MAXSPLITS][(RH_MAXGRID+2+31)/32]; 
+            uint clearmasks[RH_MAXSPLITS][(RH_MAXGRID+2+31)/32];
             memcpy(clearmasks, rhclearmasks[0], sizeof(clearmasks));
             memcpy(rhclearmasks[0], rhclearmasks[1], sizeof(clearmasks));
             memcpy(rhclearmasks[1], clearmasks, sizeof(clearmasks));
@@ -4199,7 +4203,7 @@ void radiancehints::renderslices()
             if(clearmasks[j/32] & (1 << (j%32)))
             {
                 BIND_SLICE;
-                if(clipped || (rhborder && i + 1 >= rhsplits)) glClear(GL_COLOR_BUFFER_BIT); 
+                if(clipped || (rhborder && i + 1 >= rhsplits)) glClear(GL_COLOR_BUFFER_BIT);
                 clearmasks[j/32] &= ~(1 << (j%32));
             }
 
@@ -4424,7 +4428,7 @@ void rendercsmshadowmaps()
 
     csm.rendered = 0;
 
-    if(sunlight.iszero() || !csmshadowmap) return;
+    if((sunlight.iszero() && skylight.iszero()) || !csmshadowmap) return;
 
     csm.rendered = 1;
 
@@ -4553,7 +4557,7 @@ void rendershadowmaps(int offset = 0)
     if(!(sminoq && !debugshadowatlas && !inoq && shouldworkinoq())) offset = 0;
 
     for(; offset < shadowmaps.length(); offset++) if(shadowmaps[offset].light >= 0) break;
-    if(offset >= shadowmaps.length()) return; 
+    if(offset >= shadowmaps.length()) return;
 
     if(inoq)
     {
@@ -5271,7 +5275,7 @@ void shademodelpreview(int x, int y, int w, int h, bool background, bool scissor
 
     if(scissor) glEnable(GL_SCISSOR_TEST);
 
-    int sx = clamp(x, 0, hudw), sy = clamp(y, 0, hudh), 
+    int sx = clamp(x, 0, hudw), sy = clamp(y, 0, hudh),
         sw = clamp(x + w, 0, hudw) - sx, sh = clamp(y + h, 0, hudh) - sy;
     float sxk = 2.0f/hudw, syk = 2.0f/hudh, txk = vieww/float(w), tyk = viewh/float(h);
     hudquad(sx*sxk - 1, sy*syk - 1, sw*sxk, sh*syk, (sx-x)*txk, (sy-y)*tyk, sw*txk, sh*tyk);

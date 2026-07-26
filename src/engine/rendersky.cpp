@@ -372,7 +372,7 @@ void cleanupsky()
 VARR(atmo, 0, 0, 1);
 FVARR(atmoplanetsize, 1e-3f, 1, 1e3f);
 FVARR(atmoheight, 1e-3f, 1, 1e3f);
-FVARR(atmobright, 0, 1, 16);
+FVARR(atmobright, 0, 2.5f, 16);
 CVAR1R(atmosunlight, 0);
 FVARR(atmosunlightscale, 0, 1, 16);
 CVAR1R(atmosundisk, 0);
@@ -381,7 +381,7 @@ FVARR(atmosundiskcorona, 0, 0.4f, 1);
 FVARR(atmosundiskbright, 0, 1, 16);
 FVARR(atmohaze, 0, 0.1f, 16);
 FVARR(atmodensity, 0, 1, 16);
-FVARR(atmoozone, 0, 1, 16);
+FVARR(atmoozone, 0, 2, 16);
 FVARR(atmoalpha, 0, 1, 1);
 
 static void drawatmosphere()
