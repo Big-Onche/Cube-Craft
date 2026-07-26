@@ -43,8 +43,8 @@ struct PackNode
     void reserve(ushort tx, ushort ty, ushort tw, ushort th);
 };
 
-extern bvec ambient, skylight, sunlight;
-extern float ambientscale, skylightscale, sunlightscale;
+extern bvec ambient, sunlight;
+extern float ambientscale, sunlightscale;
 extern float sunlightyaw, sunlightpitch;
 extern vec sunlightdir;
 extern int fullbright, fullbrightlevel;
@@ -80,4 +80,3 @@ extern bool calclight_canceled;
 extern volatile bool check_calclight_progress;
 
 extern void check_calclight_canceled();
-

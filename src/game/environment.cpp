@@ -2,8 +2,8 @@
 
 #ifndef STANDALONE
 
-extern bvec ambient, fogcolour, skylight, sunlight;
-extern float skylightscale, sunlightscale;
+extern bvec ambient, fogcolour, sunlight;
+extern float sunlightscale;
 extern float sunlightyaw, sunlightpitch;
 extern void setsunlightdir();
 
@@ -24,22 +24,22 @@ namespace game
         struct lightingkey
         {
             float hour;
-            int sunlightcolor, skylightcolor, fogcolor, ambientcolor;
-            float sunlightintensity, skylightintensity;
+            int sunlightcolor, fogcolor, ambientcolor;
+            float sunlightintensity;
         };
 
         static const lightingkey lightingkeys[] =
         {
-            {  0.0f, 0x8090C0, 0x101830, NIGHT_FOG_COLOR, NIGHT_AMBIENT_COLOR, 0.06f, 0.16f },
-            {  5.0f, 0x7180B0, 0x182342, 0x151E38, 0x10172D, 0.05f, 0.20f },
-            {  6.0f, 0xFF6A3D, 0x6C6F8F, 0x6A5062, 0x302A40, 0.30f, 0.48f },
-            {  7.0f, 0xFFC080, 0x98B5D0, 0x887A82, 0x4B4658, 0.75f, 0.78f },
-            {  8.0f, 0xFFF8E0, 0xBEE1FF, DAY_FOG_COLOR, DAY_AMBIENT_COLOR, 1.00f, 1.00f },
-            { 16.0f, 0xFFF8E0, 0xBEE1FF, DAY_FOG_COLOR, DAY_AMBIENT_COLOR, 1.00f, 1.00f },
-            { 17.0f, 0xFFC080, 0x98B5D0, 0x887A82, 0x4B4658, 0.75f, 0.78f },
-            { 18.0f, 0xFF6238, 0x696985, 0x704858, 0x30243A, 0.28f, 0.45f },
-            { 19.0f, 0x7180B0, 0x182342, 0x151E38, 0x10172D, 0.05f, 0.20f },
-            { 24.0f, 0x8090C0, 0x101830, NIGHT_FOG_COLOR, NIGHT_AMBIENT_COLOR, 0.06f, 0.16f }
+            {  0.0f, 0x8090C0, NIGHT_FOG_COLOR, NIGHT_AMBIENT_COLOR, 0.06f },
+            {  5.0f, 0x7180B0, 0x151E38, 0x10172D, 0.05f },
+            {  6.0f, 0xFF6A3D, 0x6A5062, 0x302A40, 0.30f },
+            {  7.0f, 0xFFC080, 0x887A82, 0x4B4658, 0.75f },
+            {  8.0f, 0xFFF8E0, DAY_FOG_COLOR, DAY_AMBIENT_COLOR, 1.00f },
+            { 16.0f, 0xFFF8E0, DAY_FOG_COLOR, DAY_AMBIENT_COLOR, 1.00f },
+            { 17.0f, 0xFFC080, 0x887A82, 0x4B4658, 0.75f },
+            { 18.0f, 0xFF6238, 0x704858, 0x30243A, 0.28f },
+            { 19.0f, 0x7180B0, 0x151E38, 0x10172D, 0.05f },
+            { 24.0f, 0x8090C0, NIGHT_FOG_COLOR, NIGHT_AMBIENT_COLOR, 0.06f }
         };
 
         static double cyclemillis = START_HOUR * CYCLE_MILLIS / 24.0;
@@ -79,11 +79,9 @@ namespace game
 
             const float blend = smoothstep((hour - from->hour) / (to->hour - from->hour));
             const bvec newSunlight = interpolatecolor(from->sunlightcolor, to->sunlightcolor, blend);
-            const bvec newSkylight = interpolatecolor(from->skylightcolor, to->skylightcolor, blend);
             const bvec newFog = interpolatecolor(from->fogcolor, to->fogcolor, blend);
             const bvec newAmbient = interpolatecolor(from->ambientcolor, to->ambientcolor, blend);
             const float newSunlightScale = interpolate(from->sunlightintensity, to->sunlightintensity, blend);
-            const float newSkylightScale = interpolate(from->skylightintensity, to->skylightintensity, blend);
 
             const float orbit = (hour - 6.0f) * 15.0f * RAD;
             float newSunlightYaw = hour * (360.0f / 24.0f);
@@ -93,22 +91,18 @@ namespace game
             if(resetengine)
             {
                 setvar("sunlight", newSunlight.tohexcolor());
-                setvar("skylight", newSkylight.tohexcolor());
                 setvar("fogcolour", newFog.tohexcolor());
                 setvar("ambient", newAmbient.tohexcolor());
                 setfvar("sunlightscale", newSunlightScale);
-                setfvar("skylightscale", newSkylightScale);
                 setfvar("sunlightyaw", newSunlightYaw);
                 setfvar("sunlightpitch", newSunlightPitch);
                 return;
             }
 
             sunlight = newSunlight;
-            skylight = newSkylight;
             fogcolour = newFog;
             ambient = newAmbient;
             sunlightscale = newSunlightScale;
-            skylightscale = newSkylightScale;
             sunlightyaw = newSunlightYaw;
             sunlightpitch = newSunlightPitch;
             setsunlightdir();

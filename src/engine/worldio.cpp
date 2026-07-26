@@ -4542,8 +4542,6 @@ bool load_world(const char *mname, const char *cname)
         {
             setvar("ambient", 0x252525);
             setvar("sunlight", 0xFFF8E0);
-            setvar("skylightenabled", 1);
-            setvar("skylight", 0xBEE1FF);
             setfvar("sunlightyaw", 30);
             setfvar("sunlightpitch", 50);
             setvar("atmo", 1);

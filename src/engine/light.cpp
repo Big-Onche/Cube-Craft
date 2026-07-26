@@ -4,15 +4,6 @@ CVAR1R(ambient, 0x0A0A0A);
 FVARR(ambientscale, 0, 1, 16);
 
 extern void setupsunlight();
-static void setupskylight()
-{
-    setupsunlight();
-    cleardeferredlightshaders();
-    clearshadowcache();
-}
-CVAR1FR(skylight, 0xBEE1FF, setupskylight());
-VARFR(skylightenabled, 0, 0, 1, setupskylight());
-FVARR(skylightscale, 0, 1, 16);
 
 CVAR1FR(sunlight, 0,
 {

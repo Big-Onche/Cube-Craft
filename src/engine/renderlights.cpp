@@ -1389,7 +1389,7 @@ void viewrefract()
 #define RH_MAXSPLITS 4
 #define RH_MAXGRID 64
 
-GLuint rhtex[8] = { 0, 0, 0, 0, 0, 0, 0, 0 }, rhrb[4] = { 0, 0, 0, 0 }, rhfbo = 0;
+GLuint rhtex[6] = { 0, 0, 0, 0, 0, 0 }, rhrb[3] = { 0, 0, 0 }, rhfbo = 0;
 uint rhclearmasks[2][RH_MAXSPLITS][(RH_MAXGRID+2+31)/32];
 GLuint rsmdepthtex = 0, rsmcolortex = 0, rsmnormaltex = 0, rsmfbo = 0;
 
@@ -1424,7 +1424,7 @@ void setupradiancehints()
 {
     GLenum rhformat = hasTF && rhprec >= 1 ? GL_RGBA16F : GL_RGBA8;
 
-    loopi(!rhrect && rhcache ? 8 : 4)
+    loopi(!rhrect && rhcache ? 6 : 3)
     {
         if(!rhtex[i]) glGenTextures(1, &rhtex[i]);
         create3dtexture(rhtex[i], rhgrid+2*rhborder, rhgrid+2*rhborder, (rhgrid+2*rhborder)*rhsplits, NULL, 7, 1, rhformat);
@@ -1441,7 +1441,7 @@ void setupradiancehints()
     if(!rhfbo) glGenFramebuffers_(1, &rhfbo);
     glBindFramebuffer_(GL_FRAMEBUFFER, rhfbo);
 
-    if(rhrect) loopi(4)
+    if(rhrect) loopi(3)
     {
         if(!rhrb[i]) glGenRenderbuffers_(1, &rhrb[i]);
         glBindRenderbuffer_(GL_RENDERBUFFER, rhrb[i]);
@@ -1449,10 +1449,10 @@ void setupradiancehints()
         glBindRenderbuffer_(GL_RENDERBUFFER, 0);
         glFramebufferRenderbuffer_(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0 + i, GL_RENDERBUFFER, rhrb[i]);
     }
-    else loopi(4) glFramebufferTexture3D_(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0 + i, GL_TEXTURE_3D, rhtex[i], 0, 0);
+    else loopi(3) glFramebufferTexture3D_(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0 + i, GL_TEXTURE_3D, rhtex[i], 0, 0);
 
-    static const GLenum drawbufs[4] = { GL_COLOR_ATTACHMENT0, GL_COLOR_ATTACHMENT1, GL_COLOR_ATTACHMENT2, GL_COLOR_ATTACHMENT3 };
-    glDrawBuffers_(4, drawbufs);
+    static const GLenum drawbufs[3] = { GL_COLOR_ATTACHMENT0, GL_COLOR_ATTACHMENT1, GL_COLOR_ATTACHMENT2 };
+    glDrawBuffers_(3, drawbufs);
 
     if(glCheckFramebufferStatus_(GL_FRAMEBUFFER) != GL_FRAMEBUFFER_COMPLETE)
         fatal("failed allocating radiance hints buffer!");
@@ -1491,8 +1491,8 @@ void cleanupradiancehints()
 {
     clearradiancehintscache();
 
-    loopi(8) if(rhtex[i]) { glDeleteTextures(1, &rhtex[i]); rhtex[i] = 0; }
-    loopi(4) if(rhrb[i]) { glDeleteRenderbuffers_(1, &rhrb[i]); rhrb[i] = 0; }
+    loopi(6) if(rhtex[i]) { glDeleteTextures(1, &rhtex[i]); rhtex[i] = 0; }
+    loopi(3) if(rhrb[i]) { glDeleteRenderbuffers_(1, &rhrb[i]); rhrb[i] = 0; }
     if(rhfbo) { glDeleteFramebuffers_(1, &rhfbo); rhfbo = 0; }
     if(rsmdepthtex) { glDeleteTextures(1, &rsmdepthtex); rsmdepthtex = 0; }
     if(rsmcolortex) { glDeleteTextures(1, &rsmcolortex); rsmcolortex = 0; }
@@ -1529,7 +1529,6 @@ VAR(rhdyntex, 0, 0, 1);
 VAR(rhdynmm, 0, 0, 1);
 VARFR(gidist, 0, 384, 1024, { clearradiancehintscache(); cleardeferredlightshaders(); if(!gidist) cleanupradiancehints(); });
 FVARFR(giscale, 0, 0.6f, 1e3f, { cleardeferredlightshaders(); if(!giscale) cleanupradiancehints(); });
-FVARR(giaoscale, 0, 2, 1e3f);
 VARFP(gi, 0, 1, 1, { cleardeferredlightshaders(); cleanupradiancehints(); });
 
 VAR(debugrsm, 0, 0, 2);
@@ -1550,7 +1549,7 @@ void viewrh()
     if(debugrh < 0 && rhrect)
     {
         SETSHADER(hudrect);
-        glBindTexture(GL_TEXTURE_RECTANGLE, rhtex[5]);
+        glBindTexture(GL_TEXTURE_RECTANGLE, rhtex[4]);
         float tw = (rhgrid+2*rhborder)*(rhgrid+2*rhborder), th = (rhgrid+2*rhborder)*rhsplits;
         gle::defvertex(2);
         gle::deftexcoord0(2);
@@ -2488,17 +2487,9 @@ void radiancehints::bindparams()
     GLOBALPARAMF(rhbounds, 0.5f*(rhgrid + rhborder)/float(rhgrid + 2*rhborder));
 }
 
-extern int skylightenabled;
-
-static inline bool useskylight()
-{
-    return skylightenabled && !skylight.iszero();
-}
-
 bool useradiancehints()
 {
-    return csmshadowmap && gidist &&
-           ((!sunlight.iszero() && gi && giscale) || useskylight());
+    return !sunlight.iszero() && csmshadowmap && gi && giscale && gidist;
 }
 
 FVAR(avatarshadowdist, 0, 12, 100);
@@ -2672,23 +2663,20 @@ Shader *loaddeferredlightshader(const char *type = NULL)
     shadow[shadowlen] = '\0';
 
     int usecsm = 0, userh = 0;
-    if((!sunlight.iszero() || useskylight()) && csmshadowmap)
+    if(!sunlight.iszero() && csmshadowmap)
     {
         usecsm = csmsplits;
         sun[sunlen++] = 'c';
         if(smalpha && alphashadow) sun[sunlen++] = 'C';
-        if(!sunlight.iszero()) sun[sunlen++] = 'u';
         sun[sunlen++] = '0' + csmsplits;
         if(!minimap)
         {
             if(avatar && ao && aosun) sun[sunlen++] = 'A';
-            bool usesky = useskylight();
-            if(gidist && ((gi && giscale && !sunlight.iszero()) || usesky))
+            if(gi && giscale && gidist)
             {
                 userh = rhsplits;
                 sun[sunlen++] = 'r';
                 sun[sunlen++] = '0' + rhsplits;
-                if(usesky) sun[sunlen++] = 'k';
             }
         }
     }
@@ -2955,7 +2943,7 @@ static void bindlighttexs(int msaapass = 0, bool transparent = false)
         glActiveTexture_(GL_TEXTURE5);
         glBindTexture(GL_TEXTURE_RECTANGLE, aotex[2] ? aotex[2] : aotex[0]);
     }
-    if(useradiancehints()) loopi(4)
+    if(useradiancehints()) loopi(3)
     {
         glActiveTexture_(GL_TEXTURE6 + i);
         glBindTexture(GL_TEXTURE_3D, rhtex[i]);
@@ -3001,15 +2989,12 @@ static inline void setlightglobals(bool transparent = false)
             GLOBALPARAMF(sunlightdir, 0, 0, 0);
             GLOBALPARAMF(sunlightcolor, 0, 0, 0);
             GLOBALPARAMF(giscale, 0);
-            GLOBALPARAMF(skylightcolor, 0, 0, 0);
         }
         else
         {
             GLOBALPARAM(sunlightdir, sunlightdir);
             GLOBALPARAMF(sunlightcolor, sunlight.x*lightscale*sunlightscale, sunlight.y*lightscale*sunlightscale, sunlight.z*lightscale*sunlightscale);
-            GLOBALPARAMF(giscale, gi ? 2*giscale : 0);
-            float skyscale = skylightenabled ? 2*giaoscale*lightscale*skylightscale : 0;
-            GLOBALPARAMF(skylightcolor, skylight.x*skyscale, skylight.y*skyscale, skylight.z*skyscale);
+            GLOBALPARAMF(giscale, 2*giscale);
         }
     }
 
@@ -4003,7 +3988,7 @@ void radiancehints::renderslices()
         glViewport(0, 0, sw, sh);
         if(rhcache)
         {
-            loopi(4) swap(rhtex[i], rhtex[i+4]);
+            loopi(3) swap(rhtex[i], rhtex[i+3]);
             uint clearmasks[RH_MAXSPLITS][(RH_MAXGRID+2+31)/32];
             memcpy(clearmasks, rhclearmasks[0], sizeof(clearmasks));
             memcpy(rhclearmasks[0], rhclearmasks[1], sizeof(clearmasks));
@@ -4013,9 +3998,6 @@ void radiancehints::renderslices()
 
     GLOBALPARAMF(rhatten, 1.0f/(gidist*gidist));
     GLOBALPARAMF(rsmspread, gidist*rsmspread*rsm.scale.x, gidist*rsmspread*rsm.scale.y);
-    GLOBALPARAMF(rhaothreshold, splits[0].bounds/rhgrid);
-    GLOBALPARAMF(rhaoatten, 1.0f/(gidist*rsmspread));
-    GLOBALPARAMF(rhaoheight, gidist*rsmspread);
 
     matrix4 rsmtcmatrix;
     rsmtcmatrix.identity();
@@ -4033,15 +4015,15 @@ void radiancehints::renderslices()
     glBindTexture(GL_TEXTURE_RECTANGLE, rsmcolortex);
     glActiveTexture_(GL_TEXTURE2);
     glBindTexture(GL_TEXTURE_RECTANGLE, rsmnormaltex);
-    if(rhborder) loopi(4)
+    if(rhborder) loopi(3)
     {
         glActiveTexture_(GL_TEXTURE3 + i);
         glBindTexture(GL_TEXTURE_3D, rhtex[i]);
     }
-    if(rhcache) loopi(4)
+    if(rhcache) loopi(3)
     {
         glActiveTexture_(GL_TEXTURE7 + i);
-        glBindTexture(GL_TEXTURE_3D, rhtex[rhrect ? i : 4+i]);
+        glBindTexture(GL_TEXTURE_3D, rhtex[rhrect ? i : 3+i]);
     }
     glActiveTexture_(GL_TEXTURE0);
 
@@ -4081,7 +4063,7 @@ void radiancehints::renderslices()
         {
             if(rhrect || !rhcache || split.copied) continue;
             split.copied = true;
-            loopk(4) glCopyImageSubData_(rhtex[4+k], GL_TEXTURE_3D, 0, 0, 0, i*sh, rhtex[k], GL_TEXTURE_3D, 0, 0, 0, i*sh, sw, sh, sh);
+            loopk(3) glCopyImageSubData_(rhtex[3+k], GL_TEXTURE_3D, 0, 0, 0, i*sh, rhtex[k], GL_TEXTURE_3D, 0, 0, 0, i*sh, sw, sh, sh);
             continue;
         }
 
@@ -4125,7 +4107,6 @@ void radiancehints::renderslices()
                     glFramebufferTexture3D_(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_3D, rhtex[0], 0, i*sh + j); \
                     glFramebufferTexture3D_(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT1, GL_TEXTURE_3D, rhtex[1], 0, i*sh + j); \
                     glFramebufferTexture3D_(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT2, GL_TEXTURE_3D, rhtex[2], 0, i*sh + j); \
-                    glFramebufferTexture3D_(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT3, GL_TEXTURE_3D, rhtex[3], 0, i*sh + j); \
                 } \
             } while(0)
 
@@ -4293,7 +4274,7 @@ void radiancehints::renderslices()
             gle::defvertex(2);
             gle::deftexcoord0(3);
         }
-        if(rhrect) loopk(4)
+        if(rhrect) loopk(3)
         {
             glReadBuffer(GL_COLOR_ATTACHMENT0+k);
             glBindTexture(GL_TEXTURE_3D, rhtex[k]);
@@ -4436,7 +4417,7 @@ void rendercsmshadowmaps()
 
     csm.rendered = 0;
 
-    if((sunlight.iszero() && !useskylight()) || !csmshadowmap) return;
+    if(sunlight.iszero() || !csmshadowmap) return;
 
     csm.rendered = 1;
 
