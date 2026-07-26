@@ -1,7 +1,9 @@
 // worldio.cpp: loading & saving of maps and savegames
 
-#include "FastNoiseLite.h"
 #include "engine.h"
+#ifndef STANDALONE
+#include "../game/world.h"
+#endif
 #include <errno.h>
 
 void validmapname(char *dst, const char *src, const char *prefix = NULL, const char *alt = "untitled", size_t maxlen = 100)
@@ -99,199 +101,21 @@ enum
 };
 
 VARP(maxchunkdist, 2, 3, WORLD_MAX_CHUNK_DIST);
-VARP(worldseed, 0, 1337, INT_MAX);
 
-FVAR(terraincontinentfreq, 0.000001f, 0.0005f, 1.0f);
-FVAR(terrainmountainfreq, 0.000001f, 0.002f, 1.0f);
-FVAR(terrainmountainpeakfreq, 0.000001f, 0.006f, 1.0f);
-FVAR(terrainmountaindetailfreq, 0.000001f, 0.018f, 1.0f);
-FVAR(terrainerosionfreq, 0.000001f, 0.003f, 1.0f);
-FVAR(terrainhillfreq, 0.000001f, 0.01f, 1.0f);
-FVAR(terraindetailfreq, 0.000001f, 0.04f, 1.0f);
-FVAR(terraincontinentwarpfreq, 0.000001f, 0.001f, 1.0f);
-FVAR(terraincontinentwarpamp, 0.0f, 40.0f, float(WORLD_HEIGHT_BLOCKS * 4));
-FVAR(terrainfeaturewarpfreq, 0.000001f, 0.001f, 1.0f);
-FVAR(terrainfeaturewarpamp, 0.0f, 120.0f, float(WORLD_HEIGHT_BLOCKS * 4));
-FVAR(terraintemperaturefreq, 0.000001f, 0.0004f, 1.0f);
-FVAR(terrainmoisturefreq, 0.000001f, 0.0006f, 1.0f);
-FVAR(terrainweirdnessfreq, 0.000001f, 0.001f, 1.0f);
-FVAR(terrainweirdnessstrength, 0.0f, 0.15f, 1.0f);
-FVAR(terrainmountainstonefreq, 0.000001f, 0.08f, 1.0f);
-FVAR(terrainmountainmoistureboost, 0.0f, 0.3f, 1.0f);
-
-VAR(terrainsealevel, WORLD_MIN_HEIGHT + 1, 0, WORLD_MAX_HEIGHT - 1);
-VAR(terrainsnowheight, WORLD_MIN_HEIGHT + 1, 70, WORLD_MAX_HEIGHT - 1);
-VAR(terrainmountainstonelow, WORLD_MIN_HEIGHT + 1, 35, WORLD_MAX_HEIGHT - 1);
-VAR(terrainmountainstonehigh, WORLD_MIN_HEIGHT + 1, 45, WORLD_MAX_HEIGHT - 1);
-VAR(terrainbiomeblend, 0, 16, 64);
-VAR(terraincoastwidth, 0, 8, 32);
-VAR(terraincoastvariation, 0, 4, 16);
-VAR(terrainbeachminheight, -32, -2, 32);
-VAR(terrainbeachmaxheight, -32, 2, 32);
-FVAR(terraincontinentheight, 0.0f, 35.0f, float(WORLD_HEIGHT_BLOCKS));
-FVAR(terrainhillheight, 0.0f, 10.0f, float(WORLD_HEIGHT_BLOCKS));
-FVAR(terrainmountainheight, 0.0f, 80.0f, float(WORLD_HEIGHT_BLOCKS));
-FVAR(terrainmountainpeakstrength, 0.0f, 0.6f, 1.0f);
-FVAR(terrainmountaindetailheight, 0.0f, 18.0f, float(WORLD_HEIGHT_BLOCKS));
-FVAR(terrainerosionheight, 0.0f, 15.0f, float(WORLD_HEIGHT_BLOCKS));
-FVAR(terraindetailheight, 0.0f, 2.0f, float(WORLD_HEIGHT_BLOCKS));
-
-FVAR(terrainlandmasklow, -1.0f, -0.2f, 1.0f);
-FVAR(terrainlandmaskhigh, -1.0f, 0.1f, 1.0f);
-FVAR(terrainmountainmasklow, -1.0f, 0.15f, 1.0f);
-FVAR(terrainmountainmaskhigh, -1.0f, 0.65f, 1.0f);
-FVAR(terraindeserttemperature, -1.0f, 0.4f, 1.0f);
-FVAR(terraindesertmoisture, -1.0f, -0.25f, 1.0f);
-FVAR(terrainforestmoisture, -1.0f, 0.35f, 1.0f);
-FVAR(terrainforesttreedensity, 0.0f, 0.1f, 0.25f);
-FVAR(terrainplainstreedensity, 0.0f, 0.0015f, 0.25f);
-VAR(terrainpinestartheight, WORLD_MIN_HEIGHT + 1, 25, WORLD_MAX_HEIGHT - 1);
-VAR(terrainpinefullheight, WORLD_MIN_HEIGHT + 1, 45, WORLD_MAX_HEIGHT - 1);
-
-FVAR(terraincavefreq, 0.0001f, 0.045f, 0.25f);
-FVAR(terraincavethreshold, -1.0f, 0.58f, 1.0f);
-FVAR(terrainlargecavefreq, 0.0001f, 0.018f, 0.25f);
-FVAR(terrainlargecavethreshold, -1.0f, 0.76f, 1.0f);
-FVAR(terrainlargecavedeepthreshold, -1.0f, 0.58f, 1.0f);
-FVAR(terraintunnelfreq, 0.0001f, 0.025f, 0.25f);
-FVAR(terraintunnelwidth, 0.001f, 0.075f, 0.3f);
-FVAR(terraincaveentrancewidth, 0.001f, 0.05f, 0.3f);
-VAR(terraincavemindepth, 1, 12, 64);
-VAR(terraincavefulldepth, 1, 32, 128);
-VAR(terraincavedeepheight, WORLD_MIN_HEIGHT + 1, -64, WORLD_MAX_HEIGHT - 1);
-
-VAR(terrainbottomlavalayers, 0, 3, 16);
-VAR(terrainlavalakestartheight, WORLD_MIN_HEIGHT + 1, -16, WORLD_MAX_HEIGHT - 1);
-VAR(terrainlavalakedeepheight, WORLD_MIN_HEIGHT + 1, -64, WORLD_MAX_HEIGHT - 1);
-FVAR(terrainlavalakeshallowchance, 0.0f, 0.03f, 1.0f);
-FVAR(terrainlavalakedeepchance, 0.0f, 0.22f, 1.0f);
-VAR(terrainlavalakeminsize, 1, 4, 32);
-VAR(terrainlavalakemaxsize, 1, 14, 32);
-VAR(terrainlavalakespacing, 8, 24, 64);
-FVAR(terrainlavalakeshapefreq, 0.001f, 0.08f, 1.0f);
-FVAR(terrainlavalakeshapevariation, 0.0f, 0.35f, 0.75f);
-
-static int activeworldseed = 1337;
-
-struct terrainsettings
-{
-    float continentfreq, mountainfreq, mountainpeakfreq, mountaindetailfreq;
-    float erosionfreq, hillfreq, detailfreq;
-    float continentwarpfreq, continentwarpamp, featurewarpfreq, featurewarpamp;
-    float temperaturefreq, moisturefreq, weirdnessfreq, weirdnessstrength, mountainstonefreq;
-    float mountainmoistureboost;
-    float continentheight, hillheight, mountainheight, mountainpeakstrength;
-    float mountaindetailheight, erosionheight, detailheight;
-    float landmasklow, landmaskhigh, mountainmasklow, mountainmaskhigh;
-    float deserttemperature, desertmoisture, forestmoisture;
-    float foresttreedensity, plainstreedensity;
-    float cavefreq, cavethreshold, largecavefreq, largecavethreshold, largecavedeepthreshold;
-    float tunnelfreq, tunnelwidth, caveentrancewidth;
-    float lavalakeshallowchance, lavalakedeepchance, lavalakeshapefreq, lavalakeshapevariation;
-    int sealevel, snowheight, mountainstonelow, mountainstonehigh;
-    int biomeblend, coastwidth, coastvariation;
-    int beachminheight, beachmaxheight;
-    int pinestartheight, pinefullheight;
-    int cavemindepth, cavefulldepth, cavedeepheight;
-    int bottomlavalayers, lavalakestartheight, lavalakedeepheight;
-    int lavalakeminsize, lavalakemaxsize, lavalakespacing;
-
-    terrainsettings()
-        : continentfreq(terraincontinentfreq), mountainfreq(terrainmountainfreq),
-          mountainpeakfreq(terrainmountainpeakfreq),
-          mountaindetailfreq(terrainmountaindetailfreq),
-          erosionfreq(terrainerosionfreq), hillfreq(terrainhillfreq), detailfreq(terraindetailfreq),
-          continentwarpfreq(terraincontinentwarpfreq), continentwarpamp(terraincontinentwarpamp),
-          featurewarpfreq(terrainfeaturewarpfreq), featurewarpamp(terrainfeaturewarpamp),
-          temperaturefreq(terraintemperaturefreq), moisturefreq(terrainmoisturefreq),
-          weirdnessfreq(terrainweirdnessfreq), weirdnessstrength(terrainweirdnessstrength),
-          mountainstonefreq(terrainmountainstonefreq),
-          mountainmoistureboost(terrainmountainmoistureboost),
-          continentheight(terraincontinentheight), hillheight(terrainhillheight),
-          mountainheight(terrainmountainheight), mountainpeakstrength(terrainmountainpeakstrength),
-          mountaindetailheight(terrainmountaindetailheight), erosionheight(terrainerosionheight),
-          detailheight(terraindetailheight), landmasklow(terrainlandmasklow),
-          landmaskhigh(terrainlandmaskhigh), mountainmasklow(terrainmountainmasklow),
-          mountainmaskhigh(terrainmountainmaskhigh), deserttemperature(terraindeserttemperature),
-          desertmoisture(terraindesertmoisture), forestmoisture(terrainforestmoisture),
-          foresttreedensity(terrainforesttreedensity), plainstreedensity(terrainplainstreedensity),
-          cavefreq(terraincavefreq), cavethreshold(terraincavethreshold),
-          largecavefreq(terrainlargecavefreq), largecavethreshold(terrainlargecavethreshold),
-          largecavedeepthreshold(terrainlargecavedeepthreshold),
-          tunnelfreq(terraintunnelfreq), tunnelwidth(terraintunnelwidth),
-          caveentrancewidth(terraincaveentrancewidth),
-          lavalakeshallowchance(terrainlavalakeshallowchance),
-          lavalakedeepchance(terrainlavalakedeepchance),
-          lavalakeshapefreq(terrainlavalakeshapefreq),
-          lavalakeshapevariation(terrainlavalakeshapevariation),
-          sealevel(terrainsealevel), snowheight(terrainsnowheight),
-          mountainstonelow(terrainmountainstonelow), mountainstonehigh(terrainmountainstonehigh),
-          biomeblend(terrainbiomeblend),
-          coastwidth(terraincoastwidth), coastvariation(terraincoastvariation),
-          beachminheight(terrainbeachminheight), beachmaxheight(terrainbeachmaxheight),
-          pinestartheight(terrainpinestartheight), pinefullheight(terrainpinefullheight),
-          cavemindepth(terraincavemindepth), cavefulldepth(terraincavefulldepth),
-          cavedeepheight(terraincavedeepheight), bottomlavalayers(terrainbottomlavalayers),
-          lavalakestartheight(terrainlavalakestartheight),
-          lavalakedeepheight(terrainlavalakedeepheight),
-          lavalakeminsize(terrainlavalakeminsize), lavalakemaxsize(terrainlavalakemaxsize),
-          lavalakespacing(terrainlavalakespacing)
-    {
-    }
-};
-
-static void setupworldnoiselayer(FastNoiseLite &noise, int seed, float frequency, int octaves)
-{
-    noise.SetSeed(seed);
-    noise.SetNoiseType(FastNoiseLite::NoiseType_OpenSimplex2S);
-    noise.SetFrequency(frequency);
-    noise.SetFractalType(FastNoiseLite::FractalType_FBm);
-    noise.SetFractalOctaves(octaves);
-    noise.SetFractalLacunarity(2.0f);
-    noise.SetFractalGain(0.5f);
-}
-
-static void setupworldwarp(FastNoiseLite &warp, int seed, float frequency, float amplitude)
-{
-    warp.SetSeed(seed);
-    warp.SetDomainWarpType(FastNoiseLite::DomainWarpType_OpenSimplex2);
-    warp.SetFrequency(frequency);
-    warp.SetDomainWarpAmp(amplitude);
-}
-
-static void setupworldnoise(FastNoiseLite &continent, FastNoiseLite &mountains, FastNoiseLite &erosion,
-                            FastNoiseLite &hills, FastNoiseLite &detail, int seed,
-                            const terrainsettings &settings)
-{
-    setupworldnoiselayer(continent, seed, settings.continentfreq, 4);
-    setupworldnoiselayer(mountains, seed ^ 0x68E31DA4, settings.mountainfreq, 3);
-    setupworldnoiselayer(erosion, seed ^ 0x1B56C4E9, settings.erosionfreq, 3);
-    setupworldnoiselayer(hills, seed ^ 0x4A39B70D, settings.hillfreq, 3);
-    setupworldnoiselayer(detail, seed ^ 0x2C1B3C6D, settings.detailfreq, 2);
-}
-
-static void loadworldseed(int seed)
-{
-    worldseed = max(seed, 0);
-    activeworldseed = worldseed;
-}
-
-ICOMMAND(worldloadseed, "i", (int *seed), loadworldseed(*seed));
-
-struct terraincubetype
+struct worldcubedefinition
 {
     string name, texture, sidetexture, bottom;
     float texsize;
     int slot, sideslot, bottomslot;
 
-    terraincubetype()
+    worldcubedefinition()
         : texsize(1), slot(DEFAULT_GEOM), sideslot(DEFAULT_GEOM), bottomslot(DEFAULT_GEOM)
     {
         name[0] = texture[0] = sidetexture[0] = bottom[0] = '\0';
     }
 };
 
-static vector<terraincubetype *> terraincubetypes;
+static vector<worldcubedefinition *> worldcubedefinitions;
 static int worldgrasstexture = DEFAULT_GEOM, worldgrasssidetexture = DEFAULT_GEOM,
            worldgrassbottomtexture = DEFAULT_GEOM,
            worlddirttexture = DEFAULT_GEOM, worldstonetexture = DEFAULT_GEOM,
@@ -313,33 +137,33 @@ bool isworldleafcube(const cube &c)
     return leavesalpha != 0 && isworldleaftexture(c);
 }
 
-static terraincubetype *findterraincube(const char *name)
+static worldcubedefinition *findworldcube(const char *name)
 {
-    loopv(terraincubetypes) if(!cubecasecmp(terraincubetypes[i]->name, name)) return terraincubetypes[i];
+    loopv(worldcubedefinitions) if(!cubecasecmp(worldcubedefinitions[i]->name, name)) return worldcubedefinitions[i];
     return NULL;
 }
 
-void terrainreset()
+void worldreset()
 {
-    terraincubetypes.deletecontents();
+    worldcubedefinitions.deletecontents();
     worldgrasstexture = worldgrasssidetexture = worldgrassbottomtexture = worlddirttexture =
         worldstonetexture = worldsandtexture = worldsnowtexture = worldwoodtexture =
         worldleaftexture = DEFAULT_GEOM;
 }
 
-COMMAND(terrainreset, "");
+COMMAND(worldreset, "");
 
-static void defineterraincube(const char *name, const char *texture, float texsize,
+static void defineworldcube(const char *name, const char *texture, float texsize,
                               const char *side, const char *bottom, int numargs)
 {
     if(!name[0] || !texture[0])
     {
-        conoutf(CON_ERROR, "terraincube requires a cube name and texture path");
+        conoutf(CON_ERROR, "worldcube requires a cube name and texture path");
         return;
     }
 
-    terraincubetype *type = findterraincube(name);
-    if(!type) type = terraincubetypes.add(new terraincubetype);
+    worldcubedefinition *type = findworldcube(name);
+    if(!type) type = worldcubedefinitions.add(new worldcubedefinition);
     copystring(type->name, name);
     copystring(type->texture, texture);
     copystring(type->sidetexture, numargs >= 4 && side ? side : "");
@@ -347,13 +171,13 @@ static void defineterraincube(const char *name, const char *texture, float texsi
     type->texsize = texsize > 0 ? texsize : 1;
 }
 
-ICOMMAND(terraincube, "ssfssN", (char *name, char *texture, float *texsize,
+ICOMMAND(worldcube, "ssfssN", (char *name, char *texture, float *texsize,
                                 char *side, char *bottom, int *numargs),
 {
-    defineterraincube(name, texture, *texsize, side, bottom, *numargs);
+    defineworldcube(name, texture, *texsize, side, bottom, *numargs);
 });
 
-static int loadterraintextureslot(const char *path, float texsize, bool alpha)
+static int loadworldtextureslot(const char *path, float texsize, bool alpha)
 {
     const char *texture = escapestring(path);
     string command;
@@ -367,42 +191,42 @@ static int loadterraintextureslot(const char *path, float texsize, bool alpha)
     return slots.last()->variants->index;
 }
 
-static bool loadterrain()
+static bool loadworlddefinitions()
 {
-    terrainreset();
-    if(!execfile("config/terrain.cfg", false))
+    worldreset();
+    if(!execfile("config/world.cfg", false))
     {
-        conoutf(CON_ERROR, "could not load config/terrain.cfg");
+        conoutf(CON_ERROR, "could not load config/world.cfg");
         return false;
     }
 
-    terraincubetype *grass = findterraincube("Grass"), *dirt = findterraincube("Dirt"),
-                    *stone = findterraincube("Stone"), *sand = findterraincube("Sand"),
-                    *snow = findterraincube("Snow"), *wood = findterraincube("Wood"),
-                    *leaves = findterraincube("Leaves");
+    worldcubedefinition *grass = findworldcube("Grass"), *dirt = findworldcube("Dirt"),
+                    *stone = findworldcube("Stone"), *sand = findworldcube("Sand"),
+                    *snow = findworldcube("Snow"), *wood = findworldcube("Wood"),
+                    *leaves = findworldcube("Leaves");
     if(!grass || !dirt || !stone || !sand || !snow || !wood || !leaves)
     {
-        conoutf(CON_ERROR, "terrain.cfg must define Grass, Dirt, Stone, Sand, Snow, Wood, and Leaves cubes");
+        conoutf(CON_ERROR, "world.cfg must define Grass, Dirt, Stone, Sand, Snow, Wood, and Leaves cubes");
         return false;
     }
 
     execute("texturereset; texsky; setshader stdworld");
-    loopv(terraincubetypes)
+    loopv(worldcubedefinitions)
     {
-        terraincubetype &type = *terraincubetypes[i];
+        worldcubedefinition &type = *worldcubedefinitions[i];
         const bool alpha = &type == leaves;
-        type.slot = loadterraintextureslot(type.texture, type.texsize, alpha);
+        type.slot = loadworldtextureslot(type.texture, type.texsize, alpha);
         type.sideslot = type.sidetexture[0]
-                      ? loadterraintextureslot(type.sidetexture, type.texsize, alpha)
+                      ? loadworldtextureslot(type.sidetexture, type.texsize, alpha)
                       : type.slot;
     }
-    loopv(terraincubetypes)
+    loopv(worldcubedefinitions)
     {
-        terraincubetype &type = *terraincubetypes[i];
-        terraincubetype *bottomtype = type.bottom[0] ? findterraincube(type.bottom) : NULL;
+        worldcubedefinition &type = *worldcubedefinitions[i];
+        worldcubedefinition *bottomtype = type.bottom[0] ? findworldcube(type.bottom) : NULL;
         if(type.bottom[0] && !bottomtype)
         {
-            conoutf(CON_ERROR, "terrain cube %s references unknown bottom cube %s",
+            conoutf(CON_ERROR, "world cube %s references unknown bottom cube %s",
                     type.name, type.bottom);
             return false;
         }
@@ -419,11 +243,11 @@ static bool loadterrain()
     worldwoodtexture = wood->slot;
     worldleaftexture = leaves->slot;
     setworldleavesalpha(worldroot, leavesalpha != 0);
-    conoutf(CON_DEBUG, "loaded %d terrain cube definitions", terraincubetypes.length());
+    conoutf(CON_DEBUG, "loaded %d world cube definitions", worldcubedefinitions.length());
     return true;
 }
 
-ICOMMAND(terrainload, "", (), intret(loadterrain() ? 1 : 0));
+ICOMMAND(worldload, "", (), intret(loadworlddefinitions() ? 1 : 0));
 
 struct worldchunk
 {
@@ -474,7 +298,7 @@ struct worldchunkjob
 {
     int x, y, seed, grasstexture, grasssidetexture, grassbottomtexture;
     int dirttexture, stonetexture, sandtexture, snowtexture, woodtexture, leaftexture;
-    terrainsettings terrain;
+    game::worldsettings settings;
     int families, optimized, loaderror;
     uint epoch, request;
     bool loaded, remip;
@@ -483,7 +307,7 @@ struct worldchunkjob
     string filename;
 
     worldchunkjob(int x, int y, uint epoch, uint request)
-        : x(x), y(y), seed(activeworldseed),
+        : x(x), y(y), seed(game::getworldseed()),
           grasstexture(worldgrasstexture), grasssidetexture(worldgrasssidetexture),
           grassbottomtexture(worldgrassbottomtexture),
           dirttexture(worlddirttexture), stonetexture(worldstonetexture),
@@ -2281,14 +2105,10 @@ COMMANDN(teleport, teleportplayer, "sss");
 
 struct worldgencontext
 {
-    FastNoiseLite continentwarp, featurewarp;
-    FastNoiseLite continent, mountains, mountainpeaks, mountaindetail, erosion, hills, detail;
-    FastNoiseLite temperature, moisture, weirdness, biomeblend, rockiness;
-    FastNoiseLite caves, largecaves, tunnela, tunnelb, lakeshape;
-    terrainsettings terrain;
+    game::worldgenerator generator;
+    game::worldsettings settings;
     int heightmap[WORLD_CHUNK_BLOCKS * WORLD_CHUNK_BLOCKS];
     uchar biomemap[WORLD_CHUNK_BLOCKS * WORLD_CHUNK_BLOCKS];
-    uchar mountainmap[WORLD_CHUNK_BLOCKS * WORLD_CHUNK_BLOCKS];
     uchar coastmap[WORLD_CHUNK_BLOCKS * WORLD_CHUNK_BLOCKS];
     uchar rockmap[WORLD_CHUNK_BLOCKS * WORLD_CHUNK_BLOCKS];
     int seed, grasstexture, grasssidetexture, grassbottomtexture;
@@ -2300,29 +2120,14 @@ struct worldgencontext
     worldgencontext(int seed, int grasstexture, int grasssidetexture, int grassbottomtexture,
                     int dirttexture, int stonetexture, int sandtexture, int snowtexture,
                     int woodtexture, int leaftexture,
-                    bool prepared, bool remip, const terrainsettings &terrain, SDL_atomic_t *cancelled = NULL)
-        : terrain(terrain), seed(seed), grasstexture(grasstexture),
+                    bool prepared, bool remip, const game::worldsettings &settings,
+                    SDL_atomic_t *cancelled = NULL)
+        : generator(seed, settings), settings(settings), seed(seed), grasstexture(grasstexture),
           grasssidetexture(grasssidetexture), grassbottomtexture(grassbottomtexture),
           dirttexture(dirttexture), stonetexture(stonetexture), sandtexture(sandtexture),
           snowtexture(snowtexture), woodtexture(woodtexture), leaftexture(leaftexture),
           prepared(prepared), remip(remip), families(0), optimized(0), cancelled(cancelled)
     {
-        setupworldwarp(continentwarp, seed ^ 0x6C8E9CF5, terrain.continentwarpfreq, terrain.continentwarpamp);
-        setupworldwarp(featurewarp, seed ^ 0x35A4F2D1, terrain.featurewarpfreq, terrain.featurewarpamp);
-        setupworldnoise(continent, mountains, erosion, hills, detail, seed, terrain);
-        setupworldnoiselayer(mountainpeaks, seed ^ 0x0F4C2A91, terrain.mountainpeakfreq, 2);
-        setupworldnoiselayer(mountaindetail, seed ^ 0x63D8B5E7, terrain.mountaindetailfreq, 4);
-        setupworldnoiselayer(temperature, seed ^ 0x51D7348B, terrain.temperaturefreq, 3);
-        setupworldnoiselayer(moisture, seed ^ 0x2F6E2B1D, terrain.moisturefreq, 3);
-        setupworldnoiselayer(weirdness, seed ^ 0x749A7C15, terrain.weirdnessfreq, 3);
-        setupworldnoiselayer(biomeblend, seed ^ 0x13C6E91F,
-                             terrain.biomeblend > 0 ? 1.0f / terrain.biomeblend : 1.0f, 1);
-        setupworldnoiselayer(rockiness, seed ^ 0x5E4A19C3, terrain.mountainstonefreq, 2);
-        setupworldnoiselayer(caves, seed ^ 0x7A84F12D, terrain.cavefreq, 2);
-        setupworldnoiselayer(largecaves, seed ^ 0x36B9C7E5, terrain.largecavefreq, 2);
-        setupworldnoiselayer(tunnela, seed ^ 0x19F3A6C7, terrain.tunnelfreq, 2);
-        setupworldnoiselayer(tunnelb, seed ^ 0x5C2D8E91, terrain.tunnelfreq, 2);
-        setupworldnoiselayer(lakeshape, seed ^ 0x43E7B5D9, terrain.lavalakeshapefreq, 2);
     }
 
     bool iscanceled() const { return cancelled && SDL_AtomicGet(cancelled); }
@@ -2592,67 +2397,33 @@ static void setworldcubematerial(cube &c, int material)
 }
 
 enum { WORLD_EMPTY, WORLD_STONE, WORLD_DIRT, WORLD_GRASS, WORLD_SAND, WORLD_SNOW, WORLD_WATER, WORLD_MIXED };
-enum { BIOME_OCEAN, BIOME_SNOWY_MOUNTAIN, BIOME_DESERT, BIOME_FOREST, BIOME_PLAINS };
 
-static float worldterrainsmoothstep(float low, float high, float value)
+static float worldsmoothstep(float low, float high, float value)
 {
     if(high <= low) return value >= high ? 1.0f : 0.0f;
     float t = clamp((value - low) / (high - low), 0.0f, 1.0f);
     return t * t * (3.0f - 2.0f * t);
 }
 
-static int generateworldterrainheight(const worldgencontext &ctx, int chunkx, int chunky,
-                                      int blockx, int blocky, float *mountainweight = NULL)
+static int generateworldheight(const worldgencontext &ctx, int chunkx, int chunky,
+                               int blockx, int blocky)
 {
-    const float noisex = float(chunkx) * WORLD_CHUNK_BLOCKS + blockx + 10000.5f,
-                noisey = float(chunky) * WORLD_CHUNK_BLOCKS + blocky - 10000.5f;
-    float continentx = noisex, contingenty = noisey,
-          featurex = noisex, featurey = noisey;
-    ctx.continentwarp.DomainWarp(continentx, contingenty);
-    ctx.featurewarp.DomainWarp(featurex, featurey);
-
-    const float continental = ctx.continent.GetNoise(continentx, contingenty),
-                mountains = ctx.mountains.GetNoise(featurex, featurey),
-                mountainpeaks = ctx.mountainpeaks.GetNoise(featurex, featurey),
-                mountaindetail = ctx.mountaindetail.GetNoise(featurex, featurey),
-                erosion = ctx.erosion.GetNoise(featurex, featurey),
-                hills = ctx.hills.GetNoise(noisex, noisey),
-                detail = ctx.detail.GetNoise(noisex, noisey);
-    const float landmask = worldterrainsmoothstep(ctx.terrain.landmasklow, ctx.terrain.landmaskhigh, continental),
-                mountainmask = worldterrainsmoothstep(ctx.terrain.mountainmasklow,
-                                                      ctx.terrain.mountainmaskhigh, continental);
-    float ridge = 1.0f - fabs(mountains);
-    ridge = ridge * ridge * ridge;
-    float peak = worldterrainsmoothstep(0.3f, 0.72f, mountainpeaks * 0.5f + 0.5f);
-    peak *= peak;
-    const float peakvariation = 1.0f - ctx.terrain.mountainpeakstrength * (1.0f - peak),
-                mountainshape = ridge * peakvariation,
-                mountaindetailweight = mountainmask
-                                      * worldterrainsmoothstep(0.05f, 0.6f, ridge);
-    if(mountainweight) *mountainweight = mountaindetailweight;
-
-    const float height = ctx.terrain.sealevel
-                       + continental * ctx.terrain.continentheight
-                       + landmask * hills * ctx.terrain.hillheight
-                       + mountainmask * mountainshape * ctx.terrain.mountainheight
-                       + mountaindetail * mountaindetailweight
-                         * ctx.terrain.mountaindetailheight
-                       - erosion * mountainmask * ctx.terrain.erosionheight
-                       + detail * ctx.terrain.detailheight;
-    return clamp(int(floor(height + 0.5f)), WORLD_MIN_HEIGHT + 1, WORLD_MAX_HEIGHT - 1) * WORLD_BLOCK_SIZE;
+    const int x = chunkx * WORLD_CHUNK_BLOCKS + blockx,
+              y = chunky * WORLD_CHUNK_BLOCKS + blocky;
+    return ctx.generator.height(x, y) * WORLD_BLOCK_SIZE;
 }
 
 static void generateworldcoastmap(worldgencontext &ctx, int chunkx, int chunky)
 {
     memset(ctx.coastmap, 0, sizeof(ctx.coastmap));
-    if(ctx.terrain.coastwidth <= 0) return;
+    if(ctx.settings.coastwidth <= 0) return;
 
-    const int maxcoastwidth = ctx.terrain.coastwidth + ctx.terrain.coastvariation,
+    const int maxcoastwidth = ctx.settings.coastwidth + ctx.settings.coastvariation,
               halo = maxcoastwidth + 1,
               mapsize = WORLD_CHUNK_BLOCKS + 2 * halo,
               maparea = mapsize * mapsize,
               fardistance = INT_MAX / 8,
-              seaheight = ctx.terrain.sealevel * WORLD_BLOCK_SIZE;
+              seaheight = ctx.settings.sealevel * WORLD_BLOCK_SIZE;
     vector<uchar> water;
     vector<int> distance;
     water.pad(maparea);
@@ -2664,7 +2435,7 @@ static void generateworldcoastmap(worldgencontext &ctx, int chunkx, int chunky)
                   height = blockx >= 0 && blockx < WORLD_CHUNK_BLOCKS &&
                            blocky >= 0 && blocky < WORLD_CHUNK_BLOCKS
                          ? ctx.heightmap[blocky * WORLD_CHUNK_BLOCKS + blockx]
-                         : generateworldterrainheight(ctx, chunkx, chunky, blockx, blocky);
+                         : generateworldheight(ctx, chunkx, chunky, blockx, blocky);
         water[y * mapsize + x] = height < seaheight;
         distance[y * mapsize + x] = fardistance;
     }
@@ -2699,75 +2470,29 @@ static void generateworldcoastmap(worldgencontext &ctx, int chunkx, int chunky)
     {
         const float noisex = float(chunkx) * WORLD_CHUNK_BLOCKS + x + 10000.5f,
                     noisey = float(chunky) * WORLD_CHUNK_BLOCKS + y - 10000.5f,
-                    width = max(ctx.terrain.coastwidth
-                              + ctx.biomeblend.GetNoise(noisex, noisey) * ctx.terrain.coastvariation,
+                    width = max(ctx.settings.coastwidth
+                              + ctx.generator.biomeblend.GetNoise(noisex, noisey)
+                                * ctx.settings.coastvariation,
                                 0.0f);
         ctx.coastmap[y * WORLD_CHUNK_BLOCKS + x] =
             distance[(y + halo) * mapsize + x + halo] <= int(floor(width * 3.0f + 0.5f));
     }
 }
 
-static int generateworldbiome(const worldgencontext &ctx, int chunkx, int chunky, int blockx, int blocky,
-                              int height, float mountainweight)
+static int generateworldbiome(const worldgencontext &ctx, int chunkx, int chunky,
+                              int blockx, int blocky, int height)
 {
-    if(height < ctx.terrain.sealevel * WORLD_BLOCK_SIZE) return BIOME_OCEAN;
-
-    const float noisex = float(chunkx) * WORLD_CHUNK_BLOCKS + blockx + 10000.5f,
-                noisey = float(chunky) * WORLD_CHUNK_BLOCKS + blocky - 10000.5f,
-                weirdness = ctx.weirdness.GetNoise(noisex, noisey),
-                temperature = ctx.temperature.GetNoise(noisex, noisey)
-                            + weirdness * ctx.terrain.weirdnessstrength,
-                moisture = clamp(ctx.moisture.GetNoise(noisex, noisey)
-                               - weirdness * ctx.terrain.weirdnessstrength
-                               + mountainweight * ctx.terrain.mountainmoistureboost,
-                                 -1.0f, 1.0f),
-                heightblocks = height / float(WORLD_BLOCK_SIZE);
-
-    if(ctx.terrain.biomeblend <= 0)
-    {
-        if(heightblocks > ctx.terrain.snowheight) return BIOME_SNOWY_MOUNTAIN;
-        if(temperature > ctx.terrain.deserttemperature && moisture < ctx.terrain.desertmoisture)
-            return BIOME_DESERT;
-        if(moisture > ctx.terrain.forestmoisture) return BIOME_FOREST;
-        return BIOME_PLAINS;
-    }
-
-    const float blendblocks = ctx.terrain.biomeblend,
-                temperatureblend = max(blendblocks * ctx.terrain.temperaturefreq * 2.0f, 0.001f),
-                moistureblend = max(blendblocks * ctx.terrain.moisturefreq * 2.0f, 0.001f),
-                selector = clamp((ctx.biomeblend.GetNoise(noisex, noisey) + 1.0f) * 0.5f, 0.0f, 1.0f),
-                snowweight = worldterrainsmoothstep(ctx.terrain.snowheight - blendblocks * 0.5f,
-                                                    ctx.terrain.snowheight + blendblocks * 0.5f,
-                                                    heightblocks),
-                hotweight = worldterrainsmoothstep(ctx.terrain.deserttemperature - temperatureblend,
-                                                   ctx.terrain.deserttemperature + temperatureblend,
-                                                   temperature),
-                dryweight = 1.0f - worldterrainsmoothstep(ctx.terrain.desertmoisture - moistureblend,
-                                                         ctx.terrain.desertmoisture + moistureblend,
-                                                         moisture),
-                forestweight = worldterrainsmoothstep(ctx.terrain.forestmoisture - moistureblend,
-                                                      ctx.terrain.forestmoisture + moistureblend,
-                                                      moisture);
-    if(snowweight > selector) return BIOME_SNOWY_MOUNTAIN;
-    if(hotweight * dryweight > selector) return BIOME_DESERT;
-    if(forestweight > selector) return BIOME_FOREST;
-    return BIOME_PLAINS;
+    const int x = chunkx * WORLD_CHUNK_BLOCKS + blockx,
+              y = chunky * WORLD_CHUNK_BLOCKS + blocky;
+    return ctx.generator.biome(x, y, height / WORLD_BLOCK_SIZE);
 }
 
-static bool generateworldrock(const worldgencontext &ctx, int chunkx, int chunky, int blockx, int blocky,
-                              int height)
+static bool generateworldrock(const worldgencontext &ctx, int chunkx, int chunky,
+                              int blockx, int blocky, int height)
 {
-    const float low = min(ctx.terrain.mountainstonelow, ctx.terrain.mountainstonehigh),
-                high = max(ctx.terrain.mountainstonelow, ctx.terrain.mountainstonehigh),
-                heightblocks = height / float(WORLD_BLOCK_SIZE);
-    if(heightblocks <= low) return false;
-    if(heightblocks >= high) return true;
-
-    const float noisex = float(chunkx) * WORLD_CHUNK_BLOCKS + blockx + 10000.5f,
-                noisey = float(chunky) * WORLD_CHUNK_BLOCKS + blocky - 10000.5f,
-                rockweight = worldterrainsmoothstep(low, high, heightblocks),
-                selector = clamp(ctx.rockiness.GetNoise(noisex, noisey) * 1.25f + 0.5f, 0.0f, 1.0f);
-    return rockweight > selector;
+    const int x = chunkx * WORLD_CHUNK_BLOCKS + blockx,
+              y = chunky * WORLD_CHUNK_BLOCKS + blocky;
+    return ctx.generator.rock(x, y, height / WORLD_BLOCK_SIZE);
 }
 
 static bool generateworldheightmap(worldgencontext &ctx, int chunkx, int chunky)
@@ -2780,11 +2505,7 @@ static bool generateworldheightmap(worldgencontext &ctx, int chunkx, int chunky)
             loop(x, WORLD_CHUNK_BLOCKS)
             {
                 const int index = y * WORLD_CHUNK_BLOCKS + x;
-                float mountainweight;
-                ctx.heightmap[index] = generateworldterrainheight(ctx, chunkx, chunky, x, y,
-                                                                  &mountainweight);
-                ctx.mountainmap[index] = uchar(clamp(int(floor(mountainweight * 255.0f + 0.5f)),
-                                                     0, 255));
+                ctx.heightmap[index] = generateworldheight(ctx, chunkx, chunky, x, y);
             }
         }
     }
@@ -2801,8 +2522,7 @@ static bool generateworldheightmap(worldgencontext &ctx, int chunkx, int chunky)
             {
                 const int index = y * WORLD_CHUNK_BLOCKS + x;
                 ctx.biomemap[index] = generateworldbiome(ctx, chunkx, chunky, x, y,
-                                                         ctx.heightmap[index],
-                                                         ctx.mountainmap[index] / 255.0f);
+                                                         ctx.heightmap[index]);
                 ctx.rockmap[index] = generateworldrock(ctx, chunkx, chunky, x, y, ctx.heightmap[index]);
             }
         }
@@ -2810,22 +2530,22 @@ static bool generateworldheightmap(worldgencontext &ctx, int chunkx, int chunky)
     return !ctx.iscanceled();
 }
 
-static int worldterrainheight(const worldgencontext &ctx, int localx, int localy)
+static int worldheight(const worldgencontext &ctx, int localx, int localy)
 {
     return ctx.heightmap[localy / WORLD_BLOCK_SIZE * WORLD_CHUNK_BLOCKS + localx / WORLD_BLOCK_SIZE];
 }
 
-static int worldterrainbiome(const worldgencontext &ctx, int localx, int localy)
+static int worldbiome(const worldgencontext &ctx, int localx, int localy)
 {
     return ctx.biomemap[localy / WORLD_BLOCK_SIZE * WORLD_CHUNK_BLOCKS + localx / WORLD_BLOCK_SIZE];
 }
 
-static bool worldterraincoast(const worldgencontext &ctx, int localx, int localy)
+static bool worldcoast(const worldgencontext &ctx, int localx, int localy)
 {
     return ctx.coastmap[localy / WORLD_BLOCK_SIZE * WORLD_CHUNK_BLOCKS + localx / WORLD_BLOCK_SIZE] != 0;
 }
 
-static bool worldterrainrock(const worldgencontext &ctx, int localx, int localy)
+static bool worldrock(const worldgencontext &ctx, int localx, int localy)
 {
     return ctx.rockmap[localy / WORLD_BLOCK_SIZE * WORLD_CHUNK_BLOCKS + localx / WORLD_BLOCK_SIZE] != 0;
 }
@@ -2834,13 +2554,13 @@ static int worldcolumncubetype(const worldgencontext &ctx, int z, int size, int 
                                int biome, bool coast, bool rock)
 {
     const int surface = WORLD_GROUND_HEIGHT + height,
-              watertop = WORLD_GROUND_HEIGHT + ctx.terrain.sealevel * WORLD_BLOCK_SIZE,
+              watertop = WORLD_GROUND_HEIGHT + ctx.settings.sealevel * WORLD_BLOCK_SIZE,
               dirtbottom = surface - WORLD_BLOCK_SIZE - WORLD_DIRT_DEPTH,
               grassbottom = surface - WORLD_BLOCK_SIZE,
-              beachmin = (ctx.terrain.sealevel
-                        + min(ctx.terrain.beachminheight, ctx.terrain.beachmaxheight)) * WORLD_BLOCK_SIZE,
-              beachmax = (ctx.terrain.sealevel
-                        + max(ctx.terrain.beachminheight, ctx.terrain.beachmaxheight)) * WORLD_BLOCK_SIZE;
+              beachmin = (ctx.settings.sealevel
+                        + min(ctx.settings.beachminheight, ctx.settings.beachmaxheight)) * WORLD_BLOCK_SIZE,
+              beachmax = (ctx.settings.sealevel
+                        + max(ctx.settings.beachminheight, ctx.settings.beachmaxheight)) * WORLD_BLOCK_SIZE;
     const bool beach = coast && height >= beachmin && height <= beachmax;
 
     if(z >= max(surface, watertop)) return WORLD_EMPTY;
@@ -2848,22 +2568,22 @@ static int worldcolumncubetype(const worldgencontext &ctx, int z, int size, int 
     if(z + size <= dirtbottom) return WORLD_STONE;
     if(rock)
     {
-        if(biome == BIOME_SNOWY_MOUNTAIN && z >= grassbottom && z + size <= surface) return WORLD_SNOW;
+        if(biome == game::WORLD_BIOME_SNOW && z >= grassbottom && z + size <= surface) return WORLD_SNOW;
         if(z >= dirtbottom && z + size <= surface) return WORLD_STONE;
         return WORLD_MIXED;
     }
-    if(beach || biome == BIOME_DESERT)
+    if(beach || biome == game::WORLD_BIOME_DESERT)
     {
         if(z >= dirtbottom && z + size <= surface) return WORLD_SAND;
         return WORLD_MIXED;
     }
-    if(biome == BIOME_OCEAN)
+    if(biome == game::WORLD_BIOME_OCEAN)
     {
         if(z >= dirtbottom && z + size <= surface) return WORLD_DIRT;
         return WORLD_MIXED;
     }
     if(z >= dirtbottom && z + size <= grassbottom) return WORLD_DIRT;
-    if(biome == BIOME_SNOWY_MOUNTAIN && z >= grassbottom && z + size <= surface) return WORLD_SNOW;
+    if(biome == game::WORLD_BIOME_SNOW && z >= grassbottom && z + size <= surface) return WORLD_SNOW;
     if(z >= grassbottom && z + size <= surface) return WORLD_GRASS;
     return WORLD_MIXED;
 }
@@ -2879,9 +2599,9 @@ static int worldcubetype(const worldgencontext &ctx, const ivec &o, int size)
     for(int y = o.y; y < o.y + size; y += WORLD_BLOCK_SIZE)
     for(int x = o.x; x < o.x + size; x += WORLD_BLOCK_SIZE)
     {
-        int columntype = worldcolumncubetype(ctx, o.z, size, worldterrainheight(ctx, x, y),
-                                            worldterrainbiome(ctx, x, y), worldterraincoast(ctx, x, y),
-                                            worldterrainrock(ctx, x, y));
+        int columntype = worldcolumncubetype(ctx, o.z, size, worldheight(ctx, x, y),
+                                            worldbiome(ctx, x, y), worldcoast(ctx, x, y),
+                                            worldrock(ctx, x, y));
         if(columntype == WORLD_MIXED || (type >= 0 && type != columntype)) return WORLD_MIXED;
         type = columntype;
     }
@@ -2892,10 +2612,10 @@ static int worldrepresentativecubetype(const worldgencontext &ctx, const ivec &o
 {
     const int x = clamp(o.x + size / 2, 0, WORLD_CHUNK_SIZE - 1),
               y = clamp(o.y + size / 2, 0, WORLD_CHUNK_SIZE - 1),
-              height = worldterrainheight(ctx, x, y),
-              biome = worldterrainbiome(ctx, x, y),
+              height = worldheight(ctx, x, y),
+              biome = worldbiome(ctx, x, y),
               surface = WORLD_GROUND_HEIGHT + height,
-              watertop = WORLD_GROUND_HEIGHT + ctx.terrain.sealevel * WORLD_BLOCK_SIZE,
+              watertop = WORLD_GROUND_HEIGHT + ctx.settings.sealevel * WORLD_BLOCK_SIZE,
               visibletop = max(surface, watertop);
     int z = clamp(o.z + size / 2, 0, WORLD_MAP_SIZE - 1);
 
@@ -2907,8 +2627,8 @@ static int worldrepresentativecubetype(const worldgencontext &ctx, const ivec &o
     if(visibletop > o.z && visibletop <= o.z + size)
         z = clamp(visibletop - 1, 0, WORLD_MAP_SIZE - 1);
 
-    return worldcolumncubetype(ctx, z, 1, height, biome, worldterraincoast(ctx, x, y),
-                               worldterrainrock(ctx, x, y));
+    return worldcolumncubetype(ctx, z, 1, height, biome, worldcoast(ctx, x, y),
+                               worldrock(ctx, x, y));
 }
 
 static bool generateworldcube(worldgencontext &ctx, cube &c, const ivec &o, int size, int mingridsize)
@@ -3097,26 +2817,26 @@ static long long worldfloordiv(long long value, int divisor)
 static bool generateworldcaveentrance(const worldgencontext &ctx, int chunkx, int chunky,
                                       int blockx, int blocky, int height)
 {
-    const int mindepth = min(ctx.terrain.cavemindepth, ctx.terrain.cavefulldepth),
+    const int mindepth = min(ctx.settings.cavemindepth, ctx.settings.cavefulldepth),
               logicalz = height / WORLD_BLOCK_SIZE - 1;
-    const float tunnelweight = worldterrainsmoothstep(1.0f, float(mindepth), 1.0f),
-                veinwidth = ctx.terrain.caveentrancewidth
-                          + (ctx.terrain.tunnelwidth - ctx.terrain.caveentrancewidth)
+    const float tunnelweight = worldsmoothstep(1.0f, float(mindepth), 1.0f),
+                veinwidth = ctx.settings.caveentrancewidth
+                          + (ctx.settings.tunnelwidth - ctx.settings.caveentrancewidth)
                           * tunnelweight,
                 noisex = float(chunkx) * WORLD_CHUNK_BLOCKS + blockx + 17500.5f,
                 noisey = float(chunky) * WORLD_CHUNK_BLOCKS + blocky - 17500.5f,
                 noisez = logicalz + 3500.5f;
-    return fabs(ctx.tunnela.GetNoise(noisex, noisey, noisez)) < veinwidth &&
-           fabs(ctx.tunnelb.GetNoise(noisex, noisey, noisez)) < veinwidth;
+    return fabs(ctx.generator.tunnela.GetNoise(noisex, noisey, noisez)) < veinwidth &&
+           fabs(ctx.generator.tunnelb.GetNoise(noisex, noisey, noisez)) < veinwidth;
 }
 
 static bool generateworldcheesecaves(worldgencontext &ctx, uchar *carvemap, int chunkx, int chunky)
 {
-    const int bottomlayers = clamp(ctx.terrain.bottomlavalayers, 0, int(WORLD_HEIGHT_BLOCKS)),
+    const int bottomlayers = clamp(ctx.settings.bottomlavalayers, 0, int(WORLD_HEIGHT_BLOCKS)),
               minheight = WORLD_MIN_HEIGHT + bottomlayers,
-              mindepth = min(ctx.terrain.cavemindepth, ctx.terrain.cavefulldepth),
-              fulldepth = max(ctx.terrain.cavemindepth, ctx.terrain.cavefulldepth);
-    const float deepdenominator = max(float(ctx.terrain.cavedeepheight - minheight), 1.0f);
+              mindepth = min(ctx.settings.cavemindepth, ctx.settings.cavefulldepth),
+              fulldepth = max(ctx.settings.cavemindepth, ctx.settings.cavefulldepth);
+    const float deepdenominator = max(float(ctx.settings.cavedeepheight - minheight), 1.0f);
 
     loop(y, WORLD_CHUNK_BLOCKS)
     {
@@ -3128,27 +2848,27 @@ static bool generateworldcheesecaves(worldgencontext &ctx, uchar *carvemap, int 
             for(int logicalz = minheight; logicalz <= caveceiling; ++logicalz)
             {
                 const float depth = float(surfaceheight - logicalz),
-                            depthweight = worldterrainsmoothstep(float(mindepth), float(fulldepth), depth),
-                            tunnelweight = worldterrainsmoothstep(1.0f, float(mindepth), depth),
-                            veinwidth = ctx.terrain.caveentrancewidth
-                                      + (ctx.terrain.tunnelwidth - ctx.terrain.caveentrancewidth)
+                            depthweight = worldsmoothstep(float(mindepth), float(fulldepth), depth),
+                            tunnelweight = worldsmoothstep(1.0f, float(mindepth), depth),
+                            veinwidth = ctx.settings.caveentrancewidth
+                                      + (ctx.settings.tunnelwidth - ctx.settings.caveentrancewidth)
                                       * tunnelweight,
                             surfacepenalty = (1.0f - depthweight) * 0.35f,
-                            deepweight = clamp((ctx.terrain.cavedeepheight - logicalz) / deepdenominator,
+                            deepweight = clamp((ctx.settings.cavedeepheight - logicalz) / deepdenominator,
                                                0.0f, 1.0f),
-                            largecavethreshold = ctx.terrain.largecavethreshold
-                                               + (ctx.terrain.largecavedeepthreshold
-                                                - ctx.terrain.largecavethreshold) * deepweight
+                            largecavethreshold = ctx.settings.largecavethreshold
+                                               + (ctx.settings.largecavedeepthreshold
+                                                - ctx.settings.largecavethreshold) * deepweight
                                                + surfacepenalty;
                 const float noisex = float(chunkx) * WORLD_CHUNK_BLOCKS + x + 17500.5f,
                             noisey = float(chunky) * WORLD_CHUNK_BLOCKS + y - 17500.5f,
                             noisez = logicalz + 3500.5f;
-                bool carve = fabs(ctx.tunnela.GetNoise(noisex, noisey, noisez)) < veinwidth &&
-                             fabs(ctx.tunnelb.GetNoise(noisex, noisey, noisez)) < veinwidth;
+                bool carve = fabs(ctx.generator.tunnela.GetNoise(noisex, noisey, noisez)) < veinwidth &&
+                             fabs(ctx.generator.tunnelb.GetNoise(noisex, noisey, noisez)) < veinwidth;
                 if(!carve && depth >= mindepth)
-                    carve = ctx.caves.GetNoise(noisex, noisey, noisez)
-                                > ctx.terrain.cavethreshold + surfacepenalty ||
-                            ctx.largecaves.GetNoise(noisex, noisey, noisez)
+                    carve = ctx.generator.caves.GetNoise(noisex, noisey, noisez)
+                                > ctx.settings.cavethreshold + surfacepenalty ||
+                            ctx.generator.largecaves.GetNoise(noisex, noisey, noisez)
                                 > largecavethreshold;
                 if(carve)
                     carvemap[worldcarveindex(x, y, logicalz - WORLD_MIN_HEIGHT)] = WORLD_CARVE_AIR;
@@ -3160,14 +2880,14 @@ static bool generateworldcheesecaves(worldgencontext &ctx, uchar *carvemap, int 
 
 static bool generateworldlavalakes(worldgencontext &ctx, uchar *carvemap, int chunkx, int chunky)
 {
-    const int spacing = max(ctx.terrain.lavalakespacing, 1),
+    const int spacing = max(ctx.settings.lavalakespacing, 1),
               verticalspacing = max(spacing / 2, 8),
-              minradius = min(ctx.terrain.lavalakeminsize, ctx.terrain.lavalakemaxsize),
-              maxradius = max(ctx.terrain.lavalakeminsize, ctx.terrain.lavalakemaxsize),
-              bottomlayers = clamp(ctx.terrain.bottomlavalayers, 0, int(WORLD_HEIGHT_BLOCKS)),
+              minradius = min(ctx.settings.lavalakeminsize, ctx.settings.lavalakemaxsize),
+              maxradius = max(ctx.settings.lavalakeminsize, ctx.settings.lavalakemaxsize),
+              bottomlayers = clamp(ctx.settings.bottomlavalayers, 0, int(WORLD_HEIGHT_BLOCKS)),
               minimumheight = WORLD_MIN_HEIGHT + bottomlayers,
-              startheight = max(ctx.terrain.lavalakestartheight, ctx.terrain.lavalakedeepheight),
-              deepheight = min(ctx.terrain.lavalakestartheight, ctx.terrain.lavalakedeepheight);
+              startheight = max(ctx.settings.lavalakestartheight, ctx.settings.lavalakedeepheight),
+              deepheight = min(ctx.settings.lavalakestartheight, ctx.settings.lavalakedeepheight);
     const long long chunkstartx = (long long)chunkx * WORLD_CHUNK_BLOCKS,
                     chunkstarty = (long long)chunky * WORLD_CHUNK_BLOCKS,
                     mincellx = worldfloordiv(chunkstartx - maxradius, spacing),
@@ -3199,9 +2919,9 @@ static bool generateworldlavalakes(worldgencontext &ctx, uchar *carvemap, int ch
                                ? clamp((deepheight - centerz) / float(deepheight - minimumheight),
                                        0.0f, 1.0f)
                                : centerz <= deepheight ? 1.0f : 0.0f,
-                    lakechance = ctx.terrain.lavalakeshallowchance * approachweight
-                               + (ctx.terrain.lavalakedeepchance
-                                - ctx.terrain.lavalakeshallowchance) * deepweight;
+                    lakechance = ctx.settings.lavalakeshallowchance * approachweight
+                               + (ctx.settings.lavalakedeepchance
+                                - ctx.settings.lavalakeshallowchance) * deepweight;
         if(worldtreeunit(chancehash) >= clamp(lakechance, 0.0f, 1.0f)) continue;
 
         const int depthmaxradius = clamp(int(floor(minradius
@@ -3222,7 +2942,7 @@ static bool generateworldlavalakes(worldgencontext &ctx, uchar *carvemap, int ch
                     lobecentery = sinf(lobeangle) * lobedistance,
                     loberadius = max(radius * 0.62f, 1.0f),
                     lobeminorradius = max(minorradius * 0.7f, 1.0f),
-                    shapevariation = clamp(ctx.terrain.lavalakeshapevariation, 0.0f, 0.75f);
+                    shapevariation = clamp(ctx.settings.lavalakeshapevariation, 0.0f, 0.75f);
         const int centerlocalx = int(centerx - chunkstartx),
                   centerlocaly = int(centery - chunkstarty);
         if(centerlocalx + radius < 0 || centerlocalx - radius >= WORLD_CHUNK_BLOCKS ||
@@ -3230,9 +2950,9 @@ static bool generateworldlavalakes(worldgencontext &ctx, uchar *carvemap, int ch
 
         const int centerblockx = int(centerx - (long long)chunkx * WORLD_CHUNK_BLOCKS),
                   centerblocky = int(centery - (long long)chunky * WORLD_CHUNK_BLOCKS),
-                  centerheight = generateworldterrainheight(ctx, chunkx, chunky,
+                  centerheight = generateworldheight(ctx, chunkx, chunky,
                                                            centerblockx, centerblocky) / WORLD_BLOCK_SIZE;
-        if(centerz + verticalradius > centerheight - ctx.terrain.cavemindepth) continue;
+        if(centerz + verticalradius > centerheight - ctx.settings.cavemindepth) continue;
 
         const int xmin = max(centerlocalx - radius, 0),
                   xmax = min(centerlocalx + radius, WORLD_CHUNK_BLOCKS - 1),
@@ -3253,7 +2973,7 @@ static bool generateworldlavalakes(worldgencontext &ctx, uchar *carvemap, int ch
                         lobe = lobex * lobex / (loberadius * loberadius)
                              + lobey * lobey / (lobeminorradius * lobeminorradius),
                         horizontal = min(primary, lobe),
-                        shapenoise = ctx.lakeshape.GetNoise(float(chunkx) * WORLD_CHUNK_BLOCKS + x + 9200.5f,
+                        shapenoise = ctx.generator.lakeshape.GetNoise(float(chunkx) * WORLD_CHUNK_BLOCKS + x + 9200.5f,
                                                            float(chunky) * WORLD_CHUNK_BLOCKS + y - 9200.5f),
                         boundary = 1.0f - shapevariation * 0.5f
                                  + shapenoise * shapevariation * 0.5f;
@@ -3262,7 +2982,7 @@ static bool generateworldlavalakes(worldgencontext &ctx, uchar *carvemap, int ch
             const int surfaceheight = ctx.heightmap[y * WORLD_CHUNK_BLOCKS + x] / WORLD_BLOCK_SIZE;
             for(int logicalz = zmin; logicalz <= zmax; ++logicalz)
             {
-                if(surfaceheight - logicalz < ctx.terrain.cavemindepth) continue;
+                if(surfaceheight - logicalz < ctx.settings.cavemindepth) continue;
                 const float dz = (logicalz - centerz) / float(verticalradius);
                 if(horizontal + dz * dz > boundary) continue;
 
@@ -3297,7 +3017,7 @@ static bool placeworldcaves(worldgencontext &ctx, cube *root, int chunkx, int ch
 
     {
         ZoneScopedN("Chunks/Apply cave map");
-        const int bottomlayers = clamp(ctx.terrain.bottomlavalayers, 0, int(WORLD_HEIGHT_BLOCKS));
+        const int bottomlayers = clamp(ctx.settings.bottomlavalayers, 0, int(WORLD_HEIGHT_BLOCKS));
         loop(z, bottomlayers) loop(y, WORLD_CHUNK_BLOCKS) loop(x, WORLD_CHUNK_BLOCKS)
             carve[worldcarveindex(x, y, z)] = WORLD_CARVE_LAVA;
 
@@ -3323,10 +3043,10 @@ static bool placeworldtrees(worldgencontext &ctx, cube *root, int chunkx, int ch
 {
     vector<ivec> wood, leaves;
     const int halo = 3,
-              beachmin = (ctx.terrain.sealevel
-                        + min(ctx.terrain.beachminheight, ctx.terrain.beachmaxheight)) * WORLD_BLOCK_SIZE,
-              beachmax = (ctx.terrain.sealevel
-                        + max(ctx.terrain.beachminheight, ctx.terrain.beachmaxheight)) * WORLD_BLOCK_SIZE;
+              beachmin = (ctx.settings.sealevel
+                        + min(ctx.settings.beachminheight, ctx.settings.beachmaxheight)) * WORLD_BLOCK_SIZE,
+              beachmax = (ctx.settings.sealevel
+                        + max(ctx.settings.beachminheight, ctx.settings.beachmaxheight)) * WORLD_BLOCK_SIZE;
 
     {
         ZoneScopedN("Chunks/Select tree blocks");
@@ -3337,29 +3057,26 @@ static bool placeworldtrees(worldgencontext &ctx, cube *root, int chunkx, int ch
             const bool inside = x >= 0 && x < WORLD_CHUNK_BLOCKS &&
                                 y >= 0 && y < WORLD_CHUNK_BLOCKS;
             const int index = inside ? y * WORLD_CHUNK_BLOCKS + x : 0;
-            float mountainweight = inside ? ctx.mountainmap[index] / 255.0f : 0.0f;
             const int height = inside ? ctx.heightmap[index]
-                                      : generateworldterrainheight(ctx, chunkx, chunky, x, y,
-                                                                   &mountainweight),
+                                      : generateworldheight(ctx, chunkx, chunky, x, y),
                       biome = inside ? ctx.biomemap[index]
-                                     : generateworldbiome(ctx, chunkx, chunky, x, y, height,
-                                                          mountainweight);
-            if(biome != BIOME_FOREST && biome != BIOME_PLAINS) continue;
+                                     : generateworldbiome(ctx, chunkx, chunky, x, y, height);
+            if(biome != game::WORLD_BIOME_FOREST && biome != game::WORLD_BIOME_PLAINS) continue;
             if(inside ? ctx.rockmap[index] != 0
                       : generateworldrock(ctx, chunkx, chunky, x, y, height)) continue;
-            if(ctx.terrain.coastwidth > 0 && height >= beachmin && height <= beachmax) continue;
+            if(ctx.settings.coastwidth > 0 && height >= beachmin && height <= beachmax) continue;
             if(generateworldcaveentrance(ctx, chunkx, chunky, x, y, height)) continue;
 
-            const float density = biome == BIOME_FOREST
-                                ? ctx.terrain.foresttreedensity
-                                : ctx.terrain.plainstreedensity;
+            const float density = biome == game::WORLD_BIOME_FOREST
+                                ? ctx.settings.foresttreedensity
+                                : ctx.settings.plainstreedensity;
             const uint spawn = hashworldtree(uint(ctx.seed), chunkx, chunky, x, y, 0xD1B54A35U);
             if(worldtreeunit(spawn) >= density) continue;
 
             const float heightblocks = height / float(WORLD_BLOCK_SIZE),
-                        pinelow = float(min(ctx.terrain.pinestartheight, ctx.terrain.pinefullheight)),
-                        pinehigh = float(max(ctx.terrain.pinestartheight, ctx.terrain.pinefullheight)),
-                        pinechance = worldterrainsmoothstep(pinelow, pinehigh, heightblocks);
+                        pinelow = float(min(ctx.settings.pinestartheight, ctx.settings.pinefullheight)),
+                        pinehigh = float(max(ctx.settings.pinestartheight, ctx.settings.pinefullheight)),
+                        pinechance = worldsmoothstep(pinelow, pinehigh, heightblocks);
             const uint shape = hashworldtree(uint(ctx.seed), chunkx, chunky, x, y, 0x94D049BBU);
             const bool pine = worldtreeunit(shape) < pinechance;
             const int treeheight = pine ? 6 + int((shape >> 24) & 3U)
@@ -3451,11 +3168,11 @@ static cube *generateworldchunk(int chunkx, int chunky)
 {
     ZoneScopedN("Chunks/Generate synchronous");
     ZoneTextF("%d_%d", chunkx, chunky);
-    const terrainsettings terrain;
-    worldgencontext ctx(activeworldseed, worldgrasstexture, worldgrasssidetexture,
+    const game::worldsettings settings;
+    worldgencontext ctx(game::getworldseed(), worldgrasstexture, worldgrasssidetexture,
                         worldgrassbottomtexture,
                         worlddirttexture, worldstonetexture, worldsandtexture, worldsnowtexture,
-                        worldwoodtexture, worldleaftexture, false, chunkremip != 0, terrain);
+                        worldwoodtexture, worldleaftexture, false, chunkremip != 0, settings);
     return generateworldchunk(chunkx, chunky, ctx);
 }
 
@@ -3872,7 +3589,7 @@ static cube *prepareworldchunk(worldchunkjob &job)
                             job.grassbottomtexture,
                             job.dirttexture, job.stonetexture, job.sandtexture, job.snowtexture,
                             job.woodtexture, job.leaftexture, true, job.remip,
-                            job.terrain, &job.cancelled);
+                            job.settings, &job.cancelled);
         cube *root = generateworldchunk(job.x, job.y, ctx);
         job.families = ctx.families;
         job.optimized = ctx.optimized;
@@ -3978,102 +3695,14 @@ static bool saveworldconfig()
         "worldchunksize = %d\n"
         "worldgridpower = %d\n"
         "worldblocksize = %d\n"
-        "worldloadseed %d\n"
         "worldminheight = %d\n"
         "worldmaxheight = %d\n"
         "worldinfinite = 1\n\n"
-        "terrainload\n\n"
-        "terraincontinentfreq %.9g\n"
-        "terrainmountainfreq %.9g\n"
-        "terrainmountainpeakfreq %.9g\n"
-        "terrainmountaindetailfreq %.9g\n"
-        "terrainerosionfreq %.9g\n"
-        "terrainhillfreq %.9g\n"
-        "terraindetailfreq %.9g\n"
-        "terraincontinentwarpfreq %.9g\n"
-        "terraincontinentwarpamp %.9g\n"
-        "terrainfeaturewarpfreq %.9g\n"
-        "terrainfeaturewarpamp %.9g\n"
-        "terraintemperaturefreq %.9g\n"
-        "terrainmoisturefreq %.9g\n"
-        "terrainweirdnessfreq %.9g\n"
-        "terrainweirdnessstrength %.9g\n"
-        "terrainmountainstonefreq %.9g\n"
-        "terrainmountainmoistureboost %.9g\n"
-        "terrainsealevel %d\n"
-        "terrainsnowheight %d\n"
-        "terrainmountainstonelow %d\n"
-        "terrainmountainstonehigh %d\n"
-        "terrainbiomeblend %d\n"
-        "terraincoastwidth %d\n"
-        "terraincoastvariation %d\n"
-        "terrainbeachminheight %d\n"
-        "terrainbeachmaxheight %d\n"
-        "terraincontinentheight %.9g\n"
-        "terrainhillheight %.9g\n"
-        "terrainmountainheight %.9g\n"
-        "terrainmountainpeakstrength %.9g\n"
-        "terrainmountaindetailheight %.9g\n"
-        "terrainerosionheight %.9g\n"
-        "terraindetailheight %.9g\n"
-        "terrainlandmasklow %.9g\n"
-        "terrainlandmaskhigh %.9g\n"
-        "terrainmountainmasklow %.9g\n"
-        "terrainmountainmaskhigh %.9g\n"
-        "terraindeserttemperature %.9g\n"
-        "terraindesertmoisture %.9g\n"
-        "terrainforestmoisture %.9g\n"
-        "terrainforesttreedensity %.9g\n"
-        "terrainplainstreedensity %.9g\n"
-        "terrainpinestartheight %d\n"
-        "terrainpinefullheight %d\n"
-        "terraincavefreq %.9g\n"
-        "terraincavethreshold %.9g\n"
-        "terrainlargecavefreq %.9g\n"
-        "terrainlargecavethreshold %.9g\n"
-        "terrainlargecavedeepthreshold %.9g\n"
-        "terraintunnelfreq %.9g\n"
-        "terraintunnelwidth %.9g\n"
-        "terraincaveentrancewidth %.9g\n"
-        "terraincavemindepth %d\n"
-        "terraincavefulldepth %d\n"
-        "terraincavedeepheight %d\n"
-        "terrainbottomlavalayers %d\n"
-        "terrainlavalakestartheight %d\n"
-        "terrainlavalakedeepheight %d\n"
-        "terrainlavalakeshallowchance %.9g\n"
-        "terrainlavalakedeepchance %.9g\n"
-        "terrainlavalakeminsize %d\n"
-        "terrainlavalakemaxsize %d\n"
-        "terrainlavalakespacing %d\n"
-        "terrainlavalakeshapefreq %.9g\n"
-        "terrainlavalakeshapevariation %.9g\n",
-        WORLD_GROUND_HEIGHT, WORLD_CHUNK_BLOCKS, WORLD_GRID_POWER, WORLD_BLOCK_SIZE, activeworldseed,
-        WORLD_MIN_HEIGHT, WORLD_MAX_HEIGHT,
-        terraincontinentfreq, terrainmountainfreq, terrainmountainpeakfreq, terrainmountaindetailfreq,
-        terrainerosionfreq, terrainhillfreq, terraindetailfreq,
-        terraincontinentwarpfreq, terraincontinentwarpamp, terrainfeaturewarpfreq, terrainfeaturewarpamp,
-        terraintemperaturefreq, terrainmoisturefreq, terrainweirdnessfreq, terrainweirdnessstrength,
-        terrainmountainstonefreq, terrainmountainmoistureboost, terrainsealevel, terrainsnowheight,
-        terrainmountainstonelow, terrainmountainstonehigh,
-        terrainbiomeblend, terraincoastwidth, terraincoastvariation,
-        terrainbeachminheight, terrainbeachmaxheight,
-        terraincontinentheight, terrainhillheight, terrainmountainheight,
-        terrainmountainpeakstrength, terrainmountaindetailheight,
-        terrainerosionheight, terraindetailheight, terrainlandmasklow, terrainlandmaskhigh,
-        terrainmountainmasklow, terrainmountainmaskhigh, terraindeserttemperature,
-        terraindesertmoisture, terrainforestmoisture,
-        terrainforesttreedensity, terrainplainstreedensity,
-        terrainpinestartheight, terrainpinefullheight,
-        terraincavefreq, terraincavethreshold, terrainlargecavefreq,
-        terrainlargecavethreshold, terrainlargecavedeepthreshold,
-        terraintunnelfreq, terraintunnelwidth, terraincaveentrancewidth,
-        terraincavemindepth, terraincavefulldepth, terraincavedeepheight,
-        terrainbottomlavalayers, terrainlavalakestartheight, terrainlavalakedeepheight,
-        terrainlavalakeshallowchance, terrainlavalakedeepchance,
-        terrainlavalakeminsize, terrainlavalakemaxsize, terrainlavalakespacing,
-        terrainlavalakeshapefreq, terrainlavalakeshapevariation
+        "worldload\n\n",
+        WORLD_GROUND_HEIGHT, WORLD_CHUNK_BLOCKS, WORLD_GRID_POWER, WORLD_BLOCK_SIZE,
+        WORLD_MIN_HEIGHT, WORLD_MAX_HEIGHT
     );
+    game::saveworldsettings(f);
     delete f;
 
     loopv(worldchunks) if((!worldchunks[i].saved || worldchunks[i].dirty) &&
@@ -4170,8 +3799,8 @@ static void createworld(const char *requestedname)
     if(!emptymap(WORLD_RUNTIME_SCALE, true, activechunkname)) return;
     copystring(worldfolder, chosenfolder);
     worldfirstchunkx = worldfirstchunky = -WORLD_RUNTIME_CENTER;
-    if(!loadterrain()) return;
-    loadworldseed(worldseed);
+    if(!loadworlddefinitions()) return;
+    game::activateworldseed();
 
     freeocta(worldroot);
     worldroot = NULL;

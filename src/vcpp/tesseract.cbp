@@ -215,6 +215,8 @@
 			<Option weight="0" />
 		</Unit>
 		<Unit filename="../game/server.cpp" />
+		<Unit filename="../game/world.cpp" />
+		<Unit filename="../game/world.h" />
 		<Unit filename="../include/tracy/public/TracyClient.cpp">
 			<Option target="profile64" />
 		</Unit>

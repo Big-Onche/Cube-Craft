@@ -37,6 +37,9 @@
     <ClCompile Include="..\game\game.cpp">
       <Filter>game</Filter>
     </ClCompile>
+    <ClCompile Include="..\game\world.cpp">
+      <Filter>game</Filter>
+    </ClCompile>
     <ClCompile Include="..\shared\geom.cpp">
       <Filter>shared</Filter>
     </ClCompile>
@@ -175,6 +178,9 @@
       <Filter>engine</Filter>
     </ClInclude>
     <ClInclude Include="..\game\game.h">
+      <Filter>game</Filter>
+    </ClInclude>
+    <ClInclude Include="..\game\world.h">
       <Filter>game</Filter>
     </ClInclude>
     <ClInclude Include="..\shared\geom.h">

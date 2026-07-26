@@ -435,6 +435,7 @@
     <ClInclude Include="..\shared\igame.h" />
     <ClInclude Include="..\shared\tools.h" />
     <ClInclude Include="..\game\game.h" />
+    <ClInclude Include="..\game\world.h" />
   </ItemGroup>
   <ItemGroup>
     <ClCompile Include="..\include\tracy\public\TracyClient.cpp">
@@ -1081,6 +1082,10 @@
       <PrecompiledHeaderOutputFile Condition="'$(Configuration)|$(Platform)'=='Release|x64'">$(IntDir)game.pch</PrecompiledHeaderOutputFile>
       <ObjectFileName Condition="'$(Configuration)|$(Platform)'=='Release|Win32'">$(IntDir)%(Filename)1.obj</ObjectFileName>
       <ObjectFileName Condition="'$(Configuration)|$(Platform)'=='Release|x64'">$(IntDir)%(Filename)1.obj</ObjectFileName>
+    </ClCompile>
+    <ClCompile Include="..\game\world.cpp">
+      <PrecompiledHeaderFile>game.h</PrecompiledHeaderFile>
+      <ObjectFileName>$(IntDir)game_world.obj</ObjectFileName>
     </ClCompile>
   </ItemGroup>
   <ItemGroup>

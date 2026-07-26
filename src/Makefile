@@ -116,7 +116,8 @@ CLIENT_OBJS= \
 	game/client.o \
 	game/entities.o \
 	game/game.o \
-	game/server.o
+	game/server.o \
+	game/world.o
 
 ifeq ($(TRACY),1)
 CLIENT_OBJS+= include/tracy/public/TracyClient.o
@@ -452,6 +453,7 @@ engine/worldio.o: shared/ents.h shared/command.h shared/glexts.h
 engine/worldio.o: shared/glemu.h shared/iengine.h shared/igame.h
 engine/worldio.o: engine/world.h engine/octa.h engine/light.h
 engine/worldio.o: engine/texture.h engine/bih.h engine/model.h
+engine/worldio.o: game/world.h include/FastNoiseLite.h
 game/client.o: game/game.h shared/cube.h shared/tools.h shared/geom.h
 game/client.o: shared/ents.h shared/command.h shared/glexts.h shared/glemu.h
 game/client.o: shared/iengine.h shared/igame.h
@@ -464,6 +466,9 @@ game/game.o: shared/iengine.h shared/igame.h
 game/server.o: game/game.h shared/cube.h shared/tools.h shared/geom.h
 game/server.o: shared/ents.h shared/command.h shared/glexts.h shared/glemu.h
 game/server.o: shared/iengine.h shared/igame.h
+game/world.o: game/game.h game/world.h shared/cube.h shared/tools.h shared/geom.h
+game/world.o: shared/ents.h shared/command.h shared/glexts.h shared/glemu.h
+game/world.o: shared/iengine.h shared/igame.h include/FastNoiseLite.h
 
 shared/cube.h.gch: shared/tools.h shared/geom.h shared/ents.h
 shared/cube.h.gch: shared/command.h shared/glexts.h shared/glemu.h
