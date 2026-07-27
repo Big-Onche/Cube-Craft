@@ -555,7 +555,11 @@ namespace game
         }
 #endif
         findplayerspawn(player1, -1, 0);
-        if(player1) player1->renderbodyyawmillis = -1;
+        if(player1)
+        {
+            player1->renderbodyyawmillis = -1;
+            player1->rendercrouchmillis = -1;
+        }
     }
     void preload()
     {
@@ -825,6 +829,7 @@ namespace game
 
         // Extended velocity, falling data, and gameclip.
         uint flags = 0;
+        if(d->crouching) flags |= 1<<0;
         if(vel > 0xFF) flags |= 1<<3;
         if(fall > 0)
         {
@@ -972,6 +977,7 @@ namespace game
                 d->roll = roll;
                 d->move = (physstate>>4)&2 ? -1 : (physstate>>4)&1;
                 d->strafe = (physstate>>6)&2 ? -1 : (physstate>>6)&1;
+                d->crouching = flags&(1<<0) ? -1 : 0;
                 d->o = pos;
                 d->o.z += d->eyeheight;
                 d->vel = vel;

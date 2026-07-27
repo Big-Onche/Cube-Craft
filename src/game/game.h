@@ -85,13 +85,14 @@ struct gameent : dynent
     int clientnum, privilege, ping, lastupdate, plag;
     editinfo *edit;
     float deltayaw, deltapitch, deltaroll, newyaw, newpitch, newroll;
-    float renderbodyyaw;
-    int smoothmillis, renderbodyyawmillis;
+    float renderbodyyaw, rendercrouch;
+    int smoothmillis, renderbodyyawmillis, rendercrouchmillis;
     string name;
 
     gameent() : clientnum(-1), privilege(0), ping(0), lastupdate(0), plag(0), edit(NULL),
                 deltayaw(0), deltapitch(0), deltaroll(0), newyaw(0), newpitch(0), newroll(0),
-                renderbodyyaw(0), smoothmillis(-1), renderbodyyawmillis(-1)
+                renderbodyyaw(0), rendercrouch(0), smoothmillis(-1), renderbodyyawmillis(-1),
+                rendercrouchmillis(-1)
     {
         type = ENT_PLAYER;
         state = editstate = CS_ALIVE;

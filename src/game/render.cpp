@@ -28,6 +28,9 @@ namespace game
     static const float HIP_HEIGHT = 11.25f, SHOULDER_HEIGHT = 22.5f;
     static const float RUN_CYCLE_SPEED = 9.0f, LEG_SWING = 32.0f, ARM_SWING = 28.0f;
     static const float IDLE_HEAD_YAW = 65.0f, IDLE_BODY_TURN_SPEED = 180.0f;
+    static const float CROUCH_HIP_DROP = 2.0f, CROUCH_HEAD_DROP = 0.75f;
+    static const float CROUCH_TORSO_PITCH = -35.0f, CROUCH_ARM_PITCH = -15.0f,
+                       CROUCH_LEG_PITCH = 35.0f;
 
     void preloadplayermodels()
     {
@@ -47,6 +50,37 @@ namespace game
         // Start the pose as soon as input begins, before physics has accelerated.
         if(d->move || d->strafe) amount = max(amount, 0.25f);
         return amount;
+    }
+
+    static float physicalcrouchamount(const gameent *d)
+    {
+        float range = d->maxheight * (1.0f - CROUCHHEIGHT);
+        return range > 0 ? clamp((d->maxheight - d->eyeheight) / range, 0.0f, 1.0f) : 0.0f;
+    }
+
+    static float updatecrouch(gameent *d, bool local)
+    {
+        if(local)
+        {
+            d->rendercrouch = physicalcrouchamount(d);
+            d->rendercrouchmillis = lastmillis;
+            return d->rendercrouch;
+        }
+
+        float target = d->crouching ? 1.0f : 0.0f;
+        if(d->rendercrouchmillis < 0 || lastmillis < d->rendercrouchmillis)
+        {
+            d->rendercrouch = target;
+            d->rendercrouchmillis = lastmillis;
+            return d->rendercrouch;
+        }
+
+        int elapsed = min(lastmillis - d->rendercrouchmillis, 100);
+        d->rendercrouchmillis = lastmillis;
+        float step = elapsed / float(CROUCHTIME);
+        if(d->rendercrouch < target) d->rendercrouch = min(d->rendercrouch + step, target);
+        else if(d->rendercrouch > target) d->rendercrouch = max(d->rendercrouch - step, target);
+        return d->rendercrouch;
     }
 
     static float yawoffset(float yaw, float reference)
@@ -108,23 +142,30 @@ namespace game
         if(local && !isthirdperson()) flags |= MDL_ONLYSHADOW;
 
         float movement = movementamount(d);
+        float crouch = updatecrouch(d, local);
         float phase = lastmillis * (RUN_CYCLE_SPEED / 1000.0f) + max(d->clientnum, 0) * 1.37f;
-        float stride = sinf(phase) * movement;
-        float bob = fabsf(cosf(phase)) * 0.45f * movement;
+        float stride = sinf(phase) * movement * (1.0f - 0.55f * crouch);
+        float bob = fabsf(cosf(phase)) * 0.45f * movement * (1.0f - 0.65f * crouch);
         float bodyyaw = updatebodyyaw(d, movement);
         float headlimit = headyawlimit(movement);
         float headyaw = normalizeyaw(bodyyaw + clamp(yawoffset(d->yaw, bodyyaw), -headlimit, headlimit));
+        float torsopitch = CROUCH_TORSO_PITCH * crouch;
+        float armpitch = CROUCH_ARM_PITCH * crouch;
+        float legpitch = CROUCH_LEG_PITCH * crouch;
 
         vec feet = d->feetpos(bob);
-        vec hips = vec(feet).addz(HIP_HEIGHT);
-        vec shoulders = vec(feet).addz(SHOULDER_HEIGHT);
+        vec hips = vec(feet).addz(HIP_HEIGHT - CROUCH_HIP_DROP * crouch);
+        vec shoulderoffset(0, 0, SHOULDER_HEIGHT - HIP_HEIGHT);
+        shoulderoffset.rotate_around_x(torsopitch * RAD).rotate_around_z(bodyyaw * RAD);
+        vec shoulders = vec(hips).add(shoulderoffset);
+        vec neck = vec(shoulders).addz(-CROUCH_HEAD_DROP * crouch);
 
-        renderpart(d, PART_TORSO, feet, bodyyaw, 0, flags);
-        renderpart(d, PART_HEAD, shoulders, headyaw, clamp(d->pitch, -80.0f, 80.0f) + sinf(phase * 2.0f) * 1.5f * movement, flags);
-        renderpart(d, PART_LEFT_ARM, shoulders, bodyyaw, -stride * ARM_SWING, flags);
-        renderpart(d, PART_RIGHT_ARM, shoulders, bodyyaw, stride * ARM_SWING, flags);
-        renderpart(d, PART_LEFT_LEG, hips, bodyyaw, stride * LEG_SWING, flags);
-        renderpart(d, PART_RIGHT_LEG, hips, bodyyaw, -stride * LEG_SWING, flags);
+        renderpart(d, PART_TORSO, hips, bodyyaw, torsopitch, flags);
+        renderpart(d, PART_HEAD, neck, headyaw, clamp(d->pitch, -80.0f, 80.0f) + sinf(phase * 2.0f) * 1.5f * movement, flags);
+        renderpart(d, PART_LEFT_ARM, shoulders, bodyyaw, armpitch - stride * ARM_SWING, flags);
+        renderpart(d, PART_RIGHT_ARM, shoulders, bodyyaw, armpitch + stride * ARM_SWING, flags);
+        renderpart(d, PART_LEFT_LEG, hips, bodyyaw, legpitch + stride * LEG_SWING, flags);
+        renderpart(d, PART_RIGHT_LEG, hips, bodyyaw, legpitch - stride * LEG_SWING, flags);
     }
 
     void rendergame()
