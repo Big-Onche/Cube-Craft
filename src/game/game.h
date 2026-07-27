@@ -86,14 +86,19 @@ struct gameent : dynent
     int clientnum, privilege, ping, lastupdate, plag;
     editinfo *edit;
     float deltayaw, deltapitch, deltaroll, newyaw, newpitch, newroll;
-    float renderbodyyaw, rendercrouch, renderstridephase;
-    int smoothmillis, renderbodyyawmillis, rendercrouchmillis, renderstridemillis;
+    float renderbodyyaw, rendercrouch, renderstridephase, renderattackreleasepitch;
+    int smoothmillis, renderbodyyawmillis, rendercrouchmillis, renderstridemillis,
+        renderattackmillis, renderattackreleasemillis, renderplacemillis;
+    bool renderattacking, renderplacetoggle, renderactioninitialized;
     string name;
 
     gameent() : clientnum(-1), privilege(0), ping(0), lastupdate(0), plag(0), edit(NULL),
                 deltayaw(0), deltapitch(0), deltaroll(0), newyaw(0), newpitch(0), newroll(0),
-                renderbodyyaw(0), rendercrouch(0), renderstridephase(0), smoothmillis(-1),
-                renderbodyyawmillis(-1), rendercrouchmillis(-1), renderstridemillis(-1)
+                renderbodyyaw(0), rendercrouch(0), renderstridephase(0), renderattackreleasepitch(0),
+                smoothmillis(-1), renderbodyyawmillis(-1), rendercrouchmillis(-1),
+                renderstridemillis(-1), renderattackmillis(0), renderattackreleasemillis(-1000),
+                renderplacemillis(-1000), renderattacking(false), renderplacetoggle(false),
+                renderactioninitialized(false)
     {
         type = ENT_PLAYER;
         state = editstate = CS_ALIVE;
@@ -128,6 +133,7 @@ namespace game
     extern bool waitforserveredit();
     extern void requestworldcommand(const char *command);
     extern float horizontalmeterspersecond(const physent *d);
+    extern float rightarmactionpitch(const gameent *d);
 
 #ifndef STANDALONE
     extern void preloadplayermodels();

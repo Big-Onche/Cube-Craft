@@ -569,6 +569,10 @@ namespace game
             player1->renderbodyyawmillis = -1;
             player1->rendercrouchmillis = -1;
             player1->renderstridemillis = -1;
+            player1->renderattacking = false;
+            player1->renderattackreleasemillis = -1000;
+            player1->renderplacemillis = -1000;
+            player1->renderactioninitialized = true;
         }
     }
     void preload()
@@ -588,6 +592,14 @@ namespace game
 
     static int creativeblock = 0, creativeactionmillis = 0;
 
+    enum
+    {
+        CREATIVE_ARM_CYCLE = 300,
+        CREATIVE_ARM_RELEASE = 120
+    };
+
+    static const float CREATIVE_ARM_PITCH = 70.0f;
+
     static int clampcreativeblock()
     {
         int count = numworldcubes();
@@ -598,6 +610,30 @@ namespace game
     static bool creativeenabled()
     {
         return m_creative && !editmode && player1 && player1->state == CS_ALIVE;
+    }
+
+    static float creativearmwave(int elapsed)
+    {
+        float progress = clamp(elapsed / float(CREATIVE_ARM_CYCLE), 0.0f, 1.0f);
+        return (0.5f - 0.5f * cosf(progress * 2.0f * PI)) * CREATIVE_ARM_PITCH;
+    }
+
+    float rightarmactionpitch(const gameent *d)
+    {
+        if(!d || (d == player1 && !creativeenabled())) return -1.0f;
+
+        if(d->renderattacking)
+        {
+            int elapsed = max(lastmillis - d->renderattackmillis, 0) % CREATIVE_ARM_CYCLE;
+            return creativearmwave(elapsed);
+        }
+
+        int elapsed = lastmillis - d->renderattackreleasemillis;
+        if(elapsed >= 0 && elapsed < CREATIVE_ARM_RELEASE)
+            return d->renderattackreleasepitch * (1.0f - elapsed / float(CREATIVE_ARM_RELEASE));
+
+        elapsed = lastmillis - d->renderplacemillis;
+        return elapsed >= 0 && elapsed < CREATIVE_ARM_CYCLE ? creativearmwave(elapsed) : -1.0f;
     }
 
     static bool creativehit(selinfo &hit)
@@ -665,6 +701,8 @@ namespace game
         mpeditface(-1, 1, hit, true);
         mpedittex(getworldcubeslot(clampcreativeblock()), 1, placed, true);
         creativeactionmillis = lastmillis;
+        player1->renderplacemillis = lastmillis;
+        player1->renderplacetoggle = !player1->renderplacetoggle;
     }
 
     static void creativeremove()
@@ -675,7 +713,26 @@ namespace game
         creativeactionmillis = lastmillis;
     }
 
-    ICOMMAND(creativeattack, "D", (int *down), { if(*down) creativeremove(); });
+    ICOMMAND(creativeattack, "D", (int *down),
+    {
+        if(*down)
+        {
+            if(player1 && !player1->renderattacking)
+            {
+                player1->renderattacking = creativeenabled();
+                player1->renderattackmillis = lastmillis;
+                player1->renderattackreleasemillis = -1000;
+                if(player1->renderattacking) creativeremove();
+            }
+        }
+        else if(player1 && player1->renderattacking)
+        {
+            int elapsed = max(lastmillis - player1->renderattackmillis, 0) % CREATIVE_ARM_CYCLE;
+            player1->renderattackreleasepitch = creativearmwave(elapsed);
+            player1->renderattackreleasemillis = lastmillis;
+            player1->renderattacking = false;
+        }
+    });
     ICOMMAND(creativeplaceblock, "D", (int *down), { if(*down) creativeplace(); });
     ICOMMAND(creativeselect, "i", (int *index),
     {
@@ -840,6 +897,8 @@ namespace game
         // Extended velocity, falling data, and gameclip.
         uint flags = 0;
         if(d->crouching) flags |= 1<<0;
+        if(d->renderattacking) flags |= 1<<1;
+        if(d->renderplacetoggle) flags |= 1<<2;
         if(vel > 0xFF) flags |= 1<<3;
         if(fall > 0)
         {
@@ -988,6 +1047,42 @@ namespace game
                 d->move = (physstate>>4)&2 ? -1 : (physstate>>4)&1;
                 d->strafe = (physstate>>6)&2 ? -1 : (physstate>>6)&1;
                 d->crouching = flags&(1<<0) ? -1 : 0;
+                bool attacking = (flags&(1<<1)) != 0;
+                bool placetoggle = (flags&(1<<2)) != 0;
+                if(!d->renderactioninitialized)
+                {
+                    d->renderattacking = attacking;
+                    d->renderplacetoggle = placetoggle;
+                    if(attacking)
+                    {
+                        d->renderattackmillis = lastmillis;
+                        d->renderattackreleasemillis = -1000;
+                    }
+                    d->renderactioninitialized = true;
+                }
+                else
+                {
+                    if(attacking != d->renderattacking)
+                    {
+                        if(attacking)
+                        {
+                            d->renderattackmillis = lastmillis;
+                            d->renderattackreleasemillis = -1000;
+                        }
+                        else
+                        {
+                            int elapsed = max(lastmillis - d->renderattackmillis, 0) % CREATIVE_ARM_CYCLE;
+                            d->renderattackreleasepitch = creativearmwave(elapsed);
+                            d->renderattackreleasemillis = lastmillis;
+                        }
+                        d->renderattacking = attacking;
+                    }
+                    if(placetoggle != d->renderplacetoggle)
+                    {
+                        d->renderplacetoggle = placetoggle;
+                        d->renderplacemillis = lastmillis;
+                    }
+                }
                 d->o = pos;
                 d->o.z += d->eyeheight;
                 d->vel = vel;

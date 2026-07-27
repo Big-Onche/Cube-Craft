@@ -44,8 +44,7 @@ namespace game
     static void renderpart(gameent *d, int part, const vec &origin,
                            float yaw, float pitch, float roll, int flags)
     {
-        rendermodel(playermodels[part], ANIM_MAPMODEL | ANIM_LOOP,
-                    origin, yaw, pitch, roll, flags, d);
+        rendermodel(playermodels[part], ANIM_MAPMODEL | ANIM_LOOP, origin, yaw, pitch, roll, flags, d);
     }
 
     static float movementamount(const gameent *d, float speed)
@@ -191,6 +190,8 @@ namespace game
         float torsopitch = CROUCH_TORSO_PITCH * crouch;
         float armpitch = CROUCH_ARM_PITCH * crouch;
         float legpitch = CROUCH_LEG_PITCH * crouch;
+        float actionpitch = rightarmactionpitch(d);
+        bool actionactive = actionpitch >= 0;
 
         vec feet = d->feetpos(bob);
         vec hips = vec(feet).addz(HIP_HEIGHT - CROUCH_HIP_DROP * crouch);
@@ -206,21 +207,11 @@ namespace game
         vec righthip = vec(hips).madd(lateral, LEG_OFFSET);
 
         renderpart(d, PART_TORSO, hips, bodyyaw, torsopitch, 0, flags);
-        renderpart(d, PART_HEAD, neck, headyaw,
-                   clamp(d->pitch, -80.0f, 80.0f) + sinf(phase * 2.0f) * 1.5f * movement,
-                   0, flags);
-        renderpart(d, PART_LEFT_ARM, leftshoulder, bodyyaw,
-                   armpitch - forwardstride * ARM_SWING,
-                   -strafestride * ARM_STRAFE_SWING, flags);
-        renderpart(d, PART_RIGHT_ARM, rightshoulder, bodyyaw,
-                   armpitch + forwardstride * ARM_SWING,
-                   strafestride * ARM_STRAFE_SWING, flags);
-        renderpart(d, PART_LEFT_LEG, lefthip, bodyyaw,
-                   legpitch + forwardstride * LEG_SWING,
-                   strafestride * LEG_STRAFE_SWING, flags);
-        renderpart(d, PART_RIGHT_LEG, righthip, bodyyaw,
-                   legpitch - forwardstride * LEG_SWING,
-                   -strafestride * LEG_STRAFE_SWING, flags);
+        renderpart(d, PART_HEAD, neck, headyaw, clamp(d->pitch, -80.0f, 80.0f) + sinf(phase * 2.0f) * 1.5f * movement, 0, flags);
+        renderpart(d, PART_LEFT_ARM, leftshoulder, bodyyaw, armpitch + (actionactive ? actionpitch : -forwardstride * ARM_SWING), actionactive ? 0 : -strafestride * ARM_STRAFE_SWING, flags);
+        renderpart(d, PART_RIGHT_ARM, rightshoulder, bodyyaw, armpitch + forwardstride * ARM_SWING, strafestride * ARM_STRAFE_SWING, flags);
+        renderpart(d, PART_LEFT_LEG, lefthip, bodyyaw, legpitch + forwardstride * LEG_SWING, strafestride * LEG_STRAFE_SWING, flags);
+        renderpart(d, PART_RIGHT_LEG, righthip, bodyyaw, legpitch - forwardstride * LEG_SWING, -strafestride * LEG_STRAFE_SWING, flags);
     }
 
     void rendergame()
