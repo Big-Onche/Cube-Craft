@@ -177,6 +177,15 @@ void trydisconnect(bool local)
         disconnect(!discmillis);
     }
     else if(local && haslocalclients()) localdisconnect();
+    else if(game::islocalworld())
+    {
+        // Offline procedural worlds have no network peer, but Disconnect is
+        // still the user's "save, leave world, return to menu" action.
+        game::gamedisconnect(false);
+        closeproceduralworld(true);
+        mainmenu = 1;
+        conoutf("left single-player world");
+    }
     else conoutf(CON_WARN, "not connected");
 }
 
@@ -271,4 +280,3 @@ void gets2c()           // get updates from the server
             break;
     }
 }
-

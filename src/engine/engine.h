@@ -213,6 +213,7 @@ extern int neighbourdepth;
 extern const cube &neighbourcube(const cube &c, int orient, const ivec &co, int size, ivec &ro = lu, int &rsize = lusize);
 extern void resetclipplanes();
 extern void clearworldchunks();
+extern void closeproceduralworld(bool save);
 extern int getworldsectionsize();
 extern bool isworldleafcube(const cube &c);
 extern int getmippedtexture(const cube &p, int orient);

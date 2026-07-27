@@ -514,6 +514,11 @@ namespace game
         return activeworldseed;
     }
 
+    int getconfiguredworldseed()
+    {
+        return worldseed;
+    }
+
     void loadworldseed(int seed)
     {
         worldseed = max(seed, 0);

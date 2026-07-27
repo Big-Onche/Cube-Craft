@@ -10,6 +10,7 @@ namespace game
     int gamemode = STARTGAMEMODE;
     string clientmap = "";
     bool connected = false, remote = false, gamepaused = false;
+    static bool localworldactive = false;
     int sessionid = 0, mastermode = MM_OPEN;
     gameent *player1 = NULL;
     vector<gameent *> players, clients;
@@ -128,8 +129,13 @@ namespace game
 #ifdef STANDALONE
         return false;
 #else
-        return remote || (connected && isconnected(false, true));
+        return !localworldactive && (remote || (connected && isconnected(false, true)));
 #endif
+    }
+
+    bool islocalworld()
+    {
+        return localworldactive;
     }
 
     void requestworldcommand(const char *command)
@@ -215,6 +221,7 @@ namespace game
     void gamedisconnect(bool cleanup)
     {
         connected = remote = false;
+        localworldactive = false;
         pendingnetworkworld = pendingnetworkreset = pendingnetworkrestoreposition = false;
         pendingnetworkedits.deletecontents();
         authoritativeauthor = -1;
@@ -236,9 +243,35 @@ namespace game
 
     void gameconnect(bool _remote)
     {
+        // Explicitly connecting starts an authoritative multiplayer session.
+        // Saved procedural worlds remain offline until this point.
+        localworldactive = false;
         remote = _remote;
         if(remote) addmsg(N_CONNECT, "rs", connectpass);
         else connected = true;
+    }
+
+    void beginlocalworld()
+    {
+#ifndef STANDALONE
+        // A listen server owns a separate seed and journal. Leaving it connected
+        // would make its N_WORLDSTATE replace the saved world after loading.
+        if(isconnected(false, false)) disconnect(false, false);
+        if(isconnected(false, true)) server::localdisconnect(false);
+#endif
+        connected = remote = false;
+        localworldactive = true;
+#ifndef STANDALONE
+        pendingnetworkworld = pendingnetworkreset = pendingnetworkrestoreposition = false;
+        pendingnetworkedits.deletecontents();
+        authoritativeauthor = -1;
+        authoritativerevision = synchronizedrevision = 0;
+#endif
+        if(player1)
+        {
+            player1->clientnum = -1;
+            player1->privilege = PRIV_ADMIN;
+        }
     }
 
     bool allowedittoggle()
@@ -270,7 +303,7 @@ namespace game
     {
         gamemode = m_valid(mode) ? mode : STARTGAMEMODE;
 #ifndef STANDALONE
-        if(!remote && !isconnected()) localconnect();
+        if(!localworldactive && !remote && !isconnected()) localconnect();
 #endif
         if(editmode) toggleedit();
         if(name && name[0]) load_world(name);
@@ -559,7 +592,7 @@ namespace game
         else environment::reset();
         if(!initing)
         {
-            if(!remote && !isconnected()) localconnect();
+            if(!localworldactive && !remote && !isconnected()) localconnect();
             mainmenu = 0;
         }
 #endif

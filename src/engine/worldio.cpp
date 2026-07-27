@@ -5430,11 +5430,27 @@ static void createworld(const char *requestedname)
     copystring(chosenfolder, worldfolder);
     formatstring(activechunkname, "%s/0_0", chosenfolder);
 
+    defformatstring(metadatafile, "media/map/%s/world.meta", chosenfolder);
+    path(metadatafile);
+    const char *existingmetadata = findfile(metadatafile, "rb");
+    if(existingmetadata && fileexists(existingmetadata, "r"))
+    {
+        conoutf(CON_ERROR,
+                "world %s already exists; use loadworld %s or choose a new name",
+                chosenfolder, chosenfolder);
+        return;
+    }
+
+    // Snapshot the menu/console seed before loading or resetting anything.
+    // The active seed belongs to the currently loaded world and must not be
+    // reused implicitly when creating a differently named world.
+    const int chosenworldseed = game::getconfiguredworldseed();
+    game::beginlocalworld();
     if(!emptymap(WORLD_RUNTIME_SCALE, true, activechunkname)) return;
     copystring(worldfolder, chosenfolder);
     worldfirstchunkx = worldfirstchunky = -WORLD_RUNTIME_CENTER;
     if(!loadworlddefinitions()) return;
-    game::activateworldseed();
+    game::loadworldseed(chosenworldseed);
 
     freeocta(worldroot);
     worldroot = NULL;
@@ -5462,8 +5478,8 @@ static void createworld(const char *requestedname)
 
     int mounted = 0;
     loopv(worldchunks) if(worldchunkmounted(worldchunks[i])) mounted++;
-    conoutf("generated infinite world %s with %d initial chunks; %d chunks queued asynchronously",
-            worldfolder, mounted, worldchunks.length() - mounted);
+    conoutf("generated infinite world %s with seed %d and %d initial chunks; %d chunks queued asynchronously",
+            worldfolder, game::getworldseed(), mounted, worldchunks.length() - mounted);
     conoutf("new chunks are prepared on demand; use saveworld to write ready chunks");
 }
 
@@ -5504,8 +5520,10 @@ static void loadworldcommand(const char *requested)
         return;
     }
 
+    game::beginlocalworld();
     game::loadworldseed(metadata.seed);
     activeworldmetadata = metadata;
+    conoutf("loading saved world %s with pinned seed %d", folder, metadata.seed);
     defformatstring(entry, "%s/%d_%d", folder, chunkx, chunky);
     requestedworldspawn = spawn;
     hasrequestedworldspawn = true;
@@ -5618,6 +5636,18 @@ void saveworld()
     }
     conoutf("saved world %s: %d chunk journals queued, %d unchanged, %d ready; released %d cached chunks",
             worldfolder, written, unchanged, ready, released);
+}
+
+void closeproceduralworld(bool save)
+{
+    // Save while the active folder, mounted chunks and diff states still
+    // identify the world. clearworldchunks() then flushes and joins both the
+    // diff writer and generation workers before releasing their state.
+    if(save && !worldchunks.empty() && activeworldchunk >= 0) saveworld();
+    clearworldchunks();
+    resetmap();
+    freeocta(worldroot);
+    worldroot = newcubes(F_SOLID);
 }
 
 COMMAND(saveworld, "");

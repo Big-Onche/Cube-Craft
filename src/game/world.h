@@ -90,6 +90,7 @@ namespace game
     };
 
     extern int getworldseed();
+    extern int getconfiguredworldseed();
     extern void loadworldseed(int seed);
     extern void activateworldseed();
     extern void saveworldsettings(stream *f);

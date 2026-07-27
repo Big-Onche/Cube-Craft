@@ -130,6 +130,8 @@ namespace game
     extern void changemap(const char *name, int mode);
     extern bool addmsg(int type, const char *fmt = NULL, ...);
     extern void c2sinfo(bool force = false);
+    extern void beginlocalworld();
+    extern bool islocalworld();
     extern bool waitforserveredit();
     extern void requestworldcommand(const char *command);
     extern float horizontalmeterspersecond(const physent *d);
