@@ -623,7 +623,7 @@ namespace game
         CREATIVE_REACH = CREATIVE_GRID * 8
     };
 
-    static int creativeblock = 0, creativeactionmillis = 0;
+    static int creativeblock = 0;
 
     enum
     {
@@ -638,6 +638,11 @@ namespace game
         int count = numworldcubes();
         creativeblock = count > 0 ? clamp(creativeblock, 0, count - 1) : 0;
         return creativeblock;
+    }
+
+    int selectedcreativeblock()
+    {
+        return clampcreativeblock();
     }
 
     static bool creativeenabled()
@@ -733,7 +738,6 @@ namespace game
         placed.o = target;
         mpeditface(-1, 1, hit, true);
         mpedittex(getworldcubeslot(clampcreativeblock()), 1, placed, true);
-        creativeactionmillis = lastmillis;
         player1->renderplacemillis = lastmillis;
         player1->renderplacetoggle = !player1->renderplacetoggle;
     }
@@ -743,7 +747,6 @@ namespace game
         selinfo hit;
         if(!creativehit(hit)) return;
         mpdelcube(hit, true);
-        creativeactionmillis = lastmillis;
     }
 
     ICOMMAND(creativeattack, "D", (int *down),
@@ -802,37 +805,6 @@ namespace game
         hudtexquad(x, y, x + w, y, x + w, y + h, x, y + h);
     }
 
-    static void drawheldblock(int w, int h)
-    {
-        int count = numworldcubes();
-        if(count <= 0) return;
-
-        int selected = clampcreativeblock();
-        float scale = min(w, h) / 720.0f,
-              bob = lastmillis - creativeactionmillis < 180
-                  ? sin((lastmillis - creativeactionmillis) / 180.0f * M_PI) * 18.0f * scale
-                  : 0.0f,
-              cx = w - 145.0f * scale, cy = h - (150.0f - bob) * scale,
-              s = 72.0f * scale;
-
-        gle::defvertex(2);
-        gle::deftexcoord0();
-        resethudshader();
-
-        settexture(getworldcubetexture(selected), 3);
-        // The same selected texture is intentionally used on every visible face.
-        gle::colorf(1, 1, 1, 1);
-        hudtexquad(cx, cy - s * 0.72f, cx + s, cy - s * 0.25f,
-                   cx, cy + s * 0.22f, cx - s, cy - s * 0.25f);
-        gle::colorf(0.72f, 0.72f, 0.72f, 1);
-        hudtexquad(cx - s, cy - s * 0.25f, cx, cy + s * 0.22f,
-                   cx, cy + s * 1.22f, cx - s, cy + s * 0.75f);
-        gle::colorf(0.52f, 0.52f, 0.52f, 1);
-        hudtexquad(cx, cy + s * 0.22f, cx + s, cy - s * 0.25f,
-                   cx + s, cy + s * 0.75f, cx, cy + s * 1.22f);
-        gle::colorf(1, 1, 1, 1);
-    }
-
     static void drawcreativehotbar(int w, int h)
     {
         int count = numworldcubes();
@@ -870,7 +842,6 @@ namespace game
     void gameplayhud(int w, int h)
     {
         if(!creativeenabled()) return;
-        drawheldblock(w, h);
         drawcreativehotbar(w, h);
     }
     bool canjump() { return true; }

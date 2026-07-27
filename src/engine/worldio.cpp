@@ -189,14 +189,14 @@ VARP(maxchunkdist, 2, 3, WORLD_MAX_CHUNK_DIST);
 
 struct worldcubedefinition
 {
-    string name, texture, sidetexture, bottom;
+    string name, texture, sidetexture, bottom, bottomtexture;
     float texsize;
     int slot, sideslot, bottomslot;
 
     worldcubedefinition()
         : texsize(1), slot(DEFAULT_GEOM), sideslot(DEFAULT_GEOM), bottomslot(DEFAULT_GEOM)
     {
-        name[0] = texture[0] = sidetexture[0] = bottom[0] = '\0';
+        name[0] = texture[0] = sidetexture[0] = bottom[0] = bottomtexture[0] = '\0';
     }
 };
 
@@ -224,11 +224,18 @@ const char *getworldcubename(int index)
     return worldcubedefinitions.inrange(index) ? worldcubedefinitions[index]->name : "";
 }
 
-const char *getworldcubetexture(int index)
+const char *getworldcubetexture(int index, int face)
 {
     static string texturepath;
     if(!worldcubedefinitions.inrange(index)) return "";
-    formatstring(texturepath, "media/texture/%s", worldcubedefinitions[index]->texture);
+    worldcubedefinition &type = *worldcubedefinitions[index];
+    const char *texture = type.texture;
+    if(face == WORLD_CUBE_SIDE && type.sidetexture[0]) texture = type.sidetexture;
+    else if(face == WORLD_CUBE_BOTTOM)
+        texture = type.bottomtexture[0] ? type.bottomtexture
+                : type.sidetexture[0] ? type.sidetexture
+                : type.texture;
+    formatstring(texturepath, "media/texture/%s", texture);
     return texturepath;
 }
 VARFP(leavesalpha, 0, 1, 1, updateleavesalpha());
@@ -276,6 +283,7 @@ static void defineworldcube(const char *name, const char *texture, float texsize
     copystring(type->texture, texture);
     copystring(type->sidetexture, numargs >= 4 && side ? side : "");
     copystring(type->bottom, numargs >= 5 && bottom ? bottom : "");
+    type->bottomtexture[0] = '\0';
     type->texsize = texsize > 0 ? texsize : 1;
 }
 
@@ -339,6 +347,9 @@ static bool loadworlddefinitions()
             return false;
         }
         type.bottomslot = bottomtype ? bottomtype->slot : type.sideslot;
+        copystring(type.bottomtexture, bottomtype ? bottomtype->texture
+                                                 : type.sidetexture[0] ? type.sidetexture
+                                                                       : type.texture);
     }
 
     worldgrasstexture = grass->slot;

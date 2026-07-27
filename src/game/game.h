@@ -136,6 +136,7 @@ namespace game
     extern void requestworldcommand(const char *command);
     extern float horizontalmeterspersecond(const physent *d);
     extern float playerarmactionpitch(const gameent *d);
+    extern int selectedcreativeblock();
 
 #ifndef STANDALONE
     extern void preloadplayermodels();

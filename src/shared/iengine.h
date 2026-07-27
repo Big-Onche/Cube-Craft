@@ -115,10 +115,11 @@ extern bool mpeditvslot(int delta, int allfaces, selinfo &sel, ucharbuf &buf);
 extern void mpcalclight(bool local);
 
 // Data-driven voxel types registered by worldcube in config/world.cfg.
+enum { WORLD_CUBE_TOP = 0, WORLD_CUBE_SIDE, WORLD_CUBE_BOTTOM };
 extern int numworldcubes();
 extern int getworldcubeslot(int index);
 extern const char *getworldcubename(int index);
-extern const char *getworldcubetexture(int index);
+extern const char *getworldcubetexture(int index, int face = WORLD_CUBE_TOP);
 
 // command
 extern int variable(const char *name, int min, int cur, int max, int *storage, identfun fun, int flags);
@@ -449,6 +450,13 @@ struct modelattach
 };
 
 extern void rendermodel(const char *mdl, int anim, const vec &o, float yaw = 0, float pitch = 0, float roll = 0, int cull = MDL_CULL_VFC | MDL_CULL_DIST | MDL_CULL_OCCLUDED, dynent *d = NULL, modelattach *a = NULL, int basetime = 0, int basetime2 = 0, float size = 1, const vec4 &color = vec4(1, 1, 1, 1));
+struct modelskinoverride
+{
+    const char *mesh, *texture;
+
+    modelskinoverride(const char *mesh, const char *texture) : mesh(mesh), texture(texture) {}
+};
+extern void rendermodelwithskins(const char *mdl, int anim, const vec &o, float yaw, float pitch, float roll, int flags, dynent *d, const modelskinoverride *skins, int numskins, float size = 1, const vec4 &color = vec4(1, 1, 1, 1));
 extern int intersectmodel(const char *mdl, int anim, const vec &pos, float yaw, float pitch, float roll, const vec &o, const vec &ray, float &dist, int mode = 0, dynent *d = NULL, modelattach *a = NULL, int basetime = 0, int basetime2 = 0, float size = 1);
 extern void abovemodel(vec &o, const char *mdl);
 extern void renderclient(dynent *d, const char *mdlname, modelattach *attachments, int hold, int attack, int attackdelay, int lastaction, int lastpain, float scale = 1, bool ragdoll = false, float trans = 1);

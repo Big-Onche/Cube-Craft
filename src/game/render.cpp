@@ -23,6 +23,8 @@ namespace game
         "game/player/leg/right"
     };
 
+    static const char * const heldcubemodel = "game/heldcube";
+
     // The split meshes retain the coordinates of the original 30-unit model.
     // Their configs recenter articulated pieces on these joint heights.
     static const float HIP_HEIGHT = 11.25f, SHOULDER_HEIGHT = 22.5f;
@@ -34,15 +36,19 @@ namespace game
     static const float IDLE_BODY_TURN_SPEED = 180.0f, MOVING_BODY_TURN_RESPONSE = 14.0f;
     static const float CROUCH_HIP_DROP = 2.0f, CROUCH_HEAD_DROP = 0.75f;
     static const float CROUCH_TORSO_PITCH = -35.0f, CROUCH_ARM_PITCH = -15.0f, CROUCH_LEG_PITCH = 35.0f;
-    static const float HUD_ARM_FORWARD = 6.0f, HUD_ARM_SIDE = 10.0f, HUD_ARM_DOWN = 7.0f;
+    static const float HUD_ARM_FORWARD = 6.0f, HUD_ARM_SIDE = 12.0f, HUD_ARM_DOWN = 8.0f;
     static const float HUD_ARM_IDLE_PITCH = -90.0f, HUD_ARM_ROLL = -3.0f;
     static const float HUD_ARM_GAIT_SCALE = 0.45f, HUD_ARM_BOB = 0.35f;
+    static const float HUD_ARM_LENGTH = 11.25f;
+    static const float HUD_CUBE_GRIP_FORWARD = 1.2f, HUD_CUBE_GRIP_SIDE = -0.5f,
+                       HUD_CUBE_GRIP_UP = 1.25f, HUD_CUBE_SIZE = 0.8f;
 
     VARP(hudgun, 0, 1, 1);
 
     void preloadplayermodels()
     {
         loopi(NUM_PLAYER_PARTS) preloadmodel(playermodels[i]);
+        preloadmodel(heldcubemodel);
     }
 
     static void renderpart(gameent *d, int part, const vec &origin, float yaw, float pitch, float roll, int flags)
@@ -230,10 +236,47 @@ namespace game
         rendermodel(playermodels[part], ANIM_MAPMODEL | ANIM_LOOP, origin, camera1->yaw, camera1->pitch + pitch, roll, MDL_NOBATCH | MDL_NOSHADOW, player1);
     }
 
+    static vec hudarmhand(float side, float pitch, float roll, float bob)
+    {
+        vec hand(camera1->o);
+        hand.madd(camdir, HUD_ARM_FORWARD)
+            .madd(camright, side * HUD_ARM_SIDE)
+            .madd(camup, -HUD_ARM_DOWN + bob);
+
+        vec reach(0, 0, -HUD_ARM_LENGTH);
+        reach.rotate_around_y(-roll * RAD)
+             .rotate_around_x((camera1->pitch + pitch) * RAD)
+             .rotate_around_z(camera1->yaw * RAD);
+
+        return hand.add(reach);
+    }
+
     static bool holdinglefthand(const gameent *)
     {
         // Keep the off-hand model path ready for a future left-hand item slot.
         return false;
+    }
+
+    static void renderheldcube(int selected, float armpitch, float armroll, float bob, float actionpitch)
+    {
+        string toptexture, sidetexture, bottomtexture;
+        copystring(toptexture, getworldcubetexture(selected, WORLD_CUBE_TOP));
+        copystring(sidetexture, getworldcubetexture(selected, WORLD_CUBE_SIDE));
+        copystring(bottomtexture, getworldcubetexture(selected, WORLD_CUBE_BOTTOM));
+        modelskinoverride skins[] =
+        {
+            modelskinoverride("top", toptexture),
+            modelskinoverride("side", sidetexture),
+            modelskinoverride("bottom", bottomtexture)
+        };
+
+        float swingpitch = max(actionpitch, 0.0f);
+        vec origin = hudarmhand(1, armpitch, armroll, bob);
+        origin.madd(camdir, HUD_CUBE_GRIP_FORWARD)
+              .madd(camright, HUD_CUBE_GRIP_SIDE)
+              .madd(camup, HUD_CUBE_GRIP_UP);
+
+        rendermodelwithskins(heldcubemodel, ANIM_MAPMODEL | ANIM_LOOP, origin, camera1->yaw, camera1->pitch - swingpitch * 0.35f, 0, MDL_NOSHADOW, player1, skins, 3, HUD_CUBE_SIZE);
     }
 
     void renderavatar()
@@ -254,12 +297,16 @@ namespace game
         bool actionactive = actionpitch >= 0;
         float basepitch = HUD_ARM_IDLE_PITCH + CROUCH_ARM_PITCH * crouch;
         float bob = (0.5f - fabsf(cosf(player1->renderstridephase))) * HUD_ARM_BOB * movement * (1.0f - 0.65f * crouch);
+        float rightarmpitch = basepitch + (actionactive ? actionpitch : -forwardstride * ARM_SWING * HUD_ARM_GAIT_SCALE);
+        float rightarmroll = 180.0f + HUD_ARM_ROLL + (actionactive ? 0 : -strafestride * ARM_STRAFE_SWING * HUD_ARM_GAIT_SCALE);
 
         if(holdinglefthand(player1))
             renderhudarm(PART_RIGHT_ARM, -1, basepitch + forwardstride * ARM_SWING * HUD_ARM_GAIT_SCALE, 180.0f - HUD_ARM_ROLL + strafestride * ARM_STRAFE_SWING * HUD_ARM_GAIT_SCALE, bob);
 
         // The exported left-arm mesh is the visually correct right action hand.
-        renderhudarm(PART_LEFT_ARM, 1, basepitch + (actionactive ? actionpitch : -forwardstride * ARM_SWING * HUD_ARM_GAIT_SCALE), 180.0f + HUD_ARM_ROLL + (actionactive ? 0 : -strafestride * ARM_STRAFE_SWING * HUD_ARM_GAIT_SCALE), bob);
+        renderhudarm(PART_LEFT_ARM, 1, rightarmpitch, rightarmroll, bob);
+
+        if(m_creative && numworldcubes() > 0) renderheldcube(selectedcreativeblock(), rightarmpitch, rightarmroll, bob, actionpitch);
     }
 
     void renderplayerpreview(int model, int color, int team, int weap) {}

@@ -139,14 +139,14 @@ struct animmodel : model
             key = &shaderparamskey::keys[*this];
         }
 
-        void setshaderparams(mesh &m, const animstate *as, bool skinned = true)
+        void setshaderparams(mesh &m, const animstate *as, bool skinned, bool usealphatest)
         {
             if(!Shader::lastshader) return;
             if(key->checkversion() && Shader::lastshader->owner == key) return;
             Shader::lastshader->owner = key;
 
             LOCALPARAMF(texscroll, scrollu*lastmillis/1000.0f, scrollv*lastmillis/1000.0f);
-            if(alphatested()) LOCALPARAMF(alphatest, alphatest);
+            if(usealphatest) LOCALPARAMF(alphatest, alphatest);
 
             if(!skinned) return;
 
@@ -167,7 +167,7 @@ struct animmodel : model
             if(envmapped()) LOCALPARAMF(envmapscale, envmapmin-envmapmax, envmapmax);
         }
 
-        Shader *loadshader()
+        Shader *loadshader(bool usealphatest)
         {
             #define DOMODELSHADER(name, body) \
                 do { \
@@ -180,24 +180,25 @@ struct animmodel : model
 
             if(shadowmapping == SM_REFLECT)
             {
-                if(rsmshader) return rsmshader;
+                if(usealphatest == alphatested() && rsmshader) return rsmshader;
 
                 string opts;
                 int optslen = 0;
-                if(alphatested()) opts[optslen++] = 'a';
+                if(usealphatest) opts[optslen++] = 'a';
                 if(doublesided()) opts[optslen++] = 'c';
                 opts[optslen++] = '\0';
 
                 defformatstring(name, "rsmmodel%s", opts);
-                rsmshader = generateshader(name, "rsmmodelshader \"%s\"", opts);
-                return rsmshader;
+                Shader *result = generateshader(name, "rsmmodelshader \"%s\"", opts);
+                if(usealphatest == alphatested()) rsmshader = result;
+                return result;
             }
 
-            if(shader) return shader;
+            if(usealphatest == alphatested() && shader) return shader;
 
             string opts;
             int optslen = 0;
-            if(alphatested())
+            if(usealphatest)
             {
                 opts[optslen++] = 'a';
                 if(dithered()) opts[optslen++] = 'u';
@@ -210,8 +211,9 @@ struct animmodel : model
             opts[optslen++] = '\0';
 
             defformatstring(name, "model%s", opts);
-            shader = generateshader(name, "modelshader \"%s\"", opts);
-            return shader;
+            Shader *result = generateshader(name, "modelshader \"%s\"", opts);
+            if(usealphatest == alphatested()) shader = result;
+            return result;
         }
 
         void cleanup()
@@ -226,18 +228,22 @@ struct animmodel : model
 
         void preloadshader()
         {
-            loadshader();
+            loadshader(alphatested());
             useshaderbyname(alphatested() && owner->model->alphashadow ? "alphashadowmodel" : "shadowmodel");
             if(useradiancehints()) useshaderbyname(alphatested() ? "rsmalphamodel" : "rsmmodel");
         }
 
-        void setshader(mesh &m, const animstate *as)
+        void setshader(mesh &m, const animstate *as, bool usealphatest)
         {
-            m.setshader(loadshader(), transparentlayer ? 1 : 0);
+            m.setshader(loadshader(usealphatest), transparentlayer ? 1 : 0);
         }
 
         void bind(mesh &b, const animstate *as)
         {
+            Texture *diffusetex = lookupmodelskinoverride(b.name);
+            if(!diffusetex) diffusetex = tex;
+            bool usealphatest = alphatest > 0 && diffusetex->type&Texture::ALPHA;
+
             if(shouldcullface())
             {
                 if(!enablecullface) { glEnable(GL_CULL_FACE); enablecullface = true; }
@@ -246,15 +252,15 @@ struct animmodel : model
 
             if(as->cur.anim&ANIM_NOSKIN)
             {
-                if(alphatested() && owner->model->alphashadow)
+                if(usealphatest && owner->model->alphashadow)
                 {
-                    if(tex!=lasttex)
+                    if(diffusetex!=lasttex)
                     {
-                        glBindTexture(GL_TEXTURE_2D, tex->id);
-                        lasttex = tex;
+                        glBindTexture(GL_TEXTURE_2D, diffusetex->id);
+                        lasttex = diffusetex;
                     }
                     SETMODELSHADER(b, alphashadowmodel);
-                    setshaderparams(b, as, false);
+                    setshaderparams(b, as, false, usealphatest);
                 }
                 else
                 {
@@ -263,10 +269,10 @@ struct animmodel : model
                 return;
             }
             int activetmu = 0;
-            if(tex!=lasttex)
+            if(diffusetex!=lasttex)
             {
-                glBindTexture(GL_TEXTURE_2D, tex->id);
-                lasttex = tex;
+                glBindTexture(GL_TEXTURE_2D, diffusetex->id);
+                lasttex = diffusetex;
             }
             if(bumpmapped() && normalmap!=lastnormalmap)
             {
@@ -301,8 +307,8 @@ struct animmodel : model
                 }
             }
             if(activetmu != 0) glActiveTexture_(GL_TEXTURE0);
-            setshader(b, as);
-            setshaderparams(b, as);
+            setshader(b, as, usealphatest);
+            setshaderparams(b, as, true, usealphatest);
         }
     };
 

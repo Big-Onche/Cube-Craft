@@ -5,6 +5,22 @@ VAR(animationinterpolationtime, 0, 200, 1000);
 
 model *loadingmodel = NULL;
 
+struct activemodelskinoverride
+{
+    const char *mesh;
+    Texture *texture;
+};
+
+static vector<activemodelskinoverride> activemodelskins;
+
+static Texture *lookupmodelskinoverride(const char *mesh)
+{
+    if(!mesh) return NULL;
+    loopv(activemodelskins)
+        if(!strcmp(mesh, activemodelskins[i].mesh)) return activemodelskins[i].texture;
+    return NULL;
+}
+
 #include "ragdoll.h"
 #include "animmodel.h"
 #include "vertmodel.h"
@@ -1053,6 +1069,19 @@ hasboundbox:
     b.attached = a ? modelattached.length() : -1;
     if(a) for(int i = 0;; i++) { modelattached.add(a[i]); if(!a[i].tag) break; }
     addbatchedmodel(m, b, batchedmodels.length()-1);
+}
+
+void rendermodelwithskins(const char *mdl, int anim, const vec &o, float yaw, float pitch, float roll, int flags, dynent *d, const modelskinoverride *skins, int numskins, float size, const vec4 &color)
+{
+    activemodelskins.setsize(0);
+    loopi(numskins) if(skins[i].mesh && skins[i].texture)
+    {
+        activemodelskinoverride &active = activemodelskins.add();
+        active.mesh = skins[i].mesh;
+        active.texture = textureload(skins[i].texture, 0, true, true, true);
+    }
+    rendermodel(mdl, anim, o, yaw, pitch, roll, flags | MDL_NOBATCH, d, NULL, 0, 0, size, color);
+    activemodelskins.setsize(0);
 }
 
 int intersectmodel(const char *mdl, int anim, const vec &pos, float yaw, float pitch, float roll, const vec &o, const vec &ray, float &dist, int mode, dynent *d, modelattach *a, int basetime, int basetime2, float size)
