@@ -135,7 +135,7 @@ namespace game
     extern bool waitforserveredit();
     extern void requestworldcommand(const char *command);
     extern float horizontalmeterspersecond(const physent *d);
-    extern float rightarmactionpitch(const gameent *d);
+    extern float playerarmactionpitch(const gameent *d);
 
 #ifndef STANDALONE
     extern void preloadplayermodels();

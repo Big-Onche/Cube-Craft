@@ -651,7 +651,7 @@ namespace game
         return (0.5f - 0.5f * cosf(progress * 2.0f * PI)) * CREATIVE_ARM_PITCH;
     }
 
-    float rightarmactionpitch(const gameent *d)
+    float playerarmactionpitch(const gameent *d)
     {
         if(!d || (d == player1 && !creativeenabled())) return -1.0f;
 
@@ -818,15 +818,6 @@ namespace game
         gle::defvertex(2);
         gle::deftexcoord0();
         resethudshader();
-
-        // A simple blocky right forearm behind the held item.
-        settexture("media/texture/base/white.png", 3);
-        gle::colorf(0.28f, 0.32f, 0.38f, 1);
-        hudtexquad(w - 12 * scale, h, w - 115 * scale, h - 90 * scale,
-                   w - 82 * scale, h - 124 * scale, w + 25 * scale, h - 38 * scale);
-        gle::colorf(0.82f, 0.61f, 0.43f, 1);
-        hudtexquad(w - 82 * scale, h - 124 * scale, w - 128 * scale, h - 104 * scale,
-                   w - 107 * scale, h - 69 * scale, w - 65 * scale, h - 88 * scale);
 
         settexture(getworldcubetexture(selected), 3);
         // The same selected texture is intentionally used on every visible face.

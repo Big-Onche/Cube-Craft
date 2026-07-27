@@ -33,16 +33,19 @@ namespace game
     static const float IDLE_HEAD_YAW = 65.0f, MOVING_HEAD_YAW = 75.0f;
     static const float IDLE_BODY_TURN_SPEED = 180.0f, MOVING_BODY_TURN_RESPONSE = 14.0f;
     static const float CROUCH_HIP_DROP = 2.0f, CROUCH_HEAD_DROP = 0.75f;
-    static const float CROUCH_TORSO_PITCH = -35.0f, CROUCH_ARM_PITCH = -15.0f,
-                       CROUCH_LEG_PITCH = 35.0f;
+    static const float CROUCH_TORSO_PITCH = -35.0f, CROUCH_ARM_PITCH = -15.0f, CROUCH_LEG_PITCH = 35.0f;
+    static const float HUD_ARM_FORWARD = 6.0f, HUD_ARM_SIDE = 10.0f, HUD_ARM_DOWN = 7.0f;
+    static const float HUD_ARM_IDLE_PITCH = -90.0f, HUD_ARM_ROLL = -3.0f;
+    static const float HUD_ARM_GAIT_SCALE = 0.45f, HUD_ARM_BOB = 0.35f;
+
+    VARP(hudgun, 0, 1, 1);
 
     void preloadplayermodels()
     {
         loopi(NUM_PLAYER_PARTS) preloadmodel(playermodels[i]);
     }
 
-    static void renderpart(gameent *d, int part, const vec &origin,
-                           float yaw, float pitch, float roll, int flags)
+    static void renderpart(gameent *d, int part, const vec &origin, float yaw, float pitch, float roll, int flags)
     {
         rendermodel(playermodels[part], ANIM_MAPMODEL | ANIM_LOOP, origin, yaw, pitch, roll, flags, d);
     }
@@ -69,11 +72,8 @@ namespace game
             float maxspeed = max(d->maxspeed / GAMEUNITSPERMETER, 0.01f);
             // Cadence is cycles per second: walking stays deliberate while
             // sprinting approaches a natural three steps per second.
-            float cadence = clamp(MIN_GAIT_CADENCE + sqrtf(speed / maxspeed),
-                                  MIN_GAIT_CADENCE, MAX_GAIT_CADENCE);
-            d->renderstridephase = fmodf(d->renderstridephase
-                                       + 2.0f * PI * cadence * elapsed / 1000.0f,
-                                         2.0f * PI);
+            float cadence = clamp(MIN_GAIT_CADENCE + sqrtf(speed / maxspeed), MIN_GAIT_CADENCE, MAX_GAIT_CADENCE);
+            d->renderstridephase = fmodf(d->renderstridephase + 2.0f * PI * cadence * elapsed / 1000.0f, 2.0f * PI);
         }
         return d->renderstridephase;
     }
@@ -190,7 +190,7 @@ namespace game
         float torsopitch = CROUCH_TORSO_PITCH * crouch;
         float armpitch = CROUCH_ARM_PITCH * crouch;
         float legpitch = CROUCH_LEG_PITCH * crouch;
-        float actionpitch = rightarmactionpitch(d);
+        float actionpitch = playerarmactionpitch(d);
         bool actionactive = actionpitch >= 0;
 
         vec feet = d->feetpos(bob);
@@ -220,6 +220,47 @@ namespace game
         loopv(players) renderplayer(players[i], players[i] == player1);
     }
 
-    void renderavatar() {}
+    static void renderhudarm(int part, float side, float pitch, float roll, float bob)
+    {
+        vec origin(camera1->o);
+        origin.madd(camdir, HUD_ARM_FORWARD)
+              .madd(camright, side * HUD_ARM_SIDE)
+              .madd(camup, -HUD_ARM_DOWN + bob);
+
+        rendermodel(playermodels[part], ANIM_MAPMODEL | ANIM_LOOP, origin, camera1->yaw, camera1->pitch + pitch, roll, MDL_NOBATCH | MDL_NOSHADOW, player1);
+    }
+
+    static bool holdinglefthand(const gameent *)
+    {
+        // Keep the off-hand model path ready for a future left-hand item slot.
+        return false;
+    }
+
+    void renderavatar()
+    {
+        if(!hudgun || editmode || !player1 || player1->state != CS_ALIVE) return;
+
+        float speed = horizontalmeterspersecond(player1);
+        float movement = movementamount(player1, speed);
+        float crouch = player1->rendercrouch;
+        float stride = sinf(player1->renderstridephase) * movement * (1.0f - 0.55f * crouch);
+        float inputmagnitude = sqrtf(float(player1->move*player1->move + player1->strafe*player1->strafe));
+        float forwardgait = inputmagnitude > 0 ? fabsf(player1->move) / inputmagnitude : 1.0f;
+        float strafegait = inputmagnitude > 0 ? fabsf(player1->strafe) / inputmagnitude : 0.0f;
+        float strafedirection = player1->strafe < 0 ? -1.0f : 1.0f;
+        float forwardstride = stride * forwardgait;
+        float strafestride = stride * strafegait * strafedirection;
+        float actionpitch = playerarmactionpitch(player1);
+        bool actionactive = actionpitch >= 0;
+        float basepitch = HUD_ARM_IDLE_PITCH + CROUCH_ARM_PITCH * crouch;
+        float bob = (0.5f - fabsf(cosf(player1->renderstridephase))) * HUD_ARM_BOB * movement * (1.0f - 0.65f * crouch);
+
+        if(holdinglefthand(player1))
+            renderhudarm(PART_RIGHT_ARM, -1, basepitch + forwardstride * ARM_SWING * HUD_ARM_GAIT_SCALE, 180.0f - HUD_ARM_ROLL + strafestride * ARM_STRAFE_SWING * HUD_ARM_GAIT_SCALE, bob);
+
+        // The exported left-arm mesh is the visually correct right action hand.
+        renderhudarm(PART_LEFT_ARM, 1, basepitch + (actionactive ? actionpitch : -forwardstride * ARM_SWING * HUD_ARM_GAIT_SCALE), 180.0f + HUD_ARM_ROLL + (actionactive ? 0 : -strafestride * ARM_STRAFE_SWING * HUD_ARM_GAIT_SCALE), bob);
+    }
+
     void renderplayerpreview(int model, int color, int team, int weap) {}
 }
