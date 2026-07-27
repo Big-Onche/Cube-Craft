@@ -117,6 +117,7 @@ CLIENT_OBJS= \
 	game/entities.o \
 	game/environment.o \
 	game/game.o \
+	game/render.o \
 	game/server.o \
 	game/world.o
 
@@ -464,6 +465,9 @@ game/entities.o: shared/glemu.h shared/iengine.h shared/igame.h
 game/game.o: game/game.h shared/cube.h shared/tools.h shared/geom.h
 game/game.o: shared/ents.h shared/command.h shared/glexts.h shared/glemu.h
 game/game.o: shared/iengine.h shared/igame.h
+game/render.o: game/game.h shared/cube.h shared/tools.h shared/geom.h
+game/render.o: shared/ents.h shared/command.h shared/glexts.h shared/glemu.h
+game/render.o: shared/iengine.h shared/igame.h
 game/server.o: game/game.h shared/cube.h shared/tools.h shared/geom.h
 game/server.o: shared/ents.h shared/command.h shared/glexts.h shared/glemu.h
 game/server.o: shared/iengine.h shared/igame.h

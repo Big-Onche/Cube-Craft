@@ -126,6 +126,8 @@ namespace game
     extern void requestworldcommand(const char *command);
 
 #ifndef STANDALONE
+    extern void preloadplayermodels();
+
     namespace environment
     {
         extern void reset();

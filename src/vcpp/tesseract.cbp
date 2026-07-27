@@ -211,6 +211,7 @@
 		<Unit filename="../game/entities.cpp" />
 		<Unit filename="../game/environment.cpp" />
 		<Unit filename="../game/game.cpp" />
+		<Unit filename="../game/render.cpp" />
 		<Unit filename="../game/game.h">
 			<Option compile="1" />
 			<Option weight="0" />

@@ -7,8 +7,6 @@ extern int initing;
 
 namespace game
 {
-    static const char * const playermodel = "game/player/fixit";
-
     int gamemode = STARTGAMEMODE;
     string clientmap = "";
     bool connected = false, remote = false, gamepaused = false;
@@ -561,7 +559,9 @@ namespace game
     void preload()
     {
         entities::preloadentities();
-        preloadmodel(playermodel);
+#ifndef STANDALONE
+        preloadplayermodels();
+#endif
     }
     float abovegameplayhud(int w, int h) { return 1.0f; }
 
@@ -783,22 +783,6 @@ namespace game
     dynent *iterdynents(int i) { return players.inrange(i) ? players[i] : NULL; }
     int numdynents() { return players.length(); }
 
-    static void renderplayer(gameent *d, bool local)
-    {
-        if(!d || d->state == CS_SPECTATOR || (!local && d->smoothmillis < 0)) return;
-
-        int flags = MDL_CULL_VFC | MDL_CULL_DIST | MDL_CULL_OCCLUDED;
-        if(local && !isthirdperson()) flags |= MDL_ONLYSHADOW;
-        rendermodel(playermodel, ANIM_MAPMODEL | ANIM_LOOP, d->feetpos(), d->yaw, 0, 0, flags, d);
-    }
-
-    void rendergame()
-    {
-        entities::renderentities();
-        loopv(players) renderplayer(players[i], players[i] == player1);
-    }
-    void renderavatar() {}
-    void renderplayerpreview(int model, int color, int team, int weap) {}
     int numanims() { return ANIM_GAMESPECIFIC; }
     void findanims(const char *pattern, vector<int> &anims) {}
     void writegamedata(vector<char> &extras) {}
