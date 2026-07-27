@@ -15,6 +15,15 @@ namespace game
     vector<gameent *> players, clients;
     vector<uchar> messages;
 
+    float horizontalmeterspersecond(const physent *d)
+    {
+        if(!d) return 0.0f;
+        float movescale = d->inwater && d->state != CS_EDITING && d->state != CS_SPECTATOR ? 0.5f : 1.0f;
+        float x = d->vel.x * movescale + d->falling.x,
+              y = d->vel.y * movescale + d->falling.y;
+        return sqrtf(x*x + y*y) / GAMEUNITSPERMETER;
+    }
+
     static string connectpass = "", servdesc = "";
     static int authoritativeauthor = -1;
     static uint authoritativerevision = 0, synchronizedrevision = 0;
@@ -559,6 +568,7 @@ namespace game
         {
             player1->renderbodyyawmillis = -1;
             player1->rendercrouchmillis = -1;
+            player1->renderstridemillis = -1;
         }
     }
     void preload()
@@ -1347,6 +1357,11 @@ namespace game
     ICOMMAND(melee, "D", (int *down), {});
     ICOMMAND(taunt, "", (), {});
     ICOMMAND(allowthirdperson, "b", (int *msg), intret(1));
+    ICOMMAND(getdebugplayerspeed, "", (),
+    {
+        defformatstring(speed, "%.2f", horizontalmeterspersecond(player1));
+        result(speed);
+    });
     ICOMMAND(getplayercolor, "ii", (int *model, int *team), intret(0xFFFFFF));
     ICOMMAND(showscores, "D", (int *down), {});
     ICOMMAND(refreshscoreboard, "", (), {});

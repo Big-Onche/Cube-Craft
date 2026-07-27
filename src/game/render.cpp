@@ -26,7 +26,8 @@ namespace game
     // The split meshes retain the coordinates of the original 30-unit model.
     // Their configs recenter articulated pieces on these joint heights.
     static const float HIP_HEIGHT = 11.25f, SHOULDER_HEIGHT = 22.5f;
-    static const float RUN_CYCLE_SPEED = 9.0f, LEG_SWING = 32.0f, ARM_SWING = 28.0f;
+    static const float MIN_GAIT_CADENCE = 0.65f, MAX_GAIT_CADENCE = 3.0f;
+    static const float LEG_SWING = 32.0f, ARM_SWING = 28.0f;
     static const float IDLE_HEAD_YAW = 65.0f, IDLE_BODY_TURN_SPEED = 180.0f;
     static const float CROUCH_HIP_DROP = 2.0f, CROUCH_HEAD_DROP = 0.75f;
     static const float CROUCH_TORSO_PITCH = -35.0f, CROUCH_ARM_PITCH = -15.0f,
@@ -42,14 +43,35 @@ namespace game
         rendermodel(playermodels[part], ANIM_MAPMODEL | ANIM_LOOP, origin, yaw, pitch, 0, flags, d);
     }
 
-    static float movementamount(const gameent *d)
+    static float movementamount(const gameent *d, float speed)
     {
-        float speed = sqrtf(d->vel.x*d->vel.x + d->vel.y*d->vel.y);
-        float amount = clamp(speed / max(d->maxspeed, 1.0f), 0.0f, 1.0f);
+        float maxspeed = max(d->maxspeed / GAMEUNITSPERMETER, 0.01f);
+        return sqrtf(clamp(speed / maxspeed, 0.0f, 1.0f));
+    }
 
-        // Start the pose as soon as input begins, before physics has accelerated.
-        if(d->move || d->strafe) amount = max(amount, 0.25f);
-        return amount;
+    static float updatestridephase(gameent *d, float speed)
+    {
+        if(d->renderstridemillis < 0 || lastmillis < d->renderstridemillis)
+        {
+            d->renderstridephase = fmodf(max(d->clientnum, 0) * 1.37f, 2.0f * PI);
+            d->renderstridemillis = lastmillis;
+            return d->renderstridephase;
+        }
+
+        int elapsed = min(lastmillis - d->renderstridemillis, 100);
+        d->renderstridemillis = lastmillis;
+        if(speed > 0.05f)
+        {
+            float maxspeed = max(d->maxspeed / GAMEUNITSPERMETER, 0.01f);
+            // Cadence is cycles per second: walking stays deliberate while
+            // sprinting approaches a natural three steps per second.
+            float cadence = clamp(MIN_GAIT_CADENCE + sqrtf(speed / maxspeed),
+                                  MIN_GAIT_CADENCE, MAX_GAIT_CADENCE);
+            d->renderstridephase = fmodf(d->renderstridephase
+                                       + 2.0f * PI * cadence * elapsed / 1000.0f,
+                                         2.0f * PI);
+        }
+        return d->renderstridephase;
     }
 
     static float physicalcrouchamount(const gameent *d)
@@ -141,9 +163,10 @@ namespace game
         int flags = MDL_CULL_VFC | MDL_CULL_DIST | MDL_CULL_OCCLUDED;
         if(local && !isthirdperson()) flags |= MDL_ONLYSHADOW;
 
-        float movement = movementamount(d);
+        float speed = horizontalmeterspersecond(d);
+        float movement = movementamount(d, speed);
         float crouch = updatecrouch(d, local);
-        float phase = lastmillis * (RUN_CYCLE_SPEED / 1000.0f) + max(d->clientnum, 0) * 1.37f;
+        float phase = updatestridephase(d, speed);
         float stride = sinf(phase) * movement * (1.0f - 0.55f * crouch);
         float bob = fabsf(cosf(phase)) * 0.45f * movement * (1.0f - 0.65f * crouch);
         float bodyyaw = updatebodyyaw(d, movement);

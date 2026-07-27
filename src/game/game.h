@@ -6,6 +6,7 @@
 #define DMF 16.0f
 #define DNF 100.0f
 #define DVELF 1.0f
+#define GAMEUNITSPERMETER 16.0f
 
 enum
 {
@@ -85,14 +86,14 @@ struct gameent : dynent
     int clientnum, privilege, ping, lastupdate, plag;
     editinfo *edit;
     float deltayaw, deltapitch, deltaroll, newyaw, newpitch, newroll;
-    float renderbodyyaw, rendercrouch;
-    int smoothmillis, renderbodyyawmillis, rendercrouchmillis;
+    float renderbodyyaw, rendercrouch, renderstridephase;
+    int smoothmillis, renderbodyyawmillis, rendercrouchmillis, renderstridemillis;
     string name;
 
     gameent() : clientnum(-1), privilege(0), ping(0), lastupdate(0), plag(0), edit(NULL),
                 deltayaw(0), deltapitch(0), deltaroll(0), newyaw(0), newpitch(0), newroll(0),
-                renderbodyyaw(0), rendercrouch(0), smoothmillis(-1), renderbodyyawmillis(-1),
-                rendercrouchmillis(-1)
+                renderbodyyaw(0), rendercrouch(0), renderstridephase(0), smoothmillis(-1),
+                renderbodyyawmillis(-1), rendercrouchmillis(-1), renderstridemillis(-1)
     {
         type = ENT_PLAYER;
         state = editstate = CS_ALIVE;
@@ -126,6 +127,7 @@ namespace game
     extern void c2sinfo(bool force = false);
     extern bool waitforserveredit();
     extern void requestworldcommand(const char *command);
+    extern float horizontalmeterspersecond(const physent *d);
 
 #ifndef STANDALONE
     extern void preloadplayermodels();
