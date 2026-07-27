@@ -74,15 +74,19 @@ static const int msgsizes[] =
 #define TESSERACT_SERVER_PORT 42000
 #define TESSERACT_LANINFO_PORT 41998
 #define TESSERACT_MASTER_PORT 41999
-#define PROTOCOL_VERSION 4
+#define PROTOCOL_VERSION 5
 
 struct gameent : dynent
 {
-    int clientnum, privilege, ping;
+    int clientnum, privilege, ping, lastupdate, plag;
     editinfo *edit;
+    float deltayaw, deltapitch, deltaroll, newyaw, newpitch, newroll;
+    int smoothmillis;
     string name;
 
-    gameent() : clientnum(-1), privilege(0), ping(0), edit(NULL)
+    gameent() : clientnum(-1), privilege(0), ping(0), lastupdate(0), plag(0), edit(NULL),
+                deltayaw(0), deltapitch(0), deltaroll(0), newyaw(0), newpitch(0), newroll(0),
+                smoothmillis(-1)
     {
         type = ENT_PLAYER;
         state = editstate = CS_ALIVE;

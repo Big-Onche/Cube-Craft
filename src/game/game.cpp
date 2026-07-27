@@ -7,6 +7,8 @@ extern int initing;
 
 namespace game
 {
+    static const char * const playermodel = "game/player/fixit";
+
     int gamemode = STARTGAMEMODE;
     string clientmap = "";
     bool connected = false, remote = false, gamepaused = false;
@@ -51,6 +53,9 @@ namespace game
 
     bool addmsg(int type, const char *fmt, ...)
     {
+#ifdef STANDALONE
+        return false;
+#else
         if(!fmt) fmt = "";
         packetbuf p(MAXTRANS, ENET_PACKET_FLAG_RELIABLE);
         putint(p, type);
@@ -83,6 +88,7 @@ namespace game
         va_end(args);
         sendclientpacket(p.finalize(), 1);
         return true;
+#endif
     }
 
     void parseoptions(vector<const char *> &args)
@@ -112,7 +118,57 @@ namespace game
     }
 
     void resetgamestate() {}
-    void gamedisconnect(bool cleanup) { connected = remote = false; }
+    static void removeclient(int cn)
+    {
+        if(!clients.inrange(cn) || !clients[cn]) return;
+        gameent *d = clients[cn];
+        clients[cn] = NULL;
+        players.removeobj(d);
+        delete d;
+        cleardynentcache();
+    }
+
+    static void clearclients()
+    {
+        loopv(clients) if(clients[i]) delete clients[i];
+        clients.setsize(0);
+        players.setsize(0);
+        if(player1) players.add(player1);
+        cleardynentcache();
+    }
+
+    static gameent *newclient(int cn)
+    {
+        if(cn < 0 || cn > max(0xFF, MAXCLIENTS))
+        {
+            neterr("clientnum", false);
+            return NULL;
+        }
+        if(player1 && cn == player1->clientnum) return player1;
+        while(clients.length() <= cn) clients.add(NULL);
+        gameent *&d = clients[cn];
+        if(!d)
+        {
+            d = new gameent;
+            d->clientnum = cn;
+            copystring(d->name, "player");
+            players.add(d);
+            cleardynentcache();
+        }
+        return d;
+    }
+
+    static int lastpositionsend = -1000;
+    static string sentname = "";
+
+    void gamedisconnect(bool cleanup)
+    {
+        connected = remote = false;
+        clearclients();
+        if(player1) player1->clientnum = -1;
+        lastpositionsend = -1000;
+        sentname[0] = '\0';
+    }
     void connectattempt(const char *name, const char *password, const ENetAddress &address) { copystring(connectpass, password ? password : ""); }
     void connectfail() {}
 
@@ -157,6 +213,50 @@ namespace game
     int scaletime(int t) { return t*100; }
     bool allowmouselook() { return true; }
 
+    VARP(smoothmove, 0, 75, 100);
+    VARP(smoothdist, 0, 32, 64);
+
+    static void predictplayer(gameent *d)
+    {
+        d->o = d->newpos;
+        d->yaw = d->newyaw;
+        d->pitch = d->newpitch;
+        d->roll = d->newroll;
+        moveplayer(d, 1, false);
+        d->newpos = d->o;
+
+        float k = 1.0f - float(lastmillis - d->smoothmillis)/smoothmove;
+        if(k <= 0) return;
+        d->o.add(vec(d->deltapos).mul(k));
+        d->yaw += d->deltayaw*k;
+        if(d->yaw < 0) d->yaw += 360;
+        else if(d->yaw >= 360) d->yaw -= 360;
+        d->pitch += d->deltapitch*k;
+        d->roll += d->deltaroll*k;
+    }
+
+    static void otherplayers()
+    {
+        loopv(players)
+        {
+            gameent *d = players[i];
+            if(d == player1) continue;
+
+            int lagtime = (totalmillis ? totalmillis : 1) - d->lastupdate;
+            if(!lagtime) continue;
+            if(lagtime > 1000 && d->state == CS_ALIVE)
+            {
+                d->state = CS_LAGGED;
+                continue;
+            }
+            if(d->state == CS_ALIVE || d->state == CS_EDITING)
+            {
+                if(smoothmove && d->smoothmillis > 0) predictplayer(d);
+                else moveplayer(d, 1, false);
+            }
+        }
+    }
+
     void updateworld()
     {
 #ifndef STANDALONE
@@ -164,6 +264,7 @@ namespace game
 #endif
         updateworldchunks();
         physicsframe();
+        otherplayers();
         if(player1)
         {
             crouchplayer(player1, 10, true);
@@ -309,7 +410,11 @@ namespace game
 #endif
         findplayerspawn(player1, -1, 0);
     }
-    void preload() { entities::preloadentities(); }
+    void preload()
+    {
+        entities::preloadentities();
+        preloadmodel(playermodel);
+    }
     float abovegameplayhud(int w, int h) { return 1.0f; }
 
     enum
@@ -525,9 +630,23 @@ namespace game
     bool canjump() { return true; }
     bool cancrouch() { return true; }
     bool allowmove(physent *d) { return true; }
-    dynent *iterdynents(int i) { return i == 0 ? player1 : NULL; }
-    int numdynents() { return player1 ? 1 : 0; }
-    void rendergame() { entities::renderentities(); }
+    dynent *iterdynents(int i) { return players.inrange(i) ? players[i] : NULL; }
+    int numdynents() { return players.length(); }
+
+    static void renderplayer(gameent *d, bool local)
+    {
+        if(!d || d->state == CS_SPECTATOR || (!local && d->smoothmillis < 0)) return;
+
+        int flags = MDL_CULL_VFC | MDL_CULL_DIST | MDL_CULL_OCCLUDED;
+        if(local && !isthirdperson()) flags |= MDL_ONLYSHADOW;
+        rendermodel(playermodel, ANIM_MAPMODEL | ANIM_LOOP, d->feetpos(), d->yaw, 0, 0, flags, d);
+    }
+
+    void rendergame()
+    {
+        entities::renderentities();
+        loopv(players) renderplayer(players[i], players[i] == player1);
+    }
     void renderavatar() {}
     void renderplayerpreview(int model, int color, int team, int weap) {}
     int numanims() { return ANIM_GAMESPECIFIC; }
@@ -538,7 +657,7 @@ namespace game
     const char *defaultcrosshair(int index) { return "media/interface/crosshair/default.png"; }
     int selectcrosshair(vec &col) { return 0; }
     void setupcamera() {}
-    bool allowthirdperson(bool msg) { return false; }
+    bool allowthirdperson(bool msg) { return true; }
     bool detachcamera() { return false; }
     bool collidecamera() { return false; }
     void adddynlights() {}
@@ -547,13 +666,209 @@ namespace game
     int maxsoundradius(int n) { return 500; }
     bool needminimap() { return true; }
 
+    static void sendposition(gameent *d, packetbuf &q)
+    {
+        putint(q, N_POS);
+        putuint(q, d->clientnum);
+
+        // 3 bits physics state, 2 bits movement, and 2 bits strafing.
+        uchar physstate = d->physstate | ((d->move&3)<<4) | ((d->strafe&3)<<6);
+        q.put(physstate);
+
+        ivec o = ivec(d->feetpos().mul(DMF));
+        uint vel = min(int(d->vel.magnitude()*DVELF), 0xFFFF),
+             fall = min(int(d->falling.magnitude()*DVELF), 0xFFFF);
+
+        // 3 extended-position bits, extended velocity, falling data, and gameclip.
+        uint flags = 0;
+        if(o.x < 0 || o.x > 0xFFFF) flags |= 1<<0;
+        if(o.y < 0 || o.y > 0xFFFF) flags |= 1<<1;
+        if(o.z < 0 || o.z > 0xFFFF) flags |= 1<<2;
+        if(vel > 0xFF) flags |= 1<<3;
+        if(fall > 0)
+        {
+            flags |= 1<<4;
+            if(fall > 0xFF) flags |= 1<<5;
+            if(d->falling.x || d->falling.y || d->falling.z > 0) flags |= 1<<6;
+        }
+        if((lookupmaterial(d->feetpos())&MATF_CLIP) == MAT_GAMECLIP) flags |= 1<<7;
+        putuint(q, flags);
+
+        loopk(3)
+        {
+            q.put(o[k]&0xFF);
+            q.put((o[k]>>8)&0xFF);
+            if(flags&(1<<k)) q.put((o[k]>>16)&0xFF);
+        }
+
+        uint dir = (d->yaw < 0 ? 360 + int(d->yaw)%360 : int(d->yaw)%360)
+                 + clamp(int(d->pitch + 90), 0, 180)*360;
+        q.put(dir&0xFF);
+        q.put((dir>>8)&0xFF);
+        q.put(clamp(int(d->roll + 90), 0, 180));
+
+        q.put(vel&0xFF);
+        if(flags&(1<<3)) q.put((vel>>8)&0xFF);
+        float velyaw, velpitch;
+        vectoyawpitch(d->vel, velyaw, velpitch);
+        uint veldir = (velyaw < 0 ? 360 + int(velyaw)%360 : int(velyaw)%360)
+                    + clamp(int(velpitch + 90), 0, 180)*360;
+        q.put(veldir&0xFF);
+        q.put((veldir>>8)&0xFF);
+
+        if(flags&(1<<4))
+        {
+            q.put(fall&0xFF);
+            if(flags&(1<<5)) q.put((fall>>8)&0xFF);
+            if(flags&(1<<6))
+            {
+                float fallyaw, fallpitch;
+                vectoyawpitch(d->falling, fallyaw, fallpitch);
+                uint falldir = (fallyaw < 0 ? 360 + int(fallyaw)%360 : int(fallyaw)%360)
+                              + clamp(int(fallpitch + 90), 0, 180)*360;
+                q.put(falldir&0xFF);
+                q.put((falldir>>8)&0xFF);
+            }
+        }
+    }
+
+    static void updateremotepos(gameent *d)
+    {
+        const float r = player1->radius + d->radius,
+                    dx = player1->o.x - d->o.x,
+                    dy = player1->o.y - d->o.y,
+                    dz = player1->o.z - d->o.z,
+                    rz = player1->aboveeye + d->eyeheight,
+                    fx = fabs(dx), fy = fabs(dy), fz = fabs(dz);
+        if(fx < r && fy < r && fz < rz && player1->state != CS_SPECTATOR && d->state != CS_DEAD)
+        {
+            if(fx < fy) d->o.y += dy < 0 ? r - fy : -(r - fy);
+            else d->o.x += dx < 0 ? r - fx : -(r - fx);
+        }
+
+        int now = totalmillis ? totalmillis : 1,
+            lagtime = now - d->lastupdate;
+        if(lagtime)
+        {
+            if(d->state != CS_SPAWNING && d->lastupdate) d->plag = (d->plag*5 + lagtime)/6;
+            d->lastupdate = now;
+        }
+    }
+
     void c2sinfo(bool force)
     {
-        if(connected && player1) addmsg(N_CLIENTPING, "i", player1->ping);
+        if(!connected || !player1 || player1->clientnum < 0) return;
+
+        if(strcmp(sentname, player1->name))
+        {
+            addmsg(N_INITCLIENT, "s", player1->name);
+            copystring(sentname, player1->name);
+        }
+
+        if(!force && totalmillis - lastpositionsend < 33) return;
+        lastpositionsend = totalmillis;
+
+        packetbuf p(100);
+        sendposition(player1, p);
+        sendclientpacket(p.finalize(), 0);
+        flushclient();
     }
 
     void parsepacketclient(int chan, packetbuf &p)
     {
+        if(chan == 0)
+        {
+            while(p.remaining())
+            {
+                int type = getint(p);
+                if(type != N_POS)
+                {
+                    p.pad(p.remaining());
+                    break;
+                }
+
+                int cn = getuint(p), physstate = p.get();
+                uint flags = getuint(p);
+                vec pos, vel, falling;
+                loopk(3)
+                {
+                    int n = p.get();
+                    n |= p.get()<<8;
+                    if(flags&(1<<k))
+                    {
+                        n |= p.get()<<16;
+                        if(n&0x800000) n |= ~0U<<24;
+                    }
+                    pos[k] = n/DMF;
+                }
+                int dir = p.get();
+                dir |= p.get()<<8;
+                float yaw = dir%360, pitch = clamp(dir/360, 0, 180) - 90,
+                      roll = clamp(int(p.get()), 0, 180) - 90;
+                int mag = p.get();
+                if(flags&(1<<3)) mag |= p.get()<<8;
+                dir = p.get();
+                dir |= p.get()<<8;
+                vecfromyawpitch(dir%360, clamp(dir/360, 0, 180) - 90, 1, 0, vel);
+                vel.mul(mag/DVELF);
+                if(flags&(1<<4))
+                {
+                    mag = p.get();
+                    if(flags&(1<<5)) mag |= p.get()<<8;
+                    if(flags&(1<<6))
+                    {
+                        dir = p.get();
+                        dir |= p.get()<<8;
+                        vecfromyawpitch(dir%360, clamp(dir/360, 0, 180) - 90, 1, 0, falling);
+                    }
+                    else falling = vec(0, 0, -1);
+                    falling.mul(mag/DVELF);
+                }
+                else falling = vec(0, 0, 0);
+                if(p.overread()) return;
+
+                gameent *d = clients.inrange(cn) ? clients[cn] : NULL;
+                if(!d || d == player1) continue;
+
+                float oldyaw = d->yaw, oldpitch = d->pitch, oldroll = d->roll;
+                vec oldpos(d->o);
+                d->yaw = yaw;
+                d->pitch = pitch;
+                d->roll = roll;
+                d->move = (physstate>>4)&2 ? -1 : (physstate>>4)&1;
+                d->strafe = (physstate>>6)&2 ? -1 : (physstate>>6)&1;
+                d->o = pos;
+                d->o.z += d->eyeheight;
+                d->vel = vel;
+                d->falling = falling;
+                d->physstate = physstate&7;
+                updatephysstate(d);
+                updateremotepos(d);
+
+                if(smoothmove && d->smoothmillis >= 0 && oldpos.dist(d->o) < smoothdist)
+                {
+                    d->newpos = d->o;
+                    d->newyaw = d->yaw;
+                    d->newpitch = d->pitch;
+                    d->newroll = d->roll;
+                    d->o = oldpos;
+                    d->yaw = oldyaw;
+                    d->pitch = oldpitch;
+                    d->roll = oldroll;
+                    (d->deltapos = oldpos).sub(d->newpos);
+                    d->deltayaw = oldyaw - d->newyaw;
+                    if(d->deltayaw > 180) d->deltayaw -= 360;
+                    else if(d->deltayaw < -180) d->deltayaw += 360;
+                    d->deltapitch = oldpitch - d->newpitch;
+                    d->deltaroll = oldroll - d->newroll;
+                    d->smoothmillis = lastmillis;
+                }
+                else d->smoothmillis = 0;
+                if(d->state == CS_LAGGED || d->state == CS_SPAWNING) d->state = CS_ALIVE;
+            }
+            return;
+        }
+
         if(chan == 2)
         {
             int type = getint(p);
@@ -599,6 +914,18 @@ namespace game
             case N_WELCOME:
                 connected = true;
                 notifywelcome();
+                break;
+            case N_INITCLIENT:
+            {
+                int cn = getint(p);
+                string name;
+                getstring(name, p, sizeof(name));
+                gameent *d = newclient(cn);
+                if(d) filtertext(d->name, name, false, false, MAXSTRLEN);
+                break;
+            }
+            case N_CDIS:
+                removeclient(getint(p));
                 break;
             case N_MAPCHANGE:
             {
@@ -796,7 +1123,7 @@ namespace game
     ICOMMAND(shoot, "D", (int *down), {});
     ICOMMAND(melee, "D", (int *down), {});
     ICOMMAND(taunt, "", (), {});
-    ICOMMAND(allowthirdperson, "b", (int *msg), intret(0));
+    ICOMMAND(allowthirdperson, "b", (int *msg), intret(1));
     ICOMMAND(getplayercolor, "ii", (int *model, int *team), intret(0xFFFFFF));
     ICOMMAND(showscores, "D", (int *down), {});
     ICOMMAND(refreshscoreboard, "", (), {});
@@ -823,6 +1150,7 @@ namespace server
         int clientnum;
         bool connected, local;
         string name;
+        vector<uchar> position;
         ENetPacket *getmap;
 
         clientinfo() : clientnum(-1), connected(false), local(false), getmap(NULL) { name[0] = '\0'; }
@@ -840,11 +1168,24 @@ namespace server
     }
 
     void *newclientinfo() { return new clientinfo; }
-    void deleteclientinfo(void *ci) { delete (clientinfo *)ci; }
+    void deleteclientinfo(void *info)
+    {
+        clientinfo *ci = (clientinfo *)info;
+        if(ci && clients.inrange(ci->clientnum) && clients[ci->clientnum] == ci)
+            clients[ci->clientnum] = NULL;
+        delete ci;
+    }
     void serverinit() {}
     int reserveclients() { return 0; }
     int numchannels() { return 3; }
-    void clientdisconnect(int n) { if(clientinfo *ci = getinfo(n)) ci->connected = false; }
+    void clientdisconnect(int n)
+    {
+        if(clientinfo *ci = getinfo(n))
+        {
+            if(ci->connected) sendf(-1, 1, "ri2x", N_CDIS, n, n);
+            ci->connected = false;
+        }
+    }
 
     int clientconnect(int n, uint ip)
     {
@@ -866,9 +1207,11 @@ namespace server
         clients[n] = ci;
         ci->clientnum = n;
         ci->connected = ci->local = true;
+        sendf(n, 1, "ri5ss", N_SERVINFO, n, PROTOCOL_VERSION, rnd(INT_MAX), 0, "", "");
+        sendf(n, 1, "ri", N_WELCOME);
     }
 
-    void localdisconnect(int n) { if(clientinfo *ci = getinfo(n)) ci->connected = false; }
+    void localdisconnect(int n) { clientdisconnect(n); }
     bool allowbroadcast(int n) { clientinfo *ci = getinfo(n); return ci && ci->connected; }
     void recordpacket(int chan, void *data, int len) {}
 
@@ -891,6 +1234,52 @@ namespace server
 
     void parsepacket(int sender, int chan, packetbuf &p)
     {
+        if(chan == 0)
+        {
+            clientinfo *ci = getinfo(sender);
+            while(ci && ci->connected && p.remaining())
+            {
+                int packetstart = p.length();
+                int type = getint(p);
+                if(type != N_POS)
+                {
+                    p.pad(p.remaining());
+                    break;
+                }
+
+                int cn = getuint(p), physstate = p.get();
+                uint flags = getuint(p);
+                loopk(3)
+                {
+                    p.get();
+                    p.get();
+                    if(flags&(1<<k)) p.get();
+                }
+                p.get();
+                p.get();
+                p.get();
+                p.get();
+                if(flags&(1<<3)) p.get();
+                p.get();
+                p.get();
+                if(flags&(1<<4))
+                {
+                    p.get();
+                    if(flags&(1<<5)) p.get();
+                    if(flags&(1<<6))
+                    {
+                        p.get();
+                        p.get();
+                    }
+                }
+                if(p.overread()) return;
+                if(cn != sender || (physstate&7) > PHYS_BOUNCE) continue;
+
+                ci->position.setsize(0);
+                ci->position.put(&p.buf[packetstart], p.length() - packetstart);
+            }
+            return;
+        }
         if(chan != 1) return;
         while(p.remaining())
         {
@@ -903,6 +1292,25 @@ namespace server
                     getstring(pass, p, sizeof(pass));
                     sendf(sender, 1, "ri5ss", N_SERVINFO, sender, PROTOCOL_VERSION, rnd(INT_MAX), 0, "", "");
                     sendf(sender, 1, "ri", N_WELCOME);
+                    break;
+                }
+                case N_INITCLIENT:
+                {
+                    clientinfo *ci = getinfo(sender);
+                    string name;
+                    getstring(name, p, sizeof(name));
+                    if(!ci) break;
+
+                    bool firstinit = !ci->name[0];
+                    filtertext(ci->name, name, false, false, MAXSTRLEN);
+                    if(!ci->name[0]) formatstring(ci->name, "player%d", sender);
+                    if(firstinit) loopv(clients)
+                    {
+                        clientinfo *other = clients[i];
+                        if(i != sender && other && other->connected && other->name[0])
+                            sendf(sender, 1, "ri2s", N_INITCLIENT, i, other->name);
+                    }
+                    sendf(-1, 1, "ri2s", N_INITCLIENT, sender, ci->name);
                     break;
                 }
                 case N_TEXT:
@@ -937,7 +1345,46 @@ namespace server
     }
 
     void sendservmsg(const char *s) { sendf(-1, 1, "ris", N_SERVMSG, s); }
-    bool sendpackets(bool force) { return false; }
+    static enet_uint32 lastsend = 0;
+
+    static bool sendpositionbatch(int cn, vector<uchar> &batch)
+    {
+        if(batch.empty()) return false;
+        packetbuf p(batch.length());
+        p.put(batch.getbuf(), batch.length());
+        sendpacket(cn, 0, p.finalize());
+        batch.setsize(0);
+        return true;
+    }
+
+    bool sendpackets(bool force)
+    {
+        enet_uint32 curtime = enet_time_get() - lastsend;
+        if(curtime < 33 && !force) return false;
+        lastsend += curtime - (curtime%33);
+
+        bool sent = false;
+        int mtu = getservermtu() - 100;
+        if(mtu <= 0) mtu = MAXTRANS;
+        loopv(clients)
+        {
+            clientinfo *recipient = clients[i];
+            if(!recipient || !recipient->connected) continue;
+
+            vector<uchar> batch;
+            loopvj(clients)
+            {
+                clientinfo *source = clients[j];
+                if(!source || !source->connected || source == recipient || source->position.empty()) continue;
+                if(!batch.empty() && batch.length() + source->position.length() > mtu)
+                    sent |= sendpositionbatch(recipient->clientnum, batch);
+                batch.put(source->position.getbuf(), source->position.length());
+            }
+            sent |= sendpositionbatch(recipient->clientnum, batch);
+        }
+        loopv(clients) if(clients[i]) clients[i]->position.setsize(0);
+        return sent;
+    }
     void serverinforeply(ucharbuf &req, ucharbuf &p)
     {
         putint(p, PROTOCOL_VERSION);
