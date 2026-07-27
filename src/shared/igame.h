@@ -58,6 +58,7 @@ namespace game
     extern void vartrigger(ident *id);
     extern void dynentcollide(physent *d, physent *o, const vec &dir);
     extern const char *getclientmap();
+    extern int findclientnum(const char *name);
     extern const char *getmapinfo();
     extern const char *getscreenshotinfo();
     extern void resetgamestate();
@@ -122,4 +123,3 @@ namespace server
     extern bool ispaused();
     extern int scaletime(int t);
 }
-

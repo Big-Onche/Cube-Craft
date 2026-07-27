@@ -936,6 +936,7 @@ void swapundo(undolist &a, undolist &b, int op)
             l.grid = ub->grid;
             l.orient = ub->orient;
             r = newundocube(l);
+            beginworldedit(WORLD_EDIT_PASTE_BLUEPRINT, l, op);
         }
         if(r)
         {
@@ -944,7 +945,11 @@ void swapundo(undolist &a, undolist &b, int op)
             b.add(r);
         }
         pasteundo(u);
-        if(!u->numents) changed(*u->block(), false);
+        if(!u->numents)
+        {
+            changed(*u->block(), false);
+            commitworldedit();
+        }
         freeundo(u);
     }
     commitchanges();
@@ -1343,7 +1348,9 @@ void pasteblock(block3 &b, selinfo &sel, bool local)
     int o = sel.orient;
     sel.orient = b.orient;
     cube *s = b.c();
+    beginworldedit(WORLD_EDIT_PASTE_BLUEPRINT, sel);
     loopselxyz(if(!isempty(*s) || s->children || s->material != MAT_AIR) pastecube(*s, c); s++); // 'transparent'. old opaque by 'delcube; paste'
+    commitworldedit();
     sel.orient = o;
 }
 
@@ -2068,6 +2075,10 @@ void mpeditface(int dir, int mode, selinfo &sel, bool local)
     if(dc) sel.o[d] += sel.us(d)-sel.grid;
     sel.s[d] = 1;
 
+    beginworldedit(mode == 2 ? WORLD_EDIT_MOVE_CORNER :
+                   mode == 1 && dir < 0 ? WORLD_EDIT_FILL_VOLUME :
+                   mode == 1 ? WORLD_EDIT_DELETE_VOLUME : WORLD_EDIT_SET_CUBE,
+                   sel, dir, mode);
     loopselxyz(
         if(c.children) solidfaces(c);
         ushort mat = getmaterial(c);
@@ -2123,6 +2134,7 @@ void mpeditface(int dir, int mode, selinfo &sel, bool local)
             }
         }
     );
+    commitworldedit();
     if (mode==1 && dir>0)
         sel.o[d] += sel.grid * seldir;
 }
@@ -2154,7 +2166,9 @@ void pushsel(int *dir)
 void mpdelcube(selinfo &sel, bool local)
 {
     if(local) game::edittrigger(sel, EDIT_DELCUBE);
+    beginworldedit(WORLD_EDIT_DELETE_CUBE, sel);
     loopselxyz(discardchildren(c, true); emptyfaces(c));
+    commitworldedit();
 }
 
 void delcube()
@@ -2501,7 +2515,9 @@ void mpedittex(int tex, int allfaces, selinfo &sel, bool local)
         repsel = sel;
     }
     bool findrep = local && !allfaces && reptex < 0;
+    beginworldedit(WORLD_EDIT_SET_CUBE, sel, tex, allfaces);
     loopselxyz(edittexcube(c, tex, allfaces ? -1 : sel.orient, findrep));
+    commitworldedit();
 }
 
 static int unpacktex(int &tex, ucharbuf &buf, bool insert = true)
@@ -2675,7 +2691,9 @@ void mpreplacetex(int oldtex, int newtex, bool insel, selinfo &sel, bool local)
     if(local) game::edittrigger(sel, EDIT_REPLACE, oldtex, newtex, insel ? 1 : 0);
     if(insel)
     {
+        beginworldedit(WORLD_EDIT_SET_CUBE, sel, oldtex, newtex);
         loopselxyz(replacetexcube(c, oldtex, newtex));
+        commitworldedit();
     }
     else
     {
@@ -2762,6 +2780,7 @@ void mpflip(selinfo &sel, bool local)
         game::edittrigger(sel, EDIT_FLIP);
         makeundo();
     }
+    beginworldedit(WORLD_EDIT_PASTE_BLUEPRINT, sel);
     int zs = sel.s[dimension(sel.orient)];
     loopxy(sel)
     {
@@ -2774,6 +2793,7 @@ void mpflip(selinfo &sel, bool local)
         }
     }
     changed(sel);
+    commitworldedit();
 }
 
 void flip()
@@ -2790,6 +2810,7 @@ void mprotate(int cw, selinfo &sel, bool local)
     int m = sel.s[C[d]] < sel.s[R[d]] ? C[d] : R[d];
     int ss = sel.s[m] = max(sel.s[R[d]], sel.s[C[d]]);
     if(local) makeundo();
+    beginworldedit(WORLD_EDIT_PASTE_BLUEPRINT, sel, cw);
     loop(z,sel.s[D[d]]) loopi(cw>0 ? 1 : 3)
     {
         loopxy(sel) rotatecube(selcube(x,y,z), d);
@@ -2802,6 +2823,7 @@ void mprotate(int cw, selinfo &sel, bool local)
         );
     }
     changed(sel);
+    commitworldedit();
 }
 
 void rotate(int *cw)
@@ -2848,6 +2870,7 @@ void mpeditmat(int matid, int filter, selinfo &sel, bool local)
 {
     if(local) game::edittrigger(sel, EDIT_MAT, matid, filter);
 
+    beginworldedit(WORLD_EDIT_SET_MATERIAL, sel, matid, filter);
     ushort filtermat = 0, filtermask = 0, matmask;
     int filtergeom = 0;
     if(filter >= 0)
@@ -2870,6 +2893,7 @@ void mpeditmat(int matid, int filter, selinfo &sel, bool local)
         if(isdeadly(matid&MATF_VOLUME)) matid |= MAT_DEATH;
     }
     loopselxyz(setmat(c, matid, matmask, filtermat, filtermask, filtergeom));
+    commitworldedit();
 }
 
 void editmat(char *name, char *filtername)

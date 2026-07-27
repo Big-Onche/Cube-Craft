@@ -179,6 +179,7 @@ namespace game
 
     void edittrigger(const selinfo &sel, int op, int arg1, int arg2, int arg3, const VSlot *vs)
     {
+        setworldeditauthor(player1 ? player1->clientnum : -1);
         if(!connected && !remote && !isconnected(false, true)) return;
         packetbuf p(MAXTRANS, ENET_PACKET_FLAG_RELIABLE);
         putint(p, N_EDITF + op);
@@ -267,6 +268,18 @@ namespace game
 
     void dynentcollide(physent *d, physent *o, const vec &dir) {}
     const char *getclientmap() { return clientmap; }
+    int findclientnum(const char *name)
+    {
+        if(!name || !name[0]) return -1;
+        char *end = NULL;
+        long numeric = strtol(name, &end, 10);
+        if(end != name && !*end) return int(numeric);
+        loopv(players) if(players[i] && !cubecasecmp(players[i]->name, name))
+            return players[i]->clientnum;
+        loopv(clients) if(clients[i] && !cubecasecmp(clients[i]->name, name))
+            return clients[i]->clientnum;
+        return -1;
+    }
     const char *getmapinfo() { return NULL; }
     const char *getscreenshotinfo() { return clientmap; }
     void suicide(physent *d) {}
@@ -605,6 +618,10 @@ namespace game
                 conoutf("%s", text);
                 break;
             }
+            case N_EDITAUTHOR:
+                setworldeditauthor(getint(p));
+                setworldeditrevision(uint(getint(p)));
+                break;
             case N_EDITENT:
             {
                 int i = getint(p);
@@ -640,6 +657,7 @@ namespace game
             case N_DELCUBE:
             case N_EDITVSLOT:
             {
+                setworldeditauthor(-1);
                 selinfo sel;
                 getsel(p, sel);
                 if(!sel.validate()) break;
@@ -814,6 +832,7 @@ namespace server
     string smapname = "";
     stream *mapdata = NULL;
     int gamemode = STARTGAMEMODE;
+    uint worldeditrevision = 0;
 
     clientinfo *getinfo(int n)
     {
@@ -856,6 +875,15 @@ namespace server
     void broadcastedit(int sender, int chan, packetbuf &p, int msg)
     {
         packetbuf q(MAXTRANS, ENET_PACKET_FLAG_RELIABLE);
+        bool worldop = msg == N_EDITF || msg == N_EDITT || msg == N_EDITM ||
+                       msg == N_FLIP || msg == N_PASTE || msg == N_ROTATE ||
+                       msg == N_REPLACE || msg == N_DELCUBE;
+        if(worldop)
+        {
+            putint(q, N_EDITAUTHOR);
+            putint(q, sender);
+            putint(q, int(++worldeditrevision));
+        }
         putint(q, msg);
         q.put(p.buf, p.remaining());
         sendpacket(-1, chan, q.finalize(), sender);
@@ -890,6 +918,7 @@ namespace server
                     p.pad(p.remaining());
                     break;
                 case N_NEWMAP:
+                    worldeditrevision = 0;
                     broadcastedit(sender, 1, p, type);
                     p.pad(p.remaining());
                     break;

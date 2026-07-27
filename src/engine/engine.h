@@ -399,6 +399,23 @@ extern void rendertexturepanel(int w, int h);
 extern void addundo(undoblock *u);
 extern void commitchanges(bool force = false);
 extern void markworldchunksdirty(const ivec &bbmin, const ivec &bbmax);
+enum
+{
+    WORLD_EDIT_SET_CUBE = 1,
+    WORLD_EDIT_DELETE_CUBE,
+    WORLD_EDIT_SET_MATERIAL,
+    WORLD_EDIT_MOVE_CORNER,
+    WORLD_EDIT_FILL_VOLUME,
+    WORLD_EDIT_DELETE_VOLUME,
+    WORLD_EDIT_PASTE_BLUEPRINT,
+    WORLD_EDIT_DELETE_BLUEPRINT
+};
+extern void beginworldedit(int operation, const selinfo &sel,
+                           int arg1 = 0, int arg2 = 0, int arg3 = 0, int arg4 = 0);
+extern void commitworldedit();
+extern void cancelworldedit();
+extern void setworldeditauthor(int author);
+extern void setworldeditrevision(uint revision);
 extern void changed(const ivec &bbmin, const ivec &bbmax, bool commit = true);
 extern void changedstreaming(const ivec *bbmins, const ivec *bbmaxs, int numregions, bool commit = true);
 extern void changed(const block3 &sel, bool commit = true);

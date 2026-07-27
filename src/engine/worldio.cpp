@@ -6,6 +6,12 @@
 #endif
 #include <errno.h>
 
+#ifdef WIN32
+#define WORLD_ULL_FORMAT "%I64u"
+#else
+#define WORLD_ULL_FORMAT "%llu"
+#endif
+
 void validmapname(char *dst, const char *src, const char *prefix = NULL, const char *alt = "untitled", size_t maxlen = 100)
 {
     if(prefix) while(*prefix) *dst++ = *prefix++;
@@ -98,6 +104,85 @@ enum
     WORLD_MAX_COLUMN_CHANGES = 64,
     WORLD_MAX_SECTION_BATCH = 16,
     WORLD_MAX_SECTION_REGIONS = WORLD_MAX_SECTION_BATCH * 7
+};
+
+enum
+{
+    WORLD_SAVE_FORMAT_VERSION = 1,
+    WORLDGEN_VERSION = 1,
+    WORLD_DIFF_Z = 0,
+    WORLD_DIFF_FRAME_MAX = 64 << 20,
+    WORLD_DIFF_FLUSH_MILLIS = 10000
+};
+
+struct worlddiffnode
+{
+    int x, y, z, size;
+    uchar edges[12];
+    ushort texture[6], material;
+
+    worlddiffnode() : x(0), y(0), z(0), size(0), material(MAT_AIR)
+    {
+        memset(edges, 0, sizeof(edges));
+        loopi(6) texture[i] = DEFAULT_GEOM;
+    }
+};
+
+struct worldeditrecord
+{
+    int chunkx, chunky, chunkz, operation, author;
+    int args[4];
+    ullong revision, timestamp;
+    selinfo selection;
+    vector<worlddiffnode> before, after;
+
+    worldeditrecord()
+        : chunkx(0), chunky(0), chunkz(WORLD_DIFF_Z), operation(0), author(-1),
+          revision(0), timestamp(0)
+    {
+        memset(args, 0, sizeof(args));
+    }
+};
+
+struct worldchunkdiffstate
+{
+    int x, y, z;
+    ullong revision, snapshotrevision;
+    ullong canonicalhash;
+    vector<worldeditrecord *> pending, journal, audit;
+
+    worldchunkdiffstate(int x, int y, int z = WORLD_DIFF_Z)
+        : x(x), y(y), z(z), revision(0), snapshotrevision(0), canonicalhash(0)
+    {
+    }
+
+    ~worldchunkdiffstate()
+    {
+        pending.deletecontents();
+        journal.deletecontents();
+        audit.deletecontents();
+    }
+};
+
+struct worlddiffmetadata
+{
+    int seed, worldgenversion, saveformatversion;
+    ullong parameterhash;
+    bool valid;
+
+    worlddiffmetadata()
+        : seed(0), worldgenversion(0), saveformatversion(0), parameterhash(0), valid(false)
+    {
+    }
+};
+
+struct worldspawnmetadata
+{
+    bool valid;
+    double x, y;
+    float z, yaw, pitch;
+
+    worldspawnmetadata() : valid(false), x(0), y(0), z(0), yaw(0), pitch(0) {}
 };
 
 VARP(maxchunkdist, 2, 3, WORLD_MAX_CHUNK_DIST);
@@ -323,6 +408,7 @@ struct worldchunkjob
     int dirttexture, stonetexture, sandtexture, snowtexture, woodtexture, leaftexture;
     game::worldsettings settings;
     int families, optimized, loaderror;
+    ullong revision, canonicalhash;
     uint epoch, request;
     bool loaded, remip;
     SDL_atomic_t cancelled;
@@ -336,7 +422,8 @@ struct worldchunkjob
           dirttexture(worlddirttexture), stonetexture(worldstonetexture),
           sandtexture(worldsandtexture), snowtexture(worldsnowtexture),
           woodtexture(worldwoodtexture), leaftexture(worldleaftexture),
-          families(0), optimized(0), loaderror(0), epoch(epoch), request(request),
+          families(0), optimized(0), loaderror(0), revision(0), canonicalhash(0),
+          epoch(epoch), request(request),
           loaded(false), remip(chunkremip != 0), root(NULL)
     {
         SDL_AtomicSet(&cancelled, 0);
@@ -346,6 +433,7 @@ struct worldchunkjob
 
 static vector<worldchunk> worldchunks;
 static vector<worldchunkjob *> worldchunkjobs, worldchunkactivejobs, worldchunkresults;
+static vector<worldchunkdiffstate *> worldchunkdiffstates;
 static string worldfolder = "";
 static bool applyloadworlddefaults = false;
 static int activeworldchunk = -1;
@@ -370,6 +458,31 @@ static vector<int> worldchunkvaupdates;
 static hashset<int> worldchunkvaupdateset(1<<14);
 static hashtable<int, worldsectionowner> worldsectionowners(1<<15);
 static float worldchunkvasectionmillis = 2.0f;
+static worlddiffmetadata activeworldmetadata;
+static int worldeditauthor = -1, lastworlddiffflush = 0;
+static ullong worldeditrevision = 0, incomingworldeditrevision = 0;
+static vector<worldeditrecord *> worldredostack;
+
+struct worldeditcapture
+{
+    bool active;
+    int operation, author, args[4];
+    selinfo selection;
+    vector<worldeditrecord *> records;
+
+    worldeditcapture() : active(false), operation(0), author(-1)
+    {
+        memset(args, 0, sizeof(args));
+    }
+
+    void clear()
+    {
+        records.deletecontents();
+        active = false;
+    }
+};
+
+static worldeditcapture currentworldedit;
 
 static void setworldleavesalpha(cube *root, bool enabled)
 {
@@ -408,16 +521,30 @@ VARP(chunksurfaceloaddepth, 0, 3, WORLD_SECTION_LAYERS - 1); // depth in 16-bloc
 VARP(drawfullchunk, 0, 0, 1);
 
 static cube *generateworldchunk(int chunkx, int chunky);
-static cube *loadworldchunkroot(const char *mname, int expectedx, int expectedy);
 static cube *prepareworldchunk(worldchunkjob &job);
 static void freepreparedworldchunk(cube *root);
+static cube *newpreparedfamily(int &families);
 static int worldchunkloader(void *);
 static void shutdownworldchunkloader();
 static void updateworldscatterers();
 static void clearworldscattererentities();
+static int findworldchunk(int x, int y);
+static int remipworldchunk(cube *root, bool prepared, int &families,
+                           SDL_atomic_t *cancelled = NULL);
 static int pruneworldchunkcache(int chunkx, int chunky, int limit);
 static bool saveworldconfig();
 static void worldchunkname(char *name, size_t len, const worldchunk &chunk);
+static worldchunkdiffstate *findworldchunkdiffstate(int x, int y, bool create = false);
+static bool applyworldchunkdiff(cube *root, int x, int y, const char *filename,
+                                bool prepared, int &families,
+                                ullong &revision, ullong &canonicalhash);
+static ullong hashworldchunk(cube *root);
+static void flushworlddiffjournals(bool force = false);
+static bool compactworldchunkdiff(worldchunk &chunk);
+static void shutdownworlddiffwriter();
+static ullong currentworldparameterhash();
+static bool loadworldmetadata(const char *folder, int &chunkx, int &chunky,
+                              worldspawnmetadata &spawn, worlddiffmetadata &metadata);
 void setmapfilenames(const char *fname, const char *cname);
 
 int getworldsectionsize()
@@ -534,6 +661,9 @@ ICOMMAND(getdebugtectoniccave, "", (),
 void clearworldchunks()
 {
     ZoneScopedN("Chunks/Clear all chunks");
+    flushworlddiffjournals(true);
+    shutdownworlddiffwriter();
+    currentworldedit.clear();
     clearworldscattererentities();
     shutdownworldchunkloader();
     worldchunkvaupdates.setsize(0);
@@ -546,7 +676,11 @@ void clearworldchunks()
         freeocta(worldchunks[i].root);
     }
     worldchunks.setsize(0);
+    worldchunkdiffstates.deletecontents();
+    worldredostack.deletecontents();
     worldfolder[0] = '\0';
+    activeworldmetadata = worlddiffmetadata();
+    worldeditrevision = incomingworldeditrevision = 0;
     activeworldchunk = -1;
     worldfirstchunkx = worldfirstchunky = 0;
     lastplayerchunkx = lastplayerchunky = INT_MIN;
@@ -645,6 +779,406 @@ static const cube &lookupworldchunkcube(const worldchunk &chunk, const ivec &pos
         c = &c->children[octastep(pos.x, pos.y, pos.z, scale)];
     }
     return *c;
+}
+
+static worldchunkdiffstate *findworldchunkdiffstate(int x, int y, bool create)
+{
+    loopv(worldchunkdiffstates)
+    {
+        worldchunkdiffstate *state = worldchunkdiffstates[i];
+        if(state->x == x && state->y == y && state->z == WORLD_DIFF_Z) return state;
+    }
+    if(!create) return NULL;
+    return worldchunkdiffstates.add(new worldchunkdiffstate(x, y));
+}
+
+static bool sameworlddiffnode(const worlddiffnode &a, const worlddiffnode &b)
+{
+    return a.x == b.x && a.y == b.y && a.z == b.z && a.size == b.size &&
+           a.material == b.material && !memcmp(a.edges, b.edges, sizeof(a.edges)) &&
+           !memcmp(a.texture, b.texture, sizeof(a.texture));
+}
+
+static void copyworlddiffnode(const cube &c, const ivec &o, int size,
+                              const ivec &chunkorigin, worlddiffnode &node)
+{
+    node.x = o.x - chunkorigin.x;
+    node.y = o.y - chunkorigin.y;
+    node.z = o.z;
+    node.size = size;
+    memcpy(node.edges, c.edges, sizeof(node.edges));
+    memcpy(node.texture, c.texture, sizeof(node.texture));
+    node.material = c.material;
+}
+
+static void captureworlddiffnodes(const cube &c, const ivec &o, int size,
+                                  const ivec &bbmin, const ivec &bbmax,
+                                  const ivec &chunkorigin, vector<worlddiffnode> &nodes)
+{
+    ivec nodeend = ivec(o).add(size);
+    if(nodeend.x <= bbmin.x || nodeend.y <= bbmin.y || nodeend.z <= bbmin.z ||
+       o.x >= bbmax.x || o.y >= bbmax.y || o.z >= bbmax.z)
+        return;
+
+    bool contained = o.x >= bbmin.x && o.y >= bbmin.y && o.z >= bbmin.z &&
+                     nodeend.x <= bbmax.x && nodeend.y <= bbmax.y && nodeend.z <= bbmax.z;
+    if(contained && !c.children)
+    {
+        copyworlddiffnode(c, o, size, chunkorigin, nodes.add());
+        return;
+    }
+    if(size <= 1)
+    {
+        copyworlddiffnode(c, o, size, chunkorigin, nodes.add());
+        return;
+    }
+
+    int childsize = size >> 1;
+    loopi(8)
+    {
+        ivec co(i, o, childsize);
+        captureworlddiffnodes(c.children ? c.children[i] : c, co, childsize,
+                              bbmin, bbmax, chunkorigin, nodes);
+    }
+}
+
+static void captureworlddiffregion(const worldchunk &chunk, const ivec &bbmin,
+                                   const ivec &bbmax, vector<worlddiffnode> &nodes)
+{
+    if(!worldroot || !worldchunkmounted(chunk)) return;
+    ivec chunkorigin = worldchunkorigin(chunk),
+         clipmin(max(bbmin.x, chunkorigin.x), max(bbmin.y, chunkorigin.y),
+                 max(bbmin.z, 0)),
+         clipmax(min(bbmax.x, chunkorigin.x + WORLD_CHUNK_SIZE),
+                 min(bbmax.y, chunkorigin.y + WORLD_CHUNK_SIZE),
+                 min(bbmax.z, int(WORLD_MAP_SIZE)));
+    if(clipmin.x >= clipmax.x || clipmin.y >= clipmax.y || clipmin.z >= clipmax.z) return;
+    int rootsize = worldsize >> 1;
+    loopi(8)
+        captureworlddiffnodes(worldroot[i], ivec(i, ivec(0, 0, 0), rootsize),
+                              rootsize, clipmin, clipmax, chunkorigin, nodes);
+}
+
+static worldeditrecord *cloneworldeditrecord(const worldeditrecord &source)
+{
+    worldeditrecord *copy = new worldeditrecord;
+    copy->chunkx = source.chunkx;
+    copy->chunky = source.chunky;
+    copy->chunkz = source.chunkz;
+    copy->operation = source.operation;
+    copy->author = source.author;
+    memcpy(copy->args, source.args, sizeof(copy->args));
+    copy->revision = source.revision;
+    copy->timestamp = source.timestamp;
+    copy->selection = source.selection;
+    loopv(source.before) copy->before.add(source.before[i]);
+    loopv(source.after) copy->after.add(source.after[i]);
+    return copy;
+}
+
+void setworldeditauthor(int author)
+{
+    worldeditauthor = author;
+}
+
+void setworldeditrevision(uint revision)
+{
+    incomingworldeditrevision = revision;
+}
+
+void cancelworldedit()
+{
+    currentworldedit.clear();
+}
+
+void beginworldedit(int operation, const selinfo &selection,
+                    int arg1, int arg2, int arg3, int arg4)
+{
+    cancelworldedit();
+    if(worldchunks.empty() || activeworldchunk < 0 || selection.s.iszero()) return;
+
+    currentworldedit.active = true;
+    currentworldedit.operation = operation;
+    currentworldedit.author = worldeditauthor;
+    currentworldedit.args[0] = arg1;
+    currentworldedit.args[1] = arg2;
+    currentworldedit.args[2] = arg3;
+    currentworldedit.args[3] = arg4;
+    currentworldedit.selection = selection;
+
+    ivec bbmin = selection.o,
+         bbmax = ivec(selection.s).mul(selection.grid).add(selection.o);
+    loopv(worldchunks)
+    {
+        worldchunk &chunk = worldchunks[i];
+        if(chunk.loading || !chunk.root || !worldchunkmounted(chunk)) continue;
+        ivec origin = worldchunkorigin(chunk);
+        if(bbmax.x <= origin.x || bbmin.x >= origin.x + WORLD_CHUNK_SIZE ||
+           bbmax.y <= origin.y || bbmin.y >= origin.y + WORLD_CHUNK_SIZE ||
+           bbmax.z <= 0 || bbmin.z >= WORLD_MAP_SIZE)
+            continue;
+
+        worldeditrecord *record = currentworldedit.records.add(new worldeditrecord);
+        record->chunkx = chunk.x;
+        record->chunky = chunk.y;
+        record->operation = operation;
+        record->author = currentworldedit.author;
+        memcpy(record->args, currentworldedit.args, sizeof(record->args));
+        record->selection = selection;
+        captureworlddiffregion(chunk, bbmin, bbmax, record->before);
+    }
+}
+
+void commitworldedit()
+{
+    if(!currentworldedit.active) return;
+    ivec bbmin = currentworldedit.selection.o,
+         bbmax = ivec(currentworldedit.selection.s).mul(currentworldedit.selection.grid)
+                                                    .add(currentworldedit.selection.o);
+    ullong timestamp = ullong(time(NULL));
+    ullong revision = incomingworldeditrevision
+                    ? max(worldeditrevision, incomingworldeditrevision)
+                    : worldeditrevision + 1;
+    worldeditrevision = revision;
+    incomingworldeditrevision = 0;
+    loopv(currentworldedit.records)
+    {
+        worldeditrecord *record = currentworldedit.records[i];
+        int chunkindex = findworldchunk(record->chunkx, record->chunky);
+        if(!worldchunks.inrange(chunkindex)) continue;
+        worldchunk &chunk = worldchunks[chunkindex];
+        captureworlddiffregion(chunk, bbmin, bbmax, record->after);
+
+        bool identical = record->before.length() == record->after.length();
+        if(identical) loopvj(record->before)
+            if(!sameworlddiffnode(record->before[j], record->after[j]))
+            {
+                identical = false;
+                break;
+            }
+        if(identical) continue;
+
+        worldchunkdiffstate *state = findworldchunkdiffstate(record->chunkx, record->chunky, true);
+        record->revision = revision;
+        state->revision = max(state->revision, revision);
+        record->timestamp = timestamp;
+        state->pending.add(cloneworldeditrecord(*record));
+        state->journal.add(cloneworldeditrecord(*record));
+        state->audit.add(cloneworldeditrecord(*record));
+        chunk.dirty = true;
+    }
+    currentworldedit.clear();
+}
+
+static void worlddiffput32(vector<uchar> &out, uint value)
+{
+    loopi(4) out.add(uchar(value >> (i * 8)));
+}
+
+static void worlddiffput64(vector<uchar> &out, ullong value)
+{
+    loopi(8) out.add(uchar(value >> (i * 8)));
+}
+
+static void worlddiffputbytes(vector<uchar> &out, const void *data, int length)
+{
+    out.put((const uchar *)data, length);
+}
+
+static uint worlddiffchecksum(const uchar *data, int length)
+{
+    uint hash = 2166136261U;
+    loopi(length)
+    {
+        hash ^= data[i];
+        hash *= 16777619U;
+    }
+    return hash;
+}
+
+static void serializeworlddiffnode(vector<uchar> &out, const worlddiffnode &node)
+{
+    worlddiffput32(out, uint(node.x));
+    worlddiffput32(out, uint(node.y));
+    worlddiffput32(out, uint(node.z));
+    worlddiffput32(out, uint(node.size));
+    worlddiffputbytes(out, node.edges, sizeof(node.edges));
+    loopi(6)
+    {
+        out.add(uchar(node.texture[i]));
+        out.add(uchar(node.texture[i] >> 8));
+    }
+    out.add(uchar(node.material));
+    out.add(uchar(node.material >> 8));
+}
+
+static void serializeworldeditrecord(vector<uchar> &out, const worldeditrecord &record)
+{
+    vector<uchar> body;
+    worlddiffput32(body, uint(record.chunkx));
+    worlddiffput32(body, uint(record.chunky));
+    worlddiffput32(body, uint(record.chunkz));
+    worlddiffput64(body, record.revision);
+    worlddiffput64(body, record.timestamp);
+    worlddiffput32(body, uint(record.author));
+    worlddiffput32(body, uint(record.operation));
+    worlddiffput32(body, uint(record.selection.o.x));
+    worlddiffput32(body, uint(record.selection.o.y));
+    worlddiffput32(body, uint(record.selection.o.z));
+    worlddiffput32(body, uint(record.selection.s.x));
+    worlddiffput32(body, uint(record.selection.s.y));
+    worlddiffput32(body, uint(record.selection.s.z));
+    worlddiffput32(body, uint(record.selection.grid));
+    worlddiffput32(body, uint(record.selection.orient));
+    worlddiffput32(body, uint(record.selection.corner));
+    loopi(4) worlddiffput32(body, uint(record.args[i]));
+    worlddiffput32(body, uint(record.before.length()));
+    loopv(record.before) serializeworlddiffnode(body, record.before[i]);
+    worlddiffput32(body, uint(record.after.length()));
+    loopv(record.after) serializeworlddiffnode(body, record.after[i]);
+    worlddiffput32(out, uint(body.length()));
+    worlddiffput32(out, worlddiffchecksum(body.getbuf(), body.length()));
+    worlddiffputbytes(out, body.getbuf(), body.length());
+}
+
+static void makeworlddiffframe(vector<uchar> &frame, uchar type, int chunkx, int chunky,
+                               const vector<worldeditrecord *> &records,
+                               ullong expectedhash = 0)
+{
+    vector<uchar> payload;
+    payload.add(type);
+    worlddiffput32(payload, WORLD_SAVE_FORMAT_VERSION);
+    worlddiffput32(payload, WORLDGEN_VERSION);
+    worlddiffput32(payload, uint(chunkx));
+    worlddiffput32(payload, uint(chunky));
+    worlddiffput32(payload, WORLD_DIFF_Z);
+    worlddiffput64(payload, expectedhash);
+    worlddiffput32(payload, uint(records.length()));
+    loopv(records) serializeworldeditrecord(payload, *records[i]);
+
+    worlddiffputbytes(frame, "CDF1", 4);
+    worlddiffput32(frame, uint(payload.length()));
+    worlddiffput32(frame, worlddiffchecksum(payload.getbuf(), payload.length()));
+    worlddiffputbytes(frame, payload.getbuf(), payload.length());
+}
+
+struct worlddiffflushjob
+{
+    string filename, auditfilename;
+    int chunkx, chunky;
+    vector<worldeditrecord *> records;
+
+    worlddiffflushjob() : chunkx(0), chunky(0) {}
+    ~worlddiffflushjob() { records.deletecontents(); }
+};
+
+static vector<worlddiffflushjob *> worlddiffflushjobs;
+static SDL_mutex *worlddiffwritermutex = NULL;
+static SDL_cond *worlddiffwritercond = NULL;
+static SDL_Thread *worlddiffwriterthread = NULL;
+static bool stopworlddiffwriter = false;
+
+static bool appendworlddiffbytes(const char *filename, const vector<uchar> &bytes)
+{
+    stream *file = openrawfile(filename, "ab");
+    if(!file) return false;
+    bool written = file->write(bytes.getbuf(), bytes.length()) == size_t(bytes.length());
+    delete file;
+    return written;
+}
+
+static int worlddiffwriter(void *)
+{
+#ifdef TRACY_ENABLE
+    tracy::SetThreadName("World diff writer");
+#endif
+    for(;;)
+    {
+        SDL_LockMutex(worlddiffwritermutex);
+        while(worlddiffflushjobs.empty() && !stopworlddiffwriter)
+            SDL_CondWait(worlddiffwritercond, worlddiffwritermutex);
+        if(worlddiffflushjobs.empty() && stopworlddiffwriter)
+        {
+            SDL_UnlockMutex(worlddiffwritermutex);
+            break;
+        }
+        worlddiffflushjob *job = worlddiffflushjobs.remove(0);
+        SDL_UnlockMutex(worlddiffwritermutex);
+
+        vector<uchar> frame;
+        makeworlddiffframe(frame, 2, job->chunkx, job->chunky, job->records);
+        if(!appendworlddiffbytes(job->filename, frame))
+            conoutf(CON_ERROR, "could not append chunk diff journal %s", job->filename);
+        if(!appendworlddiffbytes(job->auditfilename, frame))
+            conoutf(CON_ERROR, "could not append world audit journal %s", job->auditfilename);
+        delete job;
+    }
+    return 0;
+}
+
+static bool startworlddiffwriter()
+{
+    if(worlddiffwriterthread) return true;
+    worlddiffwritermutex = SDL_CreateMutex();
+    worlddiffwritercond = SDL_CreateCond();
+    stopworlddiffwriter = false;
+    if(!worlddiffwritermutex || !worlddiffwritercond) return false;
+    worlddiffwriterthread = SDL_CreateThread(worlddiffwriter, "world diff writer", NULL);
+    return worlddiffwriterthread != NULL;
+}
+
+static void queueworlddiffflush(worldchunkdiffstate &state, vector<worldeditrecord *> &records)
+{
+    if(records.empty() || !startworlddiffwriter()) return;
+    worlddiffflushjob *job = new worlddiffflushjob;
+    defformatstring(relative, "media/map/%s/chunks/%d_%d_%d.diff",
+                    worldfolder, state.x, state.y, state.z);
+    copystring(job->filename, path(relative));
+    defformatstring(auditrelative, "media/map/%s/audit.log", worldfolder);
+    copystring(job->auditfilename, path(auditrelative));
+    job->chunkx = state.x;
+    job->chunky = state.y;
+    job->records.move(records);
+
+    SDL_LockMutex(worlddiffwritermutex);
+    worlddiffflushjobs.add(job);
+    SDL_CondSignal(worlddiffwritercond);
+    SDL_UnlockMutex(worlddiffwritermutex);
+}
+
+static void flushworlddiffjournals(bool force)
+{
+    if(worldfolder[0] == '\0') return;
+    if(!force && totalmillis - lastworlddiffflush < WORLD_DIFF_FLUSH_MILLIS) return;
+    lastworlddiffflush = totalmillis;
+    loopv(worldchunkdiffstates)
+    {
+        worldchunkdiffstate &state = *worldchunkdiffstates[i];
+        if(state.pending.empty()) continue;
+        vector<worldeditrecord *> flush;
+        if(worlddiffwritermutex) SDL_LockMutex(worlddiffwritermutex);
+        flush.move(state.pending);
+        if(worlddiffwritermutex) SDL_UnlockMutex(worlddiffwritermutex);
+        queueworlddiffflush(state, flush);
+        flush.deletecontents();
+    }
+}
+
+static void shutdownworlddiffwriter()
+{
+    if(!worlddiffwriterthread) return;
+    SDL_LockMutex(worlddiffwritermutex);
+    stopworlddiffwriter = true;
+    SDL_CondBroadcast(worlddiffwritercond);
+    SDL_UnlockMutex(worlddiffwritermutex);
+    SDL_WaitThread(worlddiffwriterthread, NULL);
+    worlddiffwriterthread = NULL;
+    worlddiffflushjobs.deletecontents();
+    SDL_DestroyCond(worlddiffwritercond);
+    SDL_DestroyMutex(worlddiffwritermutex);
+    worlddiffwritercond = NULL;
+    worlddiffwritermutex = NULL;
+    stopworlddiffwriter = false;
 }
 
 static bool worldcubehascontent(const cube &c)
@@ -757,19 +1291,6 @@ static bool syncmountedworldchunk(worldchunk &chunk)
         }
         pasteworldcube(lookupcube(runtimepos, WORLD_SECTION_SIZE),
                        lookupworldchunkcube(chunk, pos, WORLD_SECTION_SIZE));
-    }
-    return valid;
-}
-
-static bool syncmountedworldchunks()
-{
-    if(worldchunks.empty() || !worldroot) return true;
-    bool valid = true;
-    loopv(worldchunks)
-    {
-        if(worldchunks[i].corrupted) valid = false;
-        if(!worldchunks[i].saved || worldchunks[i].dirty)
-            valid &= syncmountedworldchunk(worldchunks[i]);
     }
     return valid;
 }
@@ -1156,17 +1677,27 @@ static int acquireworldchunksync(int x, int y, int &generated)
 
     ZoneScopedN("Chunks/Load synchronous");
     ZoneTextF("%d_%d", x, y);
-    defformatstring(chunkname, "%s/%d_%d", worldfolder, x, y);
-    // loadworldchunkroot() resolves the configured home and package paths.
-    // A direct fileexists() on the relative media path misses saved chunks
-    // when the game was launched with -u, causing them to be regenerated.
-    cube *root = loadworldchunkroot(chunkname, x, y);
-    bool loaded = root != NULL;
-    if(!root)
+    defformatstring(diffname, "media/map/%s/chunks/%d_%d_%d.diff",
+                    worldfolder, x, y, WORLD_DIFF_Z);
+    path(diffname);
+    const char *found = findfile(diffname, "rb");
+    string diffpath;
+    diffpath[0] = '\0';
+    if(found && fileexists(found, "r")) copystring(diffpath, diffname);
+    cube *root = generateworldchunk(x, y);
+    bool loaded = diffpath[0] != '\0';
+    if(root && loaded)
     {
-        root = generateworldchunk(x, y);
-        generated++;
+        int families = 0;
+        ullong revision = 0, canonicalhash = 0;
+        applyworldchunkdiff(root, x, y, diffpath, false, families, revision, canonicalhash);
+        if(chunkremip) remipworldchunk(root, false, families);
+        worldchunkdiffstate *state = findworldchunkdiffstate(x, y, true);
+        state->revision = revision;
+        worldeditrevision = max(worldeditrevision, revision);
+        state->canonicalhash = hashworldchunk(root);
     }
+    else generated++;
     worldchunks.add(worldchunk(x, y, root, false, loaded));
     return worldchunks.length() - 1;
 }
@@ -1214,11 +1745,12 @@ static int queueworldchunk(int x, int y)
     uint request = ++worldchunkrequest;
     if(!request) request = ++worldchunkrequest;
     worldchunkjob *job = new worldchunkjob(x, y, worldchunkepoch, request);
-    defformatstring(chunkfile, "media/map/%s/%d_%d.ogz", worldfolder, x, y);
+    defformatstring(chunkfile, "media/map/%s/chunks/%d_%d_%d.diff",
+                    worldfolder, x, y, WORLD_DIFF_Z);
     path(chunkfile);
     const char *found = findfile(chunkfile, "rb");
     if(found && fileexists(found, "r"))
-        copystring(job->filename, found);
+        copystring(job->filename, chunkfile);
 
     worldchunk &chunk = worldchunks.add(worldchunk(x, y, NULL, true));
     chunk.request = request;
@@ -1423,6 +1955,10 @@ static int processworldchunkresults()
             chunk.loading = false;
             chunk.saved = job->loaded;
             chunk.dirty = false;
+            worldchunkdiffstate *diffstate = findworldchunkdiffstate(chunk.x, chunk.y, true);
+            diffstate->revision = max(diffstate->revision, job->revision);
+            worldeditrevision = max(worldeditrevision, job->revision);
+            diffstate->canonicalhash = job->canonicalhash;
             allocnodes += job->families;
             if(!job->loaded && job->filename[0])
                 conoutf(CON_WARN, "asynchronous load of chunk %d_%d failed at stage %d; regenerated it",
@@ -2026,6 +2562,7 @@ void updateworldchunks(bool force)
 {
     if(worldchunks.empty() || rebuildingworldchunks || !worldroot) return;
     ZoneScopedN("Chunks/Update world chunks");
+    flushworlddiffjournals(false);
 
     int localchunkx = 0, localchunky = 0;
     if(player)
@@ -2434,7 +2971,7 @@ static bool remipworldchunk(cube &c, const ivec &co, int size, cube *root,
     return true;
 }
 
-static int remipworldchunk(cube *root, bool prepared, int &families, SDL_atomic_t *cancelled = NULL)
+static int remipworldchunk(cube *root, bool prepared, int &families, SDL_atomic_t *cancelled)
 {
     int merged = 0;
     loopi(8)
@@ -3847,83 +4384,6 @@ cube *loadchildren(stream *f, const ivec &co, int size, bool &failed)
     return c;
 }
 
-static cube *loadworldchunkroot(const char *mname, int expectedx, int expectedy)
-{
-    ZoneScopedN("Chunks/Load from disk");
-    ZoneText(mname, strlen(mname));
-    string name;
-    validmapname(name, mname);
-    defformatstring(filename, "media/map/%s.ogz", name);
-    path(filename);
-    stream *f;
-    {
-        ZoneScopedN("Chunks/Open chunk file");
-        f = openrawfile(filename, "rb");
-    }
-    if(!f) return NULL;
-
-    mapheader hdr;
-    {
-        ZoneScopedN("Chunks/Read chunk header");
-        bool headerok = loadmapheader(f, filename, hdr);
-        if(!headerok || hdr.worldsize != WORLD_CHUNK_MAP_SIZE ||
-           hdr.chunkx != expectedx || hdr.chunky != expectedy)
-        {
-            if(headerok && (hdr.chunkx != expectedx || hdr.chunky != expectedy))
-                conoutf(CON_ERROR, "chunk file %s identifies itself as %d_%d, expected %d_%d",
-                        filename, hdr.chunkx, hdr.chunky, expectedx, expectedy);
-            delete f;
-            return NULL;
-        }
-    }
-
-    bool failed = false;
-    cube *root;
-    {
-        ZoneScopedN("Chunks/Decode octree synchronous");
-        root = loadchildren(f, ivec(0, 0, 0), WORLD_CHUNK_ROOT_SIZE, failed);
-    }
-    {
-        ZoneScopedN("Chunks/Close chunk file");
-        delete f;
-    }
-    if(failed)
-    {
-        ZoneScopedN("Chunks/Free failed octree");
-        freeocta(root);
-        return NULL;
-    }
-    setworldleavesalpha(root, leavesalpha != 0);
-    return root;
-}
-
-struct worldchunkmemorystream : stream
-{
-    const uchar *data;
-    size_t length, pos;
-
-    worldchunkmemorystream(const uchar *data, size_t length) : data(data), length(length), pos(0) {}
-    void close() { pos = length; }
-    bool end() { return pos >= length; }
-    offset tell() { return pos; }
-    offset size() { return length; }
-    bool seek(offset off, int whence)
-    {
-        offset target = whence == SEEK_CUR ? offset(pos) + off :
-                        whence == SEEK_END ? offset(length) + off : off;
-        if(target < 0 || target > offset(length)) return false;
-        pos = size_t(target);
-        return true;
-    }
-    size_t read(void *dst, size_t len)
-    {
-        len = min(len, length - pos);
-        if(len) memcpy(dst, data + pos, len);
-        pos += len;
-        return len;
-    }
-};
-
 static cube *newpreparedfamily(int &families)
 {
     cube *c = new cube[8];
@@ -3960,147 +4420,478 @@ struct worldchunkreader
         pos += length;
         return true;
     }
+
+    bool readuint(uint &value)
+    {
+        if(end - pos < 4) return false;
+        value = uint(pos[0]) | (uint(pos[1]) << 8) | (uint(pos[2]) << 16) |
+                (uint(pos[3]) << 24);
+        pos += 4;
+        return true;
+    }
+
+    bool readullong(ullong &value)
+    {
+        if(end - pos < 8) return false;
+        value = 0;
+        loopi(8) value |= ullong(pos[i]) << (i * 8);
+        pos += 8;
+        return true;
+    }
+
+    int remaining() const { return int(end - pos); }
 };
 
-static cube *loadpreparedchildren(worldchunkreader &input, int &families, bool &failed, int &loaderror);
-
-static void loadpreparedcube(worldchunkreader &input, cube &c,
-                             int &families, bool &failed, int &loaderror)
+static void subdivideworlddiffcube(cube &c, bool prepared, int &families)
 {
-    uchar octsav;
-    if(!input.readbyte(octsav) || octsav & ~0x47) { failed = true; loaderror = 3; return; }
-    switch(octsav & 0x7)
-    {
-        case OCTSAV_CHILDREN:
-            if(octsav != OCTSAV_CHILDREN) { failed = true; loaderror = 3; return; }
-            c.children = loadpreparedchildren(input, families, failed, loaderror);
-            return;
-
-        case OCTSAV_EMPTY:  emptyfaces(c);        break;
-        case OCTSAV_SOLID:  solidfaces(c);        break;
-        case OCTSAV_NORMAL:
-            if(!input.read(c.edges, sizeof(c.edges))) { failed = true; loaderror = 3; return; }
-            break;
-
-        default:
-            failed = true;
-            loaderror = 3;
-            return;
-    }
-
-    if((octsav & 0x7) != OCTSAV_EMPTY) loopi(6)
-    {
-        if(!input.readushort(c.texture[i])) { failed = true; loaderror = 3; return; }
-    }
-    if((octsav & 0x40) && !input.readushort(c.material))
-    {
-        failed = true;
-        loaderror = 3;
-    }
-}
-
-static cube *loadpreparedchildren(worldchunkreader &input, int &families, bool &failed, int &loaderror)
-{
-    cube *c = newpreparedfamily(families);
+    if(c.children) return;
+    cube parent = c;
+    c.children = prepared ? newpreparedfamily(families) : newcubes(F_EMPTY);
     loopi(8)
     {
-        loadpreparedcube(input, c[i], families, failed, loaderror);
-        if(failed) break;
+        cube &child = c.children[i];
+        memcpy(child.edges, parent.edges, sizeof(child.edges));
+        memcpy(child.texture, parent.texture, sizeof(child.texture));
+        child.material = parent.material;
+        child.visible = child.merged = 0;
+        child.ext = NULL;
+        child.children = NULL;
     }
-    return c;
 }
 
-static cube *loadpreparedworldchunk(const char *filename, int expectedx, int expectedy,
-                                    bool remip, int &families, int &optimized, int &loaderror)
+static void applyworlddiffnode(cube *root, const worlddiffnode &node,
+                               bool prepared, int &families)
 {
-    ZoneScopedN("Chunks/Load prepared from disk");
-    ZoneText(filename, strlen(filename));
-    vector<uchar> contents;
+    if(!root || node.size <= 0 || (node.size & (node.size - 1)) ||
+       node.x < 0 || node.y < 0 || node.z < 0 ||
+       node.x + node.size > WORLD_CHUNK_MAP_SIZE ||
+       node.y + node.size > WORLD_CHUNK_MAP_SIZE ||
+       node.z + node.size > WORLD_CHUNK_MAP_SIZE)
+        return;
+
+    ivec pos(node.x, node.y, node.z);
+    int scale = WORLD_CHUNK_SCALE - 1;
+    cube *c = &root[octastep(pos.x, pos.y, pos.z, scale)];
+    while((1 << scale) > node.size)
     {
-        ZoneScopedN("Chunks/Read raw chunk bytes");
-        stream *file = openrawfile(filename, "rb");
-        if(!file) { loaderror = 1; return NULL; }
-        stream::offset length = file->size();
-        if(length < stream::offset(sizeof(mapheader)) || length > INT_MAX)
-        {
-            delete file;
-            loaderror = 1;
-            return NULL;
-        }
-        uchar *dst = contents.pad(int(length));
-        if(file->read(dst, size_t(length)) != size_t(length))
-        {
-            delete file;
-            loaderror = 1;
-            return NULL;
-        }
+        subdivideworlddiffcube(*c, prepared, families);
+        --scale;
+        c = &c->children[octastep(pos.x, pos.y, pos.z, scale)];
+    }
+    if(c->children)
+    {
+        if(prepared) freepreparedworldchunk(c->children);
+        else discardchildren(*c);
+        c->children = NULL;
+    }
+    memcpy(c->edges, node.edges, sizeof(node.edges));
+    memcpy(c->texture, node.texture, sizeof(node.texture));
+    c->material = node.material;
+    c->visible = c->merged = 0;
+    c->ext = NULL;
+}
+
+static bool deserializeworlddiffnode(worldchunkreader &reader, worlddiffnode &node)
+{
+    uint value;
+    if(!reader.readuint(value)) return false;
+    node.x = int(value);
+    if(!reader.readuint(value)) return false;
+    node.y = int(value);
+    if(!reader.readuint(value)) return false;
+    node.z = int(value);
+    if(!reader.readuint(value)) return false;
+    node.size = int(value);
+    if(!reader.read(node.edges, sizeof(node.edges))) return false;
+    loopi(6) if(!reader.readushort(node.texture[i])) return false;
+    return reader.readushort(node.material);
+}
+
+static bool deserializeworldeditrecord(worldchunkreader &reader, worldeditrecord &record)
+{
+    uint length, checksum;
+    if(!reader.readuint(length) || !reader.readuint(checksum) ||
+       length > uint(reader.remaining()))
+        return false;
+    const uchar *recordbytes = reader.pos;
+    worldchunkreader body(recordbytes, length);
+    reader.pos += length;
+    if(worlddiffchecksum(recordbytes, length) != checksum) return false;
+
+    uint value, count;
+    if(!body.readuint(value)) return false;
+    record.chunkx = int(value);
+    if(!body.readuint(value)) return false;
+    record.chunky = int(value);
+    if(!body.readuint(value)) return false;
+    record.chunkz = int(value);
+    if(!body.readullong(record.revision) || !body.readullong(record.timestamp)) return false;
+    if(!body.readuint(value)) return false;
+    record.author = int(value);
+    if(!body.readuint(value)) return false;
+    record.operation = int(value);
+    if(!body.readuint(value)) return false;
+    record.selection.o.x = int(value);
+    if(!body.readuint(value)) return false;
+    record.selection.o.y = int(value);
+    if(!body.readuint(value)) return false;
+    record.selection.o.z = int(value);
+    if(!body.readuint(value)) return false;
+    record.selection.s.x = int(value);
+    if(!body.readuint(value)) return false;
+    record.selection.s.y = int(value);
+    if(!body.readuint(value)) return false;
+    record.selection.s.z = int(value);
+    if(!body.readuint(value)) return false;
+    record.selection.grid = int(value);
+    if(!body.readuint(value)) return false;
+    record.selection.orient = int(value);
+    if(!body.readuint(value)) return false;
+    record.selection.corner = int(value);
+    loopi(4)
+    {
+        if(!body.readuint(value)) return false;
+        record.args[i] = int(value);
+    }
+    if(!body.readuint(count) || count > uint(body.remaining() / 42)) return false;
+    loopi(count) if(!deserializeworlddiffnode(body, record.before.add())) return false;
+    if(!body.readuint(count) || count > uint(body.remaining() / 42)) return false;
+    loopi(count) if(!deserializeworlddiffnode(body, record.after.add())) return false;
+    return body.remaining() == 0;
+}
+
+static ullong hashworlddiffbytes(ullong hash, const void *data, int length)
+{
+    const uchar *bytes = (const uchar *)data;
+    loopi(length)
+    {
+        hash ^= bytes[i];
+        hash *= 1099511628211ULL;
+    }
+    return hash;
+}
+
+static ullong hashworlddiffcube(const cube &c, ullong hash)
+{
+    uchar children = c.children ? 1 : 0;
+    hash = hashworlddiffbytes(hash, &children, sizeof(children));
+    if(c.children)
+    {
+        loopi(8) hash = hashworlddiffcube(c.children[i], hash);
+        return hash;
+    }
+    hash = hashworlddiffbytes(hash, c.edges, sizeof(c.edges));
+    hash = hashworlddiffbytes(hash, c.texture, sizeof(c.texture));
+    return hashworlddiffbytes(hash, &c.material, sizeof(c.material));
+}
+
+static ullong hashworldchunk(cube *root)
+{
+    ullong hash = 1469598103934665603ULL;
+    loopi(8) hash = hashworlddiffcube(root[i], hash);
+    return hash;
+}
+
+static bool sameworldcubeleaf(const cube &a, const cube &b)
+{
+    return !a.children && !b.children && a.material == b.material &&
+           !memcmp(a.edges, b.edges, sizeof(a.edges)) &&
+           !memcmp(a.texture, b.texture, sizeof(a.texture));
+}
+
+static bool worldsubtreematchesleaf(const cube &tree, const cube &leaf)
+{
+    if(!tree.children) return sameworldcubeleaf(tree, leaf);
+    loopi(8) if(!worldsubtreematchesleaf(tree.children[i], leaf)) return false;
+    return true;
+}
+
+static void collectworldchunkoverrides(const cube &current, const cube &base,
+                                       const ivec &o, int size,
+                                       vector<worlddiffnode> &overrides)
+{
+    if(!current.children)
+    {
+        if((!base.children && sameworldcubeleaf(current, base)) ||
+           (base.children && worldsubtreematchesleaf(base, current)))
+            return;
+        copyworlddiffnode(current, o, size, ivec(0, 0, 0), overrides.add());
+        return;
+    }
+    if(!base.children)
+    {
+        if(worldsubtreematchesleaf(current, base)) return;
+        int childsize = size >> 1;
+        loopi(8)
+            collectworldchunkoverrides(current.children[i], base,
+                                       ivec(i, o, childsize), childsize, overrides);
+        return;
+    }
+    int childsize = size >> 1;
+    loopi(8)
+        collectworldchunkoverrides(current.children[i], base.children[i],
+                                   ivec(i, o, childsize), childsize, overrides);
+}
+
+static bool applyworldchunkdiff(cube *root, int x, int y, const char *filename,
+                                bool prepared, int &families,
+                                ullong &revision, ullong &canonicalhash)
+{
+    revision = canonicalhash = 0;
+    if(!filename || !*filename)
+    {
+        canonicalhash = hashworldchunk(root);
+        return true;
+    }
+    stream *file = openrawfile(filename, "rb");
+    if(!file)
+    {
+        canonicalhash = hashworldchunk(root);
+        conoutf(CON_WARN, "could not open chunk diff %s", filename);
+        return false;
+    }
+    stream::offset filelength = file->size();
+    if(filelength <= 0 || filelength > INT_MAX)
+    {
         delete file;
-        ZoneValue(length);
+        canonicalhash = hashworldchunk(root);
+        return false;
     }
-    worldchunkmemorystream input(contents.getbuf(), contents.length());
-    stream *f = &input;
-    mapheader hdr;
-    bool failed;
+    vector<uchar> contents;
+    uchar *dst = contents.pad(int(filelength));
+    bool readok = file->read(dst, size_t(filelength)) == size_t(filelength);
+    delete file;
+    if(!readok)
     {
-        ZoneScopedN("Chunks/Read chunk header");
-        bool headerok = loadmapheader(f, filename, hdr);
-        failed = !headerok || hdr.worldsize != WORLD_CHUNK_MAP_SIZE;
-        if(headerok && (hdr.chunkx != expectedx || hdr.chunky != expectedy))
+        canonicalhash = hashworldchunk(root);
+        return false;
+    }
+
+    worldchunkreader reader(contents.getbuf(), contents.length());
+    bool valid = true;
+    ullong expectedhash = 0;
+    while(reader.remaining() >= 12)
+    {
+        char magic[4];
+        uint length, checksum;
+        if(!reader.read(magic, sizeof(magic)) || memcmp(magic, "CDF1", 4) ||
+           !reader.readuint(length) || !reader.readuint(checksum) ||
+           length > WORLD_DIFF_FRAME_MAX || length > uint(reader.remaining()))
         {
-            conoutf(CON_ERROR, "chunk file %s identifies itself as %d_%d, expected %d_%d",
-                    filename, hdr.chunkx, hdr.chunky, expectedx, expectedy);
-            failed = true;
-            loaderror = 4;
+            valid = false;
+            break;
         }
-        else if(failed) loaderror = 2;
-    }
-    worldchunkreader reader(contents.getbuf() + input.tell(), contents.length() - input.tell());
-    cube *root = NULL;
-    if(!failed)
-    {
-        ZoneScopedN("Chunks/Decode prepared octree");
-        root = loadpreparedchildren(reader, families, failed, loaderror);
-        ZoneValue(families);
-    }
-    if(failed)
-    {
+        const uchar *payloadbytes = reader.pos;
+        reader.pos += length;
+        if(worlddiffchecksum(payloadbytes, length) != checksum)
         {
-            ZoneScopedN("Chunks/Free failed octree");
-            freepreparedworldchunk(root);
+            valid = false;
+            continue;
         }
-        families = 0;
-        return NULL;
+        worldchunkreader payload(payloadbytes, length);
+        uchar type;
+        uint saveversion, genversion, chunkx, chunky, chunkz, count;
+        ullong framehash;
+        if(!payload.readbyte(type) || !payload.readuint(saveversion) ||
+           !payload.readuint(genversion) || !payload.readuint(chunkx) ||
+           !payload.readuint(chunky) || !payload.readuint(chunkz) ||
+           !payload.readullong(framehash) ||
+           !payload.readuint(count) ||
+           saveversion != WORLD_SAVE_FORMAT_VERSION ||
+           genversion != WORLDGEN_VERSION || int(chunkx) != x || int(chunky) != y ||
+           int(chunkz) != WORLD_DIFF_Z || (type != 1 && type != 2) ||
+           count > 1000000U)
+        {
+            valid = false;
+            continue;
+        }
+        if(framehash) expectedhash = framehash;
+        else if(type == 2 && count) expectedhash = 0;
+        loopi(count)
+        {
+            worldeditrecord record;
+            if(!deserializeworldeditrecord(payload, record) ||
+               record.chunkx != x || record.chunky != y ||
+               record.chunkz != WORLD_DIFF_Z || record.revision <= revision)
+            {
+                valid = false;
+                break;
+            }
+            loopv(record.after) applyworlddiffnode(root, record.after[i], prepared, families);
+            revision = record.revision;
+        }
+        if(payload.remaining()) valid = false;
     }
-    setworldleavesalpha(root, leavesalpha != 0);
-    if(remip)
+    if(reader.remaining()) valid = false;
+    canonicalhash = hashworldchunk(root);
+    if(expectedhash && canonicalhash != expectedhash)
     {
-        ZoneScopedN("Chunks/Remip loaded octree");
-        optimized = remipworldchunk(root, true, families);
-        ZoneValue(optimized);
+        valid = false;
+        conoutf(CON_ERROR,
+                "chunk diff %s reconstructed hash " WORLD_ULL_FORMAT
+                " but expected " WORLD_ULL_FORMAT,
+                filename, canonicalhash, expectedhash);
     }
-    else optimized = 0;
-    return root;
+    if(!valid)
+        conoutf(CON_WARN, "chunk diff %s has an incomplete or corrupt frame; valid revisions were recovered",
+                filename);
+    return valid;
+}
+
+static bool compactworldchunkdiff(worldchunk &chunk)
+{
+    if(!chunk.root || chunk.loading || chunk.corrupted) return false;
+    flushworlddiffjournals(true);
+    shutdownworlddiffwriter();
+    if(worldchunkmounted(chunk) && !syncmountedworldchunk(chunk)) return false;
+
+    cube *base = generateworldchunk(chunk.x, chunk.y);
+    if(!base) return false;
+    int families = 0;
+    if(chunkremip)
+    {
+        remipworldchunk(chunk.root, false, families);
+        remipworldchunk(base, false, families);
+    }
+
+    vector<worlddiffnode> overrides;
+    loopi(8)
+        collectworldchunkoverrides(chunk.root[i], base[i],
+                                   ivec(i, ivec(0, 0, 0), WORLD_CHUNK_ROOT_SIZE),
+                                   WORLD_CHUNK_ROOT_SIZE, overrides);
+    ullong finalhash = hashworldchunk(chunk.root);
+    freeocta(base);
+
+    defformatstring(relative, "media/map/%s/chunks/%d_%d_%d.diff",
+                    worldfolder, chunk.x, chunk.y, WORLD_DIFF_Z);
+    path(relative);
+    string finalpath;
+    copystring(finalpath, findfile(relative, "wb"));
+    worldchunkdiffstate *state = findworldchunkdiffstate(chunk.x, chunk.y, true);
+    if(overrides.empty())
+    {
+        remove(finalpath);
+        state->journal.deletecontents();
+        state->snapshotrevision = state->revision;
+        state->canonicalhash = finalhash;
+        chunk.saved = true;
+        chunk.dirty = false;
+        conoutf("chunk %d %d matches its generated base; removed its override",
+                chunk.x, chunk.y);
+        return true;
+    }
+
+    worldeditrecord snapshot;
+    snapshot.chunkx = chunk.x;
+    snapshot.chunky = chunk.y;
+    snapshot.operation = WORLD_EDIT_SET_CUBE;
+    snapshot.author = -1;
+    snapshot.revision = state->revision;
+    snapshot.timestamp = ullong(time(NULL));
+    snapshot.after.move(overrides);
+    vector<worldeditrecord *> records;
+    records.add(&snapshot);
+    vector<uchar> frame;
+    makeworlddiffframe(frame, 1, chunk.x, chunk.y, records, finalhash);
+
+    defformatstring(temprelative, "%s.tmp", relative);
+    string temppath;
+    copystring(temppath, findfile(temprelative, "wb"));
+    stream *file = openrawfile(temprelative, "wb");
+    bool written = file && file->write(frame.getbuf(), frame.length()) == size_t(frame.length());
+    delete file;
+    if(!written)
+    {
+        remove(temppath);
+        conoutf(CON_ERROR, "could not write compacted chunk diff %s", temppath);
+        return false;
+    }
+    if(rename(temppath, finalpath))
+    {
+        remove(finalpath);
+        if(rename(temppath, finalpath))
+        {
+            remove(temppath);
+            conoutf(CON_ERROR, "could not atomically publish compacted chunk diff %s", finalpath);
+            return false;
+        }
+    }
+    state->journal.deletecontents();
+    state->snapshotrevision = state->revision;
+    state->canonicalhash = finalhash;
+    chunk.saved = true;
+    chunk.dirty = false;
+    conoutf("compacted chunk %d %d to %d sparse overrides (%d bytes)",
+            chunk.x, chunk.y, snapshot.after.length(), frame.length());
+    return true;
+}
+
+static void loadworldauditlog()
+{
+    defformatstring(relative, "media/map/%s/audit.log", worldfolder);
+    stream *file = openfile(path(relative), "rb");
+    if(!file) return;
+    stream::offset length = file->size();
+    if(length <= 0 || length > INT_MAX)
+    {
+        delete file;
+        return;
+    }
+    vector<uchar> contents;
+    uchar *bytes = contents.pad(int(length));
+    bool readok = file->read(bytes, size_t(length)) == size_t(length);
+    delete file;
+    if(!readok) return;
+
+    worldchunkreader reader(contents.getbuf(), contents.length());
+    while(reader.remaining() >= 12)
+    {
+        char magic[4];
+        uint framelength, framechecksum;
+        if(!reader.read(magic, sizeof(magic)) || memcmp(magic, "CDF1", 4) ||
+           !reader.readuint(framelength) || !reader.readuint(framechecksum) ||
+           framelength > WORLD_DIFF_FRAME_MAX || framelength > uint(reader.remaining()))
+            break;
+        const uchar *payloadbytes = reader.pos;
+        reader.pos += framelength;
+        if(worlddiffchecksum(payloadbytes, framelength) != framechecksum) continue;
+        worldchunkreader payload(payloadbytes, framelength);
+        uchar type;
+        uint saveversion, genversion, chunkx, chunky, chunkz, count;
+        ullong ignoredhash;
+        if(!payload.readbyte(type) || !payload.readuint(saveversion) ||
+           !payload.readuint(genversion) || !payload.readuint(chunkx) ||
+           !payload.readuint(chunky) || !payload.readuint(chunkz) ||
+           !payload.readullong(ignoredhash) ||
+           !payload.readuint(count) || type != 2 ||
+           saveversion != WORLD_SAVE_FORMAT_VERSION ||
+           genversion != WORLDGEN_VERSION || int(chunkz) != WORLD_DIFF_Z ||
+           count > 1000000U)
+            continue;
+        worldchunkdiffstate *state =
+            findworldchunkdiffstate(int(chunkx), int(chunky), true);
+        loopi(count)
+        {
+            worldeditrecord *record = new worldeditrecord;
+            if(!deserializeworldeditrecord(payload, *record))
+            {
+                delete record;
+                break;
+            }
+            state->audit.add(record);
+            state->revision = max(state->revision, record->revision);
+            worldeditrevision = max(worldeditrevision, record->revision);
+        }
+    }
 }
 
 static cube *prepareworldchunk(worldchunkjob &job)
 {
     ZoneScopedN("Chunks/Prepare");
     ZoneTextF("%d_%d", job.x, job.y);
-    if(job.filename[0])
-    {
-        ZoneScopedN("Chunks/Prepare disk chunk");
-        cube *root = loadpreparedworldchunk(job.filename, job.x, job.y, job.remip, job.families,
-                                            job.optimized, job.loaderror);
-        if(root)
-        {
-            job.loaded = true;
-            return root;
-        }
-    }
-
     if(SDL_AtomicGet(&job.cancelled)) return NULL;
     {
-        ZoneScopedN("Chunks/Prepare generated chunk");
+        ZoneScopedN("Chunks/Generate base and apply diff");
         worldgencontext ctx(job.seed, job.grasstexture, job.grasssidetexture,
                             job.grassbottomtexture,
                             job.dirttexture, job.stonetexture, job.sandtexture, job.snowtexture,
@@ -4109,7 +4900,21 @@ static cube *prepareworldchunk(worldchunkjob &job)
         cube *root = generateworldchunk(job.x, job.y, ctx);
         job.families = ctx.families;
         job.optimized = ctx.optimized;
-        job.loaded = false;
+        if(!root) return NULL;
+        if(job.filename[0])
+        {
+            applyworldchunkdiff(root, job.x, job.y, job.filename, true, job.families,
+                                job.revision, job.canonicalhash);
+            if(job.remip)
+                job.optimized += remipworldchunk(root, true, job.families);
+            job.canonicalhash = hashworldchunk(root);
+            job.loaded = true;
+        }
+        else
+        {
+            job.loaded = false;
+            job.canonicalhash = hashworldchunk(root);
+        }
         return root;
     }
 }
@@ -4125,6 +4930,20 @@ static bool loadworldchunks(const char *mname)
     int currentx, currenty;
     if(!slash || !chunkcoords(slash + 1, currentx, currenty)) return false;
     *slash = '\0';
+    worldspawnmetadata storedspawn;
+    worlddiffmetadata metadata;
+    int entryx, entryy;
+    if(!loadworldmetadata(mapname, entryx, entryy, storedspawn, metadata)) return false;
+    if(game::getworldseed() != metadata.seed ||
+       currentworldparameterhash() != metadata.parameterhash)
+    {
+        conoutf(CON_ERROR,
+                "world %s generator parameter hash does not match world.meta; refusing silent terrain changes",
+                mapname);
+        return false;
+    }
+    game::loadworldseed(metadata.seed);
+    activeworldmetadata = metadata;
 
     cube *currentroot = worldroot;
     worldroot = NULL;
@@ -4180,22 +4999,6 @@ bool save_world(const char *mname)
     return true;
 }
 
-static bool saveworldchunkconfig(const worldchunk &chunk)
-{
-    string chunkname;
-    worldchunkname(chunkname, sizeof(chunkname), chunk);
-    defformatstring(chunkcfg, "media/map/%s.cfg", chunkname);
-    stream *f = openfile(path(chunkcfg), "w");
-    if(!f)
-    {
-        conoutf(CON_WARN, "could not write chunk configuration to %s", chunkcfg);
-        return false;
-    }
-    f->printf("exec \"media/map/%s/world.cfg\"\n", worldfolder);
-    delete f;
-    return true;
-}
-
 static bool saveworldconfig()
 {
     defformatstring(name, "media/map/%s/world.cfg", worldfolder);
@@ -4221,30 +5024,8 @@ static bool saveworldconfig()
     game::saveworldsettings(f);
     delete f;
 
-    loopv(worldchunks) if((!worldchunks[i].saved || worldchunks[i].dirty) &&
-                          !saveworldchunkconfig(worldchunks[i]))
-        return false;
-
     return true;
 }
-
-static bool worldchunkfileexists(const char *folder, int x, int y)
-{
-    defformatstring(name, "media/map/%s/%d_%d.ogz", folder, x, y);
-    stream *f = openfile(path(name), "rb");
-    if(!f) return false;
-    delete f;
-    return true;
-}
-
-struct worldspawnmetadata
-{
-    bool valid;
-    double x, y;
-    float z, yaw, pitch;
-
-    worldspawnmetadata() : valid(false), x(0), y(0), z(0), yaw(0), pitch(0) {}
-};
 
 static worldspawnmetadata requestedworldspawn;
 static bool hasrequestedworldspawn = false;
@@ -4252,8 +5033,22 @@ static bool preparedworldspawn = false;
 static vec preparedworldspawnposition;
 static float preparedworldspawnyaw = 0, preparedworldspawnpitch = 0;
 
+static ullong currentworldparameterhash()
+{
+    game::worldsettings settings;
+    return hashworlddiffbytes(1469598103934665603ULL, &settings, sizeof(settings));
+}
+
 static bool saveworldmetadata(int chunkx, int chunky)
 {
+    if(activeworldmetadata.valid &&
+       activeworldmetadata.worldgenversion != WORLDGEN_VERSION)
+    {
+        conoutf(CON_ERROR,
+                "refusing to change worldgen version %d to %d for existing world %s",
+                activeworldmetadata.worldgenversion, WORLDGEN_VERSION, worldfolder);
+        return false;
+    }
     defformatstring(name, "media/map/%s/world.meta", worldfolder);
     stream *f = openfile(path(name), "w");
     if(!f)
@@ -4261,7 +5056,17 @@ static bool saveworldmetadata(int chunkx, int chunky)
         conoutf(CON_WARN, "could not write world metadata to %s", name);
         return false;
     }
-    f->printf("CUBECRAFT_WORLD 2\n");
+    activeworldmetadata.seed = game::getworldseed();
+    activeworldmetadata.worldgenversion = WORLDGEN_VERSION;
+    activeworldmetadata.parameterhash = currentworldparameterhash();
+    activeworldmetadata.saveformatversion = WORLD_SAVE_FORMAT_VERSION;
+    activeworldmetadata.valid = true;
+    f->printf("CUBECRAFT_WORLD 3\n");
+    f->printf("world_seed %d\n", activeworldmetadata.seed);
+    f->printf("worldgen_version %d\n", activeworldmetadata.worldgenversion);
+    f->printf("worldgen_parameter_hash " WORLD_ULL_FORMAT "\n",
+              activeworldmetadata.parameterhash);
+    f->printf("save_format_version %d\n", activeworldmetadata.saveformatversion);
     f->printf("entry %d %d\n", chunkx, chunky);
     if(player)
     {
@@ -4274,44 +5079,74 @@ static bool saveworldmetadata(int chunkx, int chunky)
 }
 
 static bool loadworldmetadata(const char *folder, int &chunkx, int &chunky,
-                              worldspawnmetadata &spawn)
+                              worldspawnmetadata &spawn, worlddiffmetadata &metadata)
 {
     chunkx = chunky = 0;
     spawn = worldspawnmetadata();
+    metadata = worlddiffmetadata();
     defformatstring(name, "media/map/%s/world.meta", folder);
     stream *f = openfile(path(name), "r");
-    if(f)
+    if(!f) return false;
+    int metarevision = 0;
+    string line;
+    while(f->getline(line, sizeof(line)))
     {
-        string line;
-        while(f->getline(line, sizeof(line)))
+        int x, y;
+        if(sscanf(line, "CUBECRAFT_WORLD %d", &metarevision) == 1) continue;
+        if(sscanf(line, "world_seed %d", &metadata.seed) == 1) continue;
+        if(sscanf(line, "worldgen_version %d", &metadata.worldgenversion) == 1) continue;
+        static const char hashprefix[] = "worldgen_parameter_hash ";
+        if(!strncmp(line, hashprefix, sizeof(hashprefix) - 1))
         {
-            int x, y;
-            if(sscanf(line, "entry %d %d", &x, &y) == 2)
-            {
-                chunkx = x;
-                chunky = y;
-                continue;
-            }
-            double spawnx, spawny;
-            float spawnz, yaw = 0, pitch = 0;
-            if(sscanf(line, "spawn %lf %lf %f %f %f",
-                      &spawnx, &spawny, &spawnz, &yaw, &pitch) >= 3)
-            {
-                spawn.valid = true;
-                spawn.x = spawnx;
-                spawn.y = spawny;
-                spawn.z = spawnz;
-                spawn.yaw = yaw;
-                spawn.pitch = pitch;
-            }
+            char *end = NULL;
+            metadata.parameterhash = strtoull(line + sizeof(hashprefix) - 1, &end, 10);
+            if(end != line + sizeof(hashprefix) - 1) continue;
         }
-        delete f;
+        if(sscanf(line, "save_format_version %d", &metadata.saveformatversion) == 1) continue;
+        if(sscanf(line, "entry %d %d", &x, &y) == 2)
+        {
+            chunkx = x;
+            chunky = y;
+            continue;
+        }
+        double spawnx, spawny;
+        float spawnz, yaw = 0, pitch = 0;
+        if(sscanf(line, "spawn %lf %lf %f %f %f",
+                  &spawnx, &spawny, &spawnz, &yaw, &pitch) >= 3)
+        {
+            spawn.valid = true;
+            spawn.x = spawnx;
+            spawn.y = spawny;
+            spawn.z = spawnz;
+            spawn.yaw = yaw;
+            spawn.pitch = pitch;
+        }
     }
+    delete f;
 
-    if(worldchunkfileexists(folder, chunkx, chunky)) return true;
-    chunkx = chunky = 0;
-    spawn.valid = false;
-    return worldchunkfileexists(folder, 0, 0);
+    metadata.valid = metarevision == 3 && metadata.seed >= 0 &&
+                     metadata.worldgenversion > 0 && metadata.saveformatversion > 0;
+    if(!metadata.valid)
+    {
+        conoutf(CON_ERROR,
+                "world %s uses legacy metadata without a pinned generator; explicit migration is required",
+                folder);
+        return false;
+    }
+    if(metadata.worldgenversion != WORLDGEN_VERSION)
+    {
+        conoutf(CON_ERROR,
+                "world %s requires worldgen version %d, but this build provides version %d",
+                folder, metadata.worldgenversion, WORLDGEN_VERSION);
+        return false;
+    }
+    if(metadata.saveformatversion != WORLD_SAVE_FORMAT_VERSION)
+    {
+        conoutf(CON_ERROR, "world %s uses unsupported save format version %d",
+                folder, metadata.saveformatversion);
+        return false;
+    }
+    return true;
 }
 
 static bool dryworldspawnblock(const game::worldgenerator &generator,
@@ -4516,33 +5351,6 @@ static void applypreparedworldspawn()
     player->resetinterp();
 }
 
-static int loadingworldchunks()
-{
-    int loading = 0;
-    loopv(worldchunks) if(worldchunks[i].loading) loading++;
-    return loading;
-}
-
-static bool finishworldchunkloads()
-{
-    int remaining = loadingworldchunks(), total = remaining;
-    while(remaining > 0)
-    {
-        if(worldchunkworkers.empty())
-        {
-            conoutf(CON_ERROR, "cannot finish %d queued chunks: the chunk worker pool is not running", remaining);
-            return false;
-        }
-
-        int prepared = processworldchunkresults();
-        remaining = loadingworldchunks();
-        renderprogress(total > 0 ? (total - remaining) / float(total) : 1,
-                       "finishing chunks before save...");
-        if(!prepared && remaining > 0) SDL_Delay(1);
-    }
-    return true;
-}
-
 void saveworld();
 
 static void createworld(const char *requestedname)
@@ -4619,12 +5427,15 @@ static void loadworldcommand(const char *requested)
     normalizeworldfolder(folder, sizeof(folder), requested);
     int chunkx, chunky;
     worldspawnmetadata spawn;
-    if(!loadworldmetadata(folder, chunkx, chunky, spawn))
+    worlddiffmetadata metadata;
+    if(!loadworldmetadata(folder, chunkx, chunky, spawn, metadata))
     {
         conoutf(CON_ERROR, "could not find a saved world named %s", folder);
         return;
     }
 
+    game::loadworldseed(metadata.seed);
+    activeworldmetadata = metadata;
     defformatstring(entry, "%s/%d_%d", folder, chunkx, chunky);
     requestedworldspawn = spawn;
     hasrequestedworldspawn = true;
@@ -4644,51 +5455,29 @@ void saveworld()
         return;
     }
 
-    if(!finishworldchunkloads()) return;
     if(!saveworldconfig()) return;
-
-    if(!syncmountedworldchunks())
+    flushworlddiffjournals(true);
+    loopv(worldchunkdiffstates) if(!worldchunkdiffstates[i]->journal.empty())
     {
-        conoutf(CON_ERROR, "refusing to save world %s: runtime chunk ownership is inconsistent",
-                worldfolder);
-        return;
+        int chunkindex = findworldchunk(worldchunkdiffstates[i]->x,
+                                        worldchunkdiffstates[i]->y);
+        if(worldchunks.inrange(chunkindex))
+            compactworldchunkdiff(worldchunks[chunkindex]);
     }
-    cube *runtimeroot = worldroot;
-    const int runtimescale = worldscale, runtimesize = worldsize;
-    setvar("mapscale", WORLD_CHUNK_SCALE, true, false);
-    setvar("mapsize", WORLD_CHUNK_MAP_SIZE, true, false);
-    int written = 0, unchanged = 0, failed = 0, ready = 0;
+    int written = 0, unchanged = 0, ready = 0;
     loopv(worldchunks)
     {
         worldchunk &chunk = worldchunks[i];
         if(!chunk.root || chunk.loading) continue;
         ready++;
-        if(chunk.saved && !chunk.dirty)
+        if(!chunk.dirty)
         {
             unchanged++;
             continue;
         }
-
-        worldroot = chunk.root;
-        string name;
-        worldchunkname(name, sizeof(name), chunk);
-        if(save_world(name))
-        {
-            chunk.saved = true;
-            chunk.dirty = false;
-            written++;
-        }
-        else failed++;
-    }
-    worldroot = runtimeroot;
-    setvar("mapscale", runtimescale, true, false);
-    setvar("mapsize", runtimesize, true, false);
-
-    if(failed)
-    {
-        conoutf(CON_ERROR, "failed to save %d of %d changed chunks for world %s; keeping all chunks in memory for retry",
-                failed, written + failed, worldfolder);
-        return;
+        chunk.saved = true;
+        chunk.dirty = false;
+        written++;
     }
 
     int entryx = lastplayerchunkx, entryy = lastplayerchunky;
@@ -4726,16 +5515,502 @@ void saveworld()
         worldchunkname(name, sizeof(name), worldchunks[activeworldchunk]);
         setmapfilenames(name);
     }
-    conoutf("saved world %s: %d chunks written, %d unchanged, %d ready; released %d cached chunks",
+    conoutf("saved world %s: %d chunk journals queued, %d unchanged, %d ready; released %d cached chunks",
             worldfolder, written, unchanged, ready, released);
 }
 
 COMMAND(saveworld, "");
 
+static const char *worldeditoperationname(int operation)
+{
+    switch(operation)
+    {
+        case WORLD_EDIT_SET_CUBE: return "SET_CUBE";
+        case WORLD_EDIT_DELETE_CUBE: return "DELETE_CUBE";
+        case WORLD_EDIT_SET_MATERIAL: return "SET_MATERIAL";
+        case WORLD_EDIT_MOVE_CORNER: return "MOVE_CORNER";
+        case WORLD_EDIT_FILL_VOLUME: return "FILL_VOLUME";
+        case WORLD_EDIT_DELETE_VOLUME: return "DELETE_VOLUME";
+        case WORLD_EDIT_PASTE_BLUEPRINT: return "PASTE_BLUEPRINT";
+        case WORLD_EDIT_DELETE_BLUEPRINT: return "DELETE_BLUEPRINT";
+        default: return "UNKNOWN";
+    }
+}
+
+static void pasteworlddiffnode(cube &c, const worlddiffnode &node)
+{
+    discardchildren(c);
+    memcpy(c.edges, node.edges, sizeof(node.edges));
+    memcpy(c.texture, node.texture, sizeof(node.texture));
+    c.material = node.material;
+    c.visible = c.merged = 0;
+}
+
+static bool commitworldadminrecord(const worldeditrecord &source, bool inverse)
+{
+    int chunkindex = findworldchunk(source.chunkx, source.chunky);
+    if(!worldchunks.inrange(chunkindex))
+    {
+        int generated = 0;
+        chunkindex = acquireworldchunksync(source.chunkx, source.chunky, generated);
+    }
+    if(!worldchunks.inrange(chunkindex)) return false;
+    worldchunk &chunk = worldchunks[chunkindex];
+    const vector<worlddiffnode> &target = inverse ? source.before : source.after;
+    const vector<worlddiffnode> &oldstate = inverse ? source.after : source.before;
+    int families = 0;
+    loopv(target)
+    {
+        const worlddiffnode &node = target[i];
+        applyworlddiffnode(chunk.root, node, false, families);
+        if(worldchunkmounted(chunk))
+        {
+            ivec pos = ivec(worldchunkorigin(chunk)).add(ivec(node.x, node.y, node.z));
+            cube &runtimecube = lookupcube(pos, node.size);
+            pasteworlddiffnode(runtimecube, node);
+            changed(pos, ivec(pos).add(node.size), false);
+        }
+    }
+    commitchanges();
+
+    worldchunkdiffstate *state = findworldchunkdiffstate(chunk.x, chunk.y, true);
+    worldeditrecord record;
+    record.chunkx = chunk.x;
+    record.chunky = chunk.y;
+    record.operation = inverse ? WORLD_EDIT_DELETE_BLUEPRINT : WORLD_EDIT_PASTE_BLUEPRINT;
+    record.author = worldeditauthor;
+    record.revision = ++worldeditrevision;
+    state->revision = max(state->revision, record.revision);
+    record.timestamp = ullong(time(NULL));
+    record.args[0] = int(source.revision & 0xFFFFFFFFU);
+    record.args[1] = int(source.revision >> 32);
+    record.args[2] = inverse ? 1 : 2;
+    record.args[3] = INT_MIN;
+    record.selection = source.selection;
+    loopv(oldstate) record.before.add(oldstate[i]);
+    loopv(target) record.after.add(target[i]);
+    state->pending.add(cloneworldeditrecord(record));
+    state->journal.add(cloneworldeditrecord(record));
+    state->audit.add(cloneworldeditrecord(record));
+    state->canonicalhash = hashworldchunk(chunk.root);
+    chunk.dirty = true;
+    return true;
+}
+
+static bool worldauditrecordundone(const worldeditrecord &source)
+{
+    worldchunkdiffstate *state = findworldchunkdiffstate(source.chunkx, source.chunky);
+    if(!state) return false;
+    int status = 0;
+    loopv(state->audit)
+    {
+        const worldeditrecord &record = *state->audit[i];
+        if(record.args[3] != INT_MIN) continue;
+        ullong referenced = uint(record.args[0]) | (ullong(uint(record.args[1])) << 32);
+        if(referenced == source.revision) status = record.args[2];
+    }
+    return status == 1;
+}
+
+static worldeditrecord *latestworldauditrecord()
+{
+    worldeditrecord *latest = NULL;
+    loopv(worldchunkdiffstates) loopvj(worldchunkdiffstates[i]->audit)
+    {
+        worldeditrecord *record = worldchunkdiffstates[i]->audit[j];
+        if(record->args[3] == INT_MIN) continue;
+        if(worldauditrecordundone(*record)) continue;
+        if(!latest || record->timestamp > latest->timestamp ||
+           (record->timestamp == latest->timestamp && record->revision > latest->revision))
+            latest = record;
+    }
+    return latest;
+}
+
+static void worldundocommand(int *requested)
+{
+    int count = max(*requested, 1), applied = 0;
+    while(applied < count)
+    {
+        worldeditrecord *record = latestworldauditrecord();
+        if(!record || !commitworldadminrecord(*record, true)) break;
+        worldredostack.add(cloneworldeditrecord(*record));
+        applied++;
+    }
+    conoutf("worldundo committed %d inverse revision%s", applied, applied == 1 ? "" : "s");
+}
+
+static void worldredocommand(int *requested)
+{
+    int count = max(*requested, 1), applied = 0;
+    while(applied < count)
+    {
+        worldeditrecord *record = NULL;
+        bool owned = false;
+        if(!worldredostack.empty())
+        {
+            record = worldredostack.pop();
+            owned = true;
+        }
+        else loopv(worldchunkdiffstates)
+        {
+            worldchunkdiffstate &state = *worldchunkdiffstates[i];
+            loopvj(state.audit)
+            {
+                worldeditrecord *candidate = state.audit[j];
+                if(candidate->args[3] == INT_MIN || !worldauditrecordundone(*candidate)) continue;
+                if(!record || candidate->timestamp > record->timestamp ||
+                   (candidate->timestamp == record->timestamp &&
+                    candidate->revision > record->revision))
+                    record = candidate;
+            }
+        }
+        if(!record) break;
+        if(commitworldadminrecord(*record, false)) applied++;
+        if(owned) delete record;
+    }
+    conoutf("worldredo committed %d new revision%s", applied, applied == 1 ? "" : "s");
+}
+
+COMMANDN(worldundo, worldundocommand, "i");
+COMMANDN(worldredo, worldredocommand, "i");
+
+static void worldlogcommand(char *playertext, int *radius, int *minutes)
+{
+    int author = playertext && playertext[0] ? game::findclientnum(playertext) : INT_MIN,
+        seconds = *minutes > 0 ? *minutes * 60 : INT_MAX, shown = 0;
+    if(playertext && playertext[0] && author < 0)
+    {
+        conoutf(CON_ERROR, "worldlog: unknown player %s", playertext);
+        return;
+    }
+    ullong now = ullong(time(NULL));
+    loopv(worldchunkdiffstates) loopvj(worldchunkdiffstates[i]->audit)
+    {
+        const worldeditrecord &record = *worldchunkdiffstates[i]->audit[j];
+        if(author != INT_MIN && record.author != author) continue;
+        if(now > record.timestamp && now - record.timestamp > ullong(seconds)) continue;
+        if(*radius > 0 && player)
+        {
+            int chunkindex = findworldchunk(record.chunkx, record.chunky);
+            if(!worldchunks.inrange(chunkindex)) continue;
+            ivec origin = worldchunkorigin(worldchunks[chunkindex]);
+            if(abs(origin.x - int(player->o.x)) > *radius ||
+               abs(origin.y - int(player->o.y)) > *radius)
+                continue;
+        }
+        conoutf("chunk %d %d rev " WORLD_ULL_FORMAT " author %d time "
+                WORLD_ULL_FORMAT " %s (%d nodes)",
+                record.chunkx, record.chunky, record.revision, record.author,
+                record.timestamp, worldeditoperationname(record.operation),
+                record.after.length());
+        shown++;
+    }
+    conoutf("worldlog: %d matching revision%s", shown, shown == 1 ? "" : "s");
+}
+
+COMMANDN(worldlog, worldlogcommand, "sii");
+
+static void worldrevertcommand(char *mode, char *arg1, char *arg2, char *arg3,
+                               char *arg4, char *arg5, char *arg6, char *arg7)
+{
+    int reverted = 0;
+    ullong now = ullong(time(NULL));
+    if(!strcmp(mode, "player"))
+    {
+        int author = game::findclientnum(arg1),
+            minutes = arg2[0] ? max(atoi(arg2), 0) : 0;
+        if(author < 0)
+        {
+            conoutf(CON_ERROR, "worldrevert: unknown player %s", arg1);
+            return;
+        }
+        loopv(worldchunkdiffstates)
+        {
+            worldchunkdiffstate &state = *worldchunkdiffstates[i];
+            for(int j = state.audit.length() - 1; j >= 0; --j)
+            {
+                worldeditrecord &record = *state.audit[j];
+                if(record.args[3] == INT_MIN || record.author != author) continue;
+                if(minutes > 0 && now > record.timestamp &&
+                   now - record.timestamp > ullong(minutes * 60))
+                    continue;
+                if(commitworldadminrecord(record, true)) reverted++;
+            }
+        }
+    }
+    else if(!strcmp(mode, "area"))
+    {
+        int x1 = atoi(arg1), y1 = atoi(arg2), z1 = atoi(arg3),
+            x2 = atoi(arg4), y2 = atoi(arg5), z2 = atoi(arg6),
+            minutes = arg7[0] ? max(atoi(arg7), 0) : 0;
+        if(x1 > x2) swap(x1, x2);
+        if(y1 > y2) swap(y1, y2);
+        if(z1 > z2) swap(z1, z2);
+        loopv(worldchunkdiffstates)
+        {
+            worldchunkdiffstate &state = *worldchunkdiffstates[i];
+            for(int j = state.audit.length() - 1; j >= 0; --j)
+            {
+                worldeditrecord &record = *state.audit[j];
+                if(record.args[3] == INT_MIN) continue;
+                if(minutes > 0 && now > record.timestamp &&
+                   now - record.timestamp > ullong(minutes * 60))
+                    continue;
+                bool intersects = false;
+                loopvk(record.after)
+                {
+                    const worlddiffnode &node = record.after[k];
+                    int nx = record.chunkx * WORLD_CHUNK_SIZE + node.x,
+                        ny = record.chunky * WORLD_CHUNK_SIZE + node.y;
+                    if(nx + node.size > x1 && nx < x2 &&
+                       ny + node.size > y1 && ny < y2 &&
+                       node.z + node.size > z1 && node.z < z2)
+                    {
+                        intersects = true;
+                        break;
+                    }
+                }
+                if(intersects && commitworldadminrecord(record, true)) reverted++;
+            }
+        }
+    }
+    else
+    {
+        conoutf(CON_ERROR,
+                "usage: /worldrevert player <id> [minutes] | area <x1 y1 z1> <x2 y2 z2> [minutes]");
+        return;
+    }
+    conoutf("worldrevert committed %d inverse revision%s",
+            reverted, reverted == 1 ? "" : "s");
+}
+
+COMMANDN(worldrevert, worldrevertcommand, "ssssssss");
+
+static void worldrestorecommand(char *kind, char *xtext, char *ytext,
+                                char *ztext, char *revisiontext)
+{
+    if(strcmp(kind, "chunk"))
+    {
+        conoutf(CON_ERROR, "usage: /worldrestore chunk <x y z> <revision>");
+        return;
+    }
+    int x = atoi(xtext), y = atoi(ytext), z = atoi(ztext);
+    ullong revision = strtoull(revisiontext, NULL, 10);
+    if(z != WORLD_DIFF_Z)
+    {
+        conoutf(CON_ERROR, "this world stores its full vertical band as chunk z=0");
+        return;
+    }
+    worldchunkdiffstate *state = findworldchunkdiffstate(x, y);
+    if(!state)
+    {
+        conoutf(CON_ERROR, "chunk %d %d has no revision history", x, y);
+        return;
+    }
+    int restored = 0;
+    for(int i = state->audit.length() - 1; i >= 0; --i)
+    {
+        worldeditrecord &record = *state->audit[i];
+        if(record.args[3] == INT_MIN || record.revision <= revision) continue;
+        if(commitworldadminrecord(record, true)) restored++;
+    }
+    conoutf("worldrestore chunk %d %d to revision " WORLD_ULL_FORMAT
+            " committed %d inverse revision%s",
+            x, y, revision, restored, restored == 1 ? "" : "s");
+}
+
+COMMANDN(worldrestore, worldrestorecommand, "sssss");
+
+static void worlddiffcommand(char *action, char *xtext, char *ytext, char *ztext)
+{
+    if(!action || !action[0])
+    {
+        conoutf(CON_ERROR, "usage: /worlddiff <stats|compact|verify> [x y z|all]");
+        return;
+    }
+    bool all = xtext && !strcmp(xtext, "all");
+    int x = xtext && xtext[0] && !all ? atoi(xtext) : lastplayerchunkx,
+        y = ytext && ytext[0] ? atoi(ytext) : lastplayerchunky,
+        z = ztext && ztext[0] ? atoi(ztext) : WORLD_DIFF_Z;
+    if(z != WORLD_DIFF_Z)
+    {
+        conoutf(CON_ERROR, "this world stores its full vertical band as chunk z=0");
+        return;
+    }
+    if(!strcmp(action, "stats"))
+    {
+        worldchunkdiffstate *state = findworldchunkdiffstate(x, y);
+        if(!state)
+        {
+            conoutf("chunk %d %d %d: generated base only, revision 0, zero disk override", x, y, z);
+            return;
+        }
+        conoutf("chunk %d %d %d: revision " WORLD_ULL_FORMAT ", snapshot "
+                WORLD_ULL_FORMAT ", %d pending, %d journal, %d audit, hash "
+                WORLD_ULL_FORMAT,
+                x, y, z, state->revision, state->snapshotrevision,
+                state->pending.length(), state->journal.length(), state->audit.length(),
+                state->canonicalhash);
+        return;
+    }
+    if(!strcmp(action, "compact"))
+    {
+        int compacted = 0;
+        loopv(worldchunks)
+        {
+            worldchunk &chunk = worldchunks[i];
+            if((all || (chunk.x == x && chunk.y == y)) && compactworldchunkdiff(chunk))
+                compacted++;
+        }
+        conoutf("worlddiff compact: %d chunk%s", compacted, compacted == 1 ? "" : "s");
+        return;
+    }
+    if(!strcmp(action, "verify"))
+    {
+        int verified = 0, failed = 0;
+        flushworlddiffjournals(true);
+        shutdownworlddiffwriter();
+        loopv(worldchunks)
+        {
+            worldchunk &chunk = worldchunks[i];
+            if(!all && (chunk.x != x || chunk.y != y)) continue;
+            if(worldchunkmounted(chunk) && !syncmountedworldchunk(chunk))
+            {
+                failed++;
+                continue;
+            }
+            ullong livehash = hashworldchunk(chunk.root);
+            cube *reconstructed = generateworldchunk(chunk.x, chunk.y);
+            if(!reconstructed)
+            {
+                failed++;
+                continue;
+            }
+            defformatstring(relative, "media/map/%s/chunks/%d_%d_%d.diff",
+                            worldfolder, chunk.x, chunk.y, WORLD_DIFF_Z);
+            path(relative);
+            const char *found = findfile(relative, "rb");
+            string filename;
+            filename[0] = '\0';
+            if(found && fileexists(found, "r")) copystring(filename, relative);
+            int families = 0;
+            ullong revision = 0, reconstructedhash = 0;
+            bool valid = applyworldchunkdiff(reconstructed, chunk.x, chunk.y,
+                                             filename, false, families,
+                                             revision, reconstructedhash);
+            if(chunkremip) remipworldchunk(reconstructed, false, families);
+            reconstructedhash = hashworldchunk(reconstructed);
+            freeocta(reconstructed);
+            if(!valid || livehash != reconstructedhash) failed++;
+            else
+            {
+                worldchunkdiffstate *state =
+                    findworldchunkdiffstate(chunk.x, chunk.y, true);
+                state->revision = max(state->revision, revision);
+                worldeditrevision = max(worldeditrevision, revision);
+                state->canonicalhash = livehash;
+                verified++;
+            }
+        }
+        conoutf("worlddiff verify: %d verified, %d mismatched", verified, failed);
+        return;
+    }
+    conoutf(CON_ERROR, "unknown worlddiff action %s", action);
+}
+
+COMMANDN(worlddiff, worlddiffcommand, "ssss");
+
 static uint mapcrc = 0;
 
 uint getmapcrc() { return mapcrc; }
 void clearmapcrc() { mapcrc = 0; }
+
+static bool loadseedworld(const char *mname, const char *cname)
+{
+    string folder, normalized;
+    copystring(normalized, mname);
+    loopi(strlen(normalized)) if(normalized[i] == '\\') normalized[i] = '/';
+    char *slash = strrchr(normalized, '/');
+    int chunkx, chunky;
+    if(!slash || !chunkcoords(slash + 1, chunkx, chunky)) return false;
+    *slash = '\0';
+    copystring(folder, normalized);
+
+    worldspawnmetadata spawn;
+    worlddiffmetadata metadata;
+    int entryx, entryy;
+    if(!loadworldmetadata(folder, entryx, entryy, spawn, metadata) ||
+       entryx != chunkx || entryy != chunky)
+        return false;
+
+    setmapfilenames(mname, cname);
+    clearworldchunks();
+    resetmap();
+    activeworldmetadata = metadata;
+    game::loadworldseed(metadata.seed);
+
+    identflags |= IDF_OVERRIDDEN;
+    execfile("config/default_map_settings.cfg", false);
+    defformatstring(worldconfig, "media/map/%s/world.cfg", folder);
+    if(!execfile(worldconfig, false))
+    {
+        identflags &= ~IDF_OVERRIDDEN;
+        conoutf(CON_ERROR, "could not load deterministic world configuration %s", worldconfig);
+        return false;
+    }
+    identflags &= ~IDF_OVERRIDDEN;
+    if(game::getworldseed() != metadata.seed ||
+       currentworldparameterhash() != metadata.parameterhash)
+    {
+        conoutf(CON_ERROR,
+                "world %s generator parameter hash does not match world.meta; refusing silent terrain changes",
+                folder);
+        return false;
+    }
+
+    setvar("mapscale", WORLD_CHUNK_SCALE, true, false);
+    setvar("mapsize", WORLD_CHUNK_MAP_SIZE, true, false);
+    texmru.shrink(0);
+    freeocta(worldroot);
+    worldroot = generateworldchunk(chunkx, chunky);
+    if(!worldroot) return false;
+
+    defformatstring(diffrelative, "media/map/%s/chunks/%d_%d_%d.diff",
+                    folder, chunkx, chunky, WORLD_DIFF_Z);
+    path(diffrelative);
+    const char *found = findfile(diffrelative, "rb");
+    if(found && fileexists(found, "r"))
+    {
+        int families = 0;
+        ullong revision = 0, canonicalhash = 0;
+        applyworldchunkdiff(worldroot, chunkx, chunky, diffrelative, false, families,
+                            revision, canonicalhash);
+        if(chunkremip) remipworldchunk(worldroot, false, families);
+        worldchunkdiffstate *state = findworldchunkdiffstate(chunkx, chunky, true);
+        state->revision = revision;
+        worldeditrevision = max(worldeditrevision, revision);
+        state->canonicalhash = hashworldchunk(worldroot);
+    }
+
+    preparedworldspawn = false;
+    requestedworldspawn = spawn;
+    hasrequestedworldspawn = true;
+    if(!loadworldchunks(mname) || !prepareworldspawn(spawn))
+    {
+        hasrequestedworldspawn = false;
+        return false;
+    }
+    loadworldauditlog();
+    hasrequestedworldspawn = false;
+    allchanged(true);
+    clearmainmenu();
+    startmap(cname ? cname : mname);
+    applypreparedworldspawn();
+    mapcrc = 0;
+    conoutf("reconstructed world %s from seed %d and chunk diffs", folder, metadata.seed);
+    return true;
+}
 
 bool load_world(const char *mname, const char *cname)
 {
@@ -4748,7 +6023,12 @@ bool load_world(const char *mname, const char *cname)
         ZoneScopedN("Chunks/Open entry map");
         f = openrawfile(ogzname, "rb");
     }
-    if(!f) { conoutf(CON_ERROR, "could not read map %s", ogzname); return false; }
+    if(!f)
+    {
+        if(loadseedworld(mname, cname)) return true;
+        conoutf(CON_ERROR, "could not read map %s or reconstruct a seed-based world", ogzname);
+        return false;
+    }
 
     mapheader hdr;
     {
