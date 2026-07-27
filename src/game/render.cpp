@@ -26,8 +26,10 @@ namespace game
     // The split meshes retain the coordinates of the original 30-unit model.
     // Their configs recenter articulated pieces on these joint heights.
     static const float HIP_HEIGHT = 11.25f, SHOULDER_HEIGHT = 22.5f;
+    static const float ARM_OFFSET = 5.625f, LEG_OFFSET = 1.875f;
     static const float MIN_GAIT_CADENCE = 0.65f, MAX_GAIT_CADENCE = 3.0f;
     static const float LEG_SWING = 32.0f, ARM_SWING = 28.0f;
+    static const float LEG_STRAFE_SWING = 24.0f, ARM_STRAFE_SWING = 18.0f;
     static const float IDLE_HEAD_YAW = 65.0f, MOVING_HEAD_YAW = 75.0f;
     static const float IDLE_BODY_TURN_SPEED = 180.0f, MOVING_BODY_TURN_RESPONSE = 14.0f;
     static const float CROUCH_HIP_DROP = 2.0f, CROUCH_HEAD_DROP = 0.75f;
@@ -39,9 +41,11 @@ namespace game
         loopi(NUM_PLAYER_PARTS) preloadmodel(playermodels[i]);
     }
 
-    static void renderpart(gameent *d, int part, const vec &origin, float yaw, float pitch, int flags)
+    static void renderpart(gameent *d, int part, const vec &origin,
+                           float yaw, float pitch, float roll, int flags)
     {
-        rendermodel(playermodels[part], ANIM_MAPMODEL | ANIM_LOOP, origin, yaw, pitch, 0, flags, d);
+        rendermodel(playermodels[part], ANIM_MAPMODEL | ANIM_LOOP,
+                    origin, yaw, pitch, roll, flags, d);
     }
 
     static float movementamount(const gameent *d, float speed)
@@ -174,6 +178,12 @@ namespace game
         float crouch = updatecrouch(d, local);
         float phase = updatestridephase(d, speed);
         float stride = sinf(phase) * movement * (1.0f - 0.55f * crouch);
+        float inputmagnitude = sqrtf(float(d->move*d->move + d->strafe*d->strafe));
+        float forwardgait = inputmagnitude > 0 ? fabsf(d->move) / inputmagnitude : 1.0f;
+        float strafegait = inputmagnitude > 0 ? fabsf(d->strafe) / inputmagnitude : 0.0f;
+        float strafedirection = d->strafe < 0 ? -1.0f : 1.0f;
+        float forwardstride = stride * forwardgait;
+        float strafestride = stride * strafegait * strafedirection;
         float bob = fabsf(cosf(phase)) * 0.45f * movement * (1.0f - 0.65f * crouch);
         float bodyyaw = updatebodyyaw(d, movement);
         float headlimit = headyawlimit(movement);
@@ -188,13 +198,29 @@ namespace game
         shoulderoffset.rotate_around_x(torsopitch * RAD).rotate_around_z(bodyyaw * RAD);
         vec shoulders = vec(hips).add(shoulderoffset);
         vec neck = vec(shoulders).addz(-CROUCH_HEAD_DROP * crouch);
+        vec lateral(1, 0, 0);
+        lateral.rotate_around_z(bodyyaw * RAD);
+        vec leftshoulder = vec(shoulders).madd(lateral, -ARM_OFFSET);
+        vec rightshoulder = vec(shoulders).madd(lateral, ARM_OFFSET);
+        vec lefthip = vec(hips).madd(lateral, -LEG_OFFSET);
+        vec righthip = vec(hips).madd(lateral, LEG_OFFSET);
 
-        renderpart(d, PART_TORSO, hips, bodyyaw, torsopitch, flags);
-        renderpart(d, PART_HEAD, neck, headyaw, clamp(d->pitch, -80.0f, 80.0f) + sinf(phase * 2.0f) * 1.5f * movement, flags);
-        renderpart(d, PART_LEFT_ARM, shoulders, bodyyaw, armpitch - stride * ARM_SWING, flags);
-        renderpart(d, PART_RIGHT_ARM, shoulders, bodyyaw, armpitch + stride * ARM_SWING, flags);
-        renderpart(d, PART_LEFT_LEG, hips, bodyyaw, legpitch + stride * LEG_SWING, flags);
-        renderpart(d, PART_RIGHT_LEG, hips, bodyyaw, legpitch - stride * LEG_SWING, flags);
+        renderpart(d, PART_TORSO, hips, bodyyaw, torsopitch, 0, flags);
+        renderpart(d, PART_HEAD, neck, headyaw,
+                   clamp(d->pitch, -80.0f, 80.0f) + sinf(phase * 2.0f) * 1.5f * movement,
+                   0, flags);
+        renderpart(d, PART_LEFT_ARM, leftshoulder, bodyyaw,
+                   armpitch - forwardstride * ARM_SWING,
+                   -strafestride * ARM_STRAFE_SWING, flags);
+        renderpart(d, PART_RIGHT_ARM, rightshoulder, bodyyaw,
+                   armpitch + forwardstride * ARM_SWING,
+                   strafestride * ARM_STRAFE_SWING, flags);
+        renderpart(d, PART_LEFT_LEG, lefthip, bodyyaw,
+                   legpitch + forwardstride * LEG_SWING,
+                   strafestride * LEG_STRAFE_SWING, flags);
+        renderpart(d, PART_RIGHT_LEG, righthip, bodyyaw,
+                   legpitch - forwardstride * LEG_SWING,
+                   -strafestride * LEG_STRAFE_SWING, flags);
     }
 
     void rendergame()
