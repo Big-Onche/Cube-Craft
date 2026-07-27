@@ -368,7 +368,12 @@ namespace game
             const bool frozen = pendingnetworkfrozen,
                        restoreposition = pendingnetworkrestoreposition;
             const vec savedposition = pendingnetworkposition;
-            pendingnetworkworld = pendingnetworkreset = pendingnetworkrestoreposition = false;
+            pendingnetworkreset = pendingnetworkrestoreposition = false;
+
+            // Keep the server lighting active for the entire network-world load.
+            // startmap() sees pendingnetworkworld and preserves this authoritative
+            // time instead of briefly installing the local default lighting.
+            environment::synctime(timemillis, frozen);
             startnetworkworld(seed);
             if(restoreposition && player1)
             {
@@ -379,6 +384,7 @@ namespace game
                 updateworldchunks(true);
             }
             environment::synctime(timemillis, frozen);
+            pendingnetworkworld = false;
             addmsg(N_WORLDREADY, "ri", 0);
         }
         environment::update();
@@ -527,7 +533,8 @@ namespace game
     {
         copystring(clientmap, name ? name : "");
 #ifndef STANDALONE
-        environment::reset();
+        if(pendingnetworkworld) environment::synctime(pendingnetworktime, pendingnetworkfrozen);
+        else environment::reset();
         if(!initing)
         {
             if(!remote && !isconnected()) localconnect();
@@ -920,7 +927,11 @@ namespace game
                 }
 
                 int cn = getuint(p);
-                vec pos(getint(p)/DMF, getint(p)/DMF, getint(p)/DMF);
+                vec pos;
+                // Packet reads have side effects, so preserve the wire order
+                // explicitly. A vec(getint(), getint(), getint()) expression
+                // may be evaluated right-to-left by optimized compilers.
+                loopk(3) pos[k] = getint(p)/DMF;
                 int physstate = p.get();
                 uint flags = getuint(p);
                 vec vel, falling;
@@ -1097,8 +1108,19 @@ namespace game
                 processnetworkedits();
                 break;
             case N_WORLDTIME:
-                environment::synctime(getint(p), getint(p) != 0);
+            {
+                // Packet reads mutate p. Read in wire order instead of relying
+                // on function-argument evaluation order in optimized builds.
+                const int timemillis = getint(p);
+                const bool frozen = getint(p) != 0;
+                if(pendingnetworkworld)
+                {
+                    pendingnetworktime = timemillis;
+                    pendingnetworkfrozen = frozen;
+                }
+                else environment::synctime(timemillis, frozen);
                 break;
+            }
             case N_SETPRIVILEGE:
             {
                 int cn = getint(p), privilege = getint(p);
@@ -1635,6 +1657,9 @@ namespace server
     {
         copystring(smapname, serverworld);
         journalinitialized = false;
+        worldclockmillis = SERVER_START_MILLIS;
+        worldtimefrozen = false;
+        lastworldtimesync = 0;
     }
     int reserveclients() { return 0; }
     int numchannels() { return 3; }
@@ -1884,7 +1909,9 @@ namespace server
         }
 
         string command;
-        filtertext(command, request ? request : "", false, false, sizeof(command));
+        // Command arguments are separated by whitespace. Preserve and
+        // normalize it while stripping other non-printing characters.
+        filtertext(command, request ? request : "", true, true, sizeof(command));
         char *args = command;
         while(*args && !iscubespace(*args)) ++args;
         if(*args) *args++ = '\0';

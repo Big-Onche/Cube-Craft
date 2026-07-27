@@ -231,8 +231,7 @@ static inline bool insideworld(const ivec &o)
 }
 
 // world
-extern bool emptymap(int factor, bool force, const char *mname = "", bool usecfg = true,
-                     bool rebuild = true);
+extern bool emptymap(int factor, bool force, const char *mname = "", bool usecfg = true, bool rebuild = true);
 extern bool enlargemap(bool force);
 extern int findentity(int type, int index = 0, int attr1 = -1, int attr2 = -1);
 extern void findents(int low, int high, bool notspawned, const vec &pos, const vec &radius, vector<int> &found);
