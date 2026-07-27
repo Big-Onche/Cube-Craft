@@ -213,7 +213,14 @@ namespace game
         authoritativeauthor = -1;
         authoritativerevision = synchronizedrevision = 0;
         clearclients();
-        if(player1) player1->clientnum = -1;
+        if(player1)
+        {
+            player1->clientnum = -1;
+            player1->privilege = PRIV_NONE;
+        }
+#ifndef STANDALONE
+        if(editmode) toggleedit(true);
+#endif
         lastpositionsend = -1000;
         sentname[0] = '\0';
     }
@@ -227,7 +234,15 @@ namespace game
         else connected = true;
     }
 
-    bool allowedittoggle() { return true; }
+    bool allowedittoggle()
+    {
+        // Always permit leaving edit mode, including after privilege is lost.
+        if(editmode) return true;
+        if(player1 && player1->privilege >= PRIV_ADMIN) return true;
+        conoutf(CON_ERROR, "full edit mode requires admin privilege");
+        return false;
+    }
+
     void edittoggled(bool on)
     {
         addmsg(N_EDITMODE, "ri", on ? 1 : 0);
@@ -1121,11 +1136,24 @@ namespace game
                 else environment::synctime(timemillis, frozen);
                 break;
             }
+            case N_EDITMODE:
+            {
+                // The server uses this only to cancel an unauthorized local
+                // toggle. Never let a server packet force a client into edit.
+                const bool enabled = getint(p) != 0;
+                if(!enabled && editmode) toggleedit(true);
+                break;
+            }
             case N_SETPRIVILEGE:
             {
                 int cn = getint(p), privilege = getint(p);
                 gameent *d = newclient(cn);
-                if(d) d->privilege = privilege;
+                if(d)
+                {
+                    d->privilege = privilege;
+                    if(d == player1 && privilege < PRIV_ADMIN && editmode)
+                        toggleedit(true);
+                }
                 break;
             }
             case N_EDITENT:
@@ -2317,8 +2345,16 @@ namespace server
                     if(mapdata) sendfile(sender, 2, mapdata, "i", N_SENDMAP);
                     break;
                 case N_EDITMODE:
-                    getint(p);
+                {
+                    const bool enabled = getint(p) != 0;
+                    clientinfo *ci = getinfo(sender);
+                    if(enabled && ci && ci->connected && ci->privilege < PRIV_ADMIN)
+                    {
+                        sendcommandresult(*ci, "permission denied: full edit mode requires admin");
+                        sendf(ci->clientnum, 1, "ri2", N_EDITMODE, 0);
+                    }
                     break;
+                }
                 default:
                 {
                     int size = msgsizelookup(type);
