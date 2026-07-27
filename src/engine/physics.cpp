@@ -380,8 +380,8 @@ const float STAIRHEIGHT = 4.1f;
 const float FLOORZ = 0.867f;
 const float SLOPEZ = 0.5f;
 const float WALLZ = 0.2f;
-extern const float JUMPVEL = 125.0f;
-extern const float GRAVITY = 200.0f;
+extern const float JUMPVEL = 135.0f;
+extern const float GRAVITY = 210.0f;
 
 bool ellipseboxcollide(physent *d, const vec &dir, const vec &o, const vec &center, float yaw, float xr, float yr, float hi, float lo)
 {
@@ -590,13 +590,13 @@ bool plcollide(physent *d, const vec &dir, bool insideplayercol)    // collide w
             physent *o = dynents[i];
             if(o==d || d->o.reject(o->o, d->radius+o->radius)) continue;
             if(plcollide(d, dir, o))
-            {   
+            {
                 collideplayer = o;
                 game::dynentcollide(d, o, collidewall);
                 return true;
             }
             if(collideinside > lastinside)
-            {   
+            {
                 lastinside = collideinside;
                 insideplayer = o;
             }
