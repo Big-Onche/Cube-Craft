@@ -18,6 +18,29 @@ namespace game
     vector<uchar> messages;
 
     static string connectpass = "", servdesc = "";
+    static int authoritativeauthor = -1;
+    static uint authoritativerevision = 0, synchronizedrevision = 0;
+#ifndef STANDALONE
+    static bool pendingnetworkworld = false, pendingnetworkreset = false,
+                pendingnetworkfrozen = false, pendingnetworkrestoreposition = false;
+    static int pendingnetworkseed = 0, pendingnetworktime = 0;
+    static vec pendingnetworkposition;
+#endif
+
+    struct networkedit
+    {
+        int type, author, args[3];
+        uint revision;
+        selinfo selection;
+        vector<uchar> extra;
+
+        networkedit() : type(-1), author(-1), revision(0)
+        {
+            memset(args, 0, sizeof(args));
+        }
+    };
+
+    static vector<networkedit *> pendingnetworkedits;
 
     static void putsel(packetbuf &p, const selinfo &sel)
     {
@@ -37,6 +60,7 @@ namespace game
         sel.corner = getint(p);
     }
 
+    #ifndef STANDALONE
     static void putvslot(packetbuf &p, int index)
     {
         vector<uchar> buf;
@@ -50,6 +74,7 @@ namespace game
         packvslot(buf, vs);
         if(buf.length()) p.put(buf.getbuf(), buf.length());
     }
+    #endif
 
     bool addmsg(int type, const char *fmt, ...)
     {
@@ -89,6 +114,25 @@ namespace game
         sendclientpacket(p.finalize(), 1);
         return true;
 #endif
+    }
+
+    bool waitforserveredit()
+    {
+#ifdef STANDALONE
+        return false;
+#else
+        return remote || (connected && isconnected(false, true));
+#endif
+    }
+
+    void requestworldcommand(const char *command)
+    {
+        if(!waitforserveredit())
+        {
+            conoutf(CON_ERROR, "server command is only available in multiplayer");
+            return;
+        }
+        addmsg(N_SERVERCOMMAND, "rs", command ? command : "");
     }
 
     void parseoptions(vector<const char *> &args)
@@ -164,6 +208,10 @@ namespace game
     void gamedisconnect(bool cleanup)
     {
         connected = remote = false;
+        pendingnetworkworld = pendingnetworkreset = pendingnetworkrestoreposition = false;
+        pendingnetworkedits.deletecontents();
+        authoritativeauthor = -1;
+        authoritativerevision = synchronizedrevision = 0;
         clearclients();
         if(player1) player1->clientnum = -1;
         lastpositionsend = -1000;
@@ -257,12 +305,86 @@ namespace game
         }
     }
 
+    static bool applynetworkedit(networkedit &edit)
+    {
+        selinfo sel = edit.selection;
+        worldselectiontolocal(sel);
+        if(!sel.validate() || !worldselectionready(sel)) return false;
+
+        setworldeditauthor(edit.author);
+        setworldeditrevision(edit.revision);
+        switch(edit.type)
+        {
+            case N_EDITF: mpeditface(edit.args[0], edit.args[1], sel, false); break;
+            case N_EDITT:
+            {
+                ucharbuf extra(edit.extra.getbuf(), edit.extra.length());
+                mpedittex(edit.args[0], edit.args[1], sel, extra);
+                break;
+            }
+            case N_EDITM: mpeditmat(edit.args[0], edit.args[1], sel, false); break;
+            case N_FLIP: mpflip(sel, false); break;
+            case N_ROTATE: mprotate(edit.args[0], sel, false); break;
+            case N_REPLACE:
+            {
+                ucharbuf extra(edit.extra.getbuf(), edit.extra.length());
+                mpreplacetex(edit.args[0], edit.args[1], edit.args[2] > 0, sel, extra);
+                break;
+            }
+            case N_DELCUBE: mpdelcube(sel, false); break;
+            case N_EDITVSLOT:
+            {
+                ucharbuf extra(edit.extra.getbuf(), edit.extra.length());
+                mpeditvslot(edit.args[0], edit.args[1], sel, extra);
+                break;
+            }
+            default: return true;
+        }
+        return true;
+    }
+
+    static void processnetworkedits()
+    {
+        if(pendingnetworkworld) return;
+        for(int i = 0; i < pendingnetworkedits.length();)
+        {
+            networkedit *edit = pendingnetworkedits[i];
+            if(!applynetworkedit(*edit))
+            {
+                ++i;
+                continue;
+            }
+            delete edit;
+            pendingnetworkedits.remove(i);
+        }
+    }
+
     void updateworld()
     {
 #ifndef STANDALONE
+        if(pendingnetworkworld)
+        {
+            const int seed = pendingnetworkseed, timemillis = pendingnetworktime;
+            const bool frozen = pendingnetworkfrozen,
+                       restoreposition = pendingnetworkrestoreposition;
+            const vec savedposition = pendingnetworkposition;
+            pendingnetworkworld = pendingnetworkreset = pendingnetworkrestoreposition = false;
+            startnetworkworld(seed);
+            if(restoreposition && player1)
+            {
+                vec restored = savedposition;
+                worldpositiontolocal(restored);
+                player1->o = restored;
+                player1->resetinterp();
+                updateworldchunks(true);
+            }
+            environment::synctime(timemillis, frozen);
+            addmsg(N_WORLDREADY, "ri", 0);
+        }
         environment::update();
 #endif
         updateworldchunks();
+        processnetworkedits();
         physicsframe();
         otherplayers();
         if(player1)
@@ -280,7 +402,7 @@ namespace game
 
     void edittrigger(const selinfo &sel, int op, int arg1, int arg2, int arg3, const VSlot *vs)
     {
-        setworldeditauthor(player1 ? player1->clientnum : -1);
+        if(remote && op == EDIT_COPY) return;
         if(!connected && !remote && !isconnected(false, true)) return;
         packetbuf p(MAXTRANS, ENET_PACKET_FLAG_RELIABLE);
         putint(p, N_EDITF + op);
@@ -306,7 +428,10 @@ namespace game
             }
 
             default:
-                putsel(p, sel);
+            {
+                selinfo networksel = sel;
+                if(waitforserveredit()) worldselectiontoabsolute(networksel);
+                putsel(p, networksel);
                 switch(op)
                 {
                     case EDIT_FACE: case EDIT_MAT:
@@ -347,6 +472,7 @@ namespace game
                         break;
                 }
                 break;
+            }
         }
         sendclientpacket(p.finalize(), 1);
     }
@@ -497,8 +623,10 @@ namespace game
             return;
 
         // Extrude exactly one 16-unit voxel, then deliberately paint every face.
+        selinfo placed = hit;
+        placed.o = target;
         mpeditface(-1, 1, hit, true);
-        mpedittex(getworldcubeslot(clampcreativeblock()), 1, hit, true);
+        mpedittex(getworldcubeslot(clampcreativeblock()), 1, placed, true);
         creativeactionmillis = lastmillis;
     }
 
@@ -664,26 +792,32 @@ namespace game
     void particletrack(physent *owner, vec &o, vec &d) {}
     void dynlighttrack(physent *owner, vec &o, vec &hud) {}
     int maxsoundradius(int n) { return 500; }
-    bool needminimap() { return true; }
+    // The procedural world is unbounded while the engine minimap assumes one
+    // stable, finite octree. The runtime octree is only a moving chunk window,
+    // so a finite-map texture is neither valid nor safe during world rebuilds.
+    bool needminimap() { return false; }
 
     static void sendposition(gameent *d, packetbuf &q)
     {
         putint(q, N_POS);
         putuint(q, d->clientnum);
 
+        vec feet = d->feetpos();
+        if(waitforserveredit()) worldpositiontoabsolute(feet);
+        ivec o = ivec(feet.mul(DMF));
+        putint(q, o.x);
+        putint(q, o.y);
+        putint(q, o.z);
+
         // 3 bits physics state, 2 bits movement, and 2 bits strafing.
         uchar physstate = d->physstate | ((d->move&3)<<4) | ((d->strafe&3)<<6);
         q.put(physstate);
 
-        ivec o = ivec(d->feetpos().mul(DMF));
         uint vel = min(int(d->vel.magnitude()*DVELF), 0xFFFF),
              fall = min(int(d->falling.magnitude()*DVELF), 0xFFFF);
 
-        // 3 extended-position bits, extended velocity, falling data, and gameclip.
+        // Extended velocity, falling data, and gameclip.
         uint flags = 0;
-        if(o.x < 0 || o.x > 0xFFFF) flags |= 1<<0;
-        if(o.y < 0 || o.y > 0xFFFF) flags |= 1<<1;
-        if(o.z < 0 || o.z > 0xFFFF) flags |= 1<<2;
         if(vel > 0xFF) flags |= 1<<3;
         if(fall > 0)
         {
@@ -693,13 +827,6 @@ namespace game
         }
         if((lookupmaterial(d->feetpos())&MATF_CLIP) == MAT_GAMECLIP) flags |= 1<<7;
         putuint(q, flags);
-
-        loopk(3)
-        {
-            q.put(o[k]&0xFF);
-            q.put((o[k]>>8)&0xFF);
-            if(flags&(1<<k)) q.put((o[k]>>16)&0xFF);
-        }
 
         uint dir = (d->yaw < 0 ? 360 + int(d->yaw)%360 : int(d->yaw)%360)
                  + clamp(int(d->pitch + 90), 0, 180)*360;
@@ -768,9 +895,14 @@ namespace game
         if(!force && totalmillis - lastpositionsend < 33) return;
         lastpositionsend = totalmillis;
 
-        packetbuf p(100);
-        sendposition(player1, p);
-        sendclientpacket(p.finalize(), 0);
+        {
+            // packetbuf inspects its ENet packet when it leaves scope. Release
+            // builds can transmit and free an unreliable packet immediately
+            // during flushclient(), so relinquish the stack wrapper first.
+            packetbuf p(100);
+            sendposition(player1, p);
+            sendclientpacket(p.finalize(), 0);
+        }
         flushclient();
     }
 
@@ -787,20 +919,11 @@ namespace game
                     break;
                 }
 
-                int cn = getuint(p), physstate = p.get();
+                int cn = getuint(p);
+                vec pos(getint(p)/DMF, getint(p)/DMF, getint(p)/DMF);
+                int physstate = p.get();
                 uint flags = getuint(p);
-                vec pos, vel, falling;
-                loopk(3)
-                {
-                    int n = p.get();
-                    n |= p.get()<<8;
-                    if(flags&(1<<k))
-                    {
-                        n |= p.get()<<16;
-                        if(n&0x800000) n |= ~0U<<24;
-                    }
-                    pos[k] = n/DMF;
-                }
+                vec vel, falling;
                 int dir = p.get();
                 dir |= p.get()<<8;
                 float yaw = dir%360, pitch = clamp(dir/360, 0, 180) - 90,
@@ -826,6 +949,7 @@ namespace game
                 }
                 else falling = vec(0, 0, 0);
                 if(p.overread()) return;
+                if(waitforserveredit()) worldpositiontolocal(pos);
 
                 gameent *d = clients.inrange(cn) ? clients[cn] : NULL;
                 if(!d || d == player1) continue;
@@ -946,9 +1070,42 @@ namespace game
                 break;
             }
             case N_EDITAUTHOR:
-                setworldeditauthor(getint(p));
-                setworldeditrevision(uint(getint(p)));
+                authoritativeauthor = getint(p);
+                authoritativerevision = uint(getint(p));
                 break;
+            case N_WORLDSTATE:
+            {
+                pendingnetworkseed = getint(p);
+                synchronizedrevision = uint(getint(p));
+                pendingnetworktime = getint(p);
+                pendingnetworkfrozen = getint(p) != 0;
+                pendingnetworkreset = getint(p) != 0;
+                pendingnetworkrestoreposition = pendingnetworkreset && player1;
+                if(pendingnetworkrestoreposition)
+                {
+                    pendingnetworkposition = player1->o;
+                    worldpositiontoabsolute(pendingnetworkposition);
+                }
+                pendingnetworkedits.deletecontents();
+                authoritativeauthor = -1;
+                authoritativerevision = 0;
+                pendingnetworkworld = true;
+                break;
+            }
+            case N_WORLDSYNC:
+                synchronizedrevision = uint(getint(p));
+                processnetworkedits();
+                break;
+            case N_WORLDTIME:
+                environment::synctime(getint(p), getint(p) != 0);
+                break;
+            case N_SETPRIVILEGE:
+            {
+                int cn = getint(p), privilege = getint(p);
+                gameent *d = newclient(cn);
+                if(d) d->privilege = privilege;
+                break;
+            }
             case N_EDITENT:
             {
                 int i = getint(p);
@@ -984,65 +1141,71 @@ namespace game
             case N_DELCUBE:
             case N_EDITVSLOT:
             {
-                setworldeditauthor(-1);
-                selinfo sel;
-                getsel(p, sel);
-                if(!sel.validate()) break;
+                networkedit *edit = new networkedit;
+                edit->type = type;
+                edit->author = authoritativeauthor;
+                edit->revision = authoritativerevision;
+                getsel(p, edit->selection);
                 switch(type)
                 {
                     case N_EDITF:
-                    {
-                        int dir = getint(p), mode = getint(p);
-                        mpeditface(dir, mode, sel, false);
+                        edit->args[0] = getint(p);
+                        edit->args[1] = getint(p);
                         break;
-                    }
                     case N_EDITT:
                     {
-                        int tex = getint(p), allfaces = getint(p);
-                        if(p.remaining() < 2) return;
+                        edit->args[0] = getint(p);
+                        edit->args[1] = getint(p);
+                        if(p.remaining() < 2) { delete edit; return; }
                         int extra = lilswap(*(const ushort *)p.pad(2));
-                        if(p.remaining() < extra) return;
+                        if(p.remaining() < extra) { delete edit; return; }
                         ucharbuf ebuf = p.subbuf(extra);
-                        mpedittex(tex, allfaces, sel, ebuf);
+                        edit->extra.put(ebuf.buf, ebuf.maxlen);
                         break;
                     }
                     case N_EDITM:
-                    {
-                        int mat = getint(p), filter = getint(p);
-                        mpeditmat(mat, filter, sel, false);
+                        edit->args[0] = getint(p);
+                        edit->args[1] = getint(p);
                         break;
-                    }
-                    case N_FLIP: mpflip(sel, false); break;
-                    case N_COPY: if(player1) mpcopy(player1->edit, sel, false); break;
-                    case N_PASTE: if(player1) mppaste(player1->edit, sel, false); break;
-                    case N_ROTATE:
-                    {
-                        int dir = getint(p);
-                        mprotate(dir, sel, false);
+                    case N_FLIP: break;
+                    case N_COPY:
+                    case N_PASTE:
+                        delete edit;
+                        edit = NULL;
                         break;
-                    }
+                    case N_ROTATE: edit->args[0] = getint(p); break;
                     case N_REPLACE:
                     {
-                        int oldtex = getint(p), newtex = getint(p), insel = getint(p);
-                        if(p.remaining() < 2) return;
+                        edit->args[0] = getint(p);
+                        edit->args[1] = getint(p);
+                        edit->args[2] = getint(p);
+                        if(p.remaining() < 2) { delete edit; return; }
                         int extra = lilswap(*(const ushort *)p.pad(2));
-                        if(p.remaining() < extra) return;
+                        if(p.remaining() < extra) { delete edit; return; }
                         ucharbuf ebuf = p.subbuf(extra);
-                        mpreplacetex(oldtex, newtex, insel > 0, sel, ebuf);
+                        edit->extra.put(ebuf.buf, ebuf.maxlen);
                         break;
                     }
-                    case N_DELCUBE: mpdelcube(sel, false); break;
+                    case N_DELCUBE: break;
                     case N_EDITVSLOT:
                     {
-                        int delta = getint(p), allfaces = getint(p);
-                        if(p.remaining() < 2) return;
+                        edit->args[0] = getint(p);
+                        edit->args[1] = getint(p);
+                        if(p.remaining() < 2) { delete edit; return; }
                         int extra = lilswap(*(const ushort *)p.pad(2));
-                        if(p.remaining() < extra) return;
+                        if(p.remaining() < extra) { delete edit; return; }
                         ucharbuf ebuf = p.subbuf(extra);
-                        mpeditvslot(delta, allfaces, sel, ebuf);
+                        edit->extra.put(ebuf.buf, ebuf.maxlen);
                         break;
                     }
                 }
+                if(edit)
+                {
+                    pendingnetworkedits.add(edit);
+                    processnetworkedits();
+                }
+                authoritativeauthor = -1;
+                authoritativerevision = 0;
                 break;
             }
             case N_CALCLIGHT:
@@ -1079,8 +1242,27 @@ namespace game
     ICOMMAND(getclientteam, "i", (int *cn), intret(0));
     ICOMMAND(getclientmodel, "i", (int *cn), intret(-1));
     ICOMMAND(getclientcolor, "i", (int *cn), intret(0xFFFFFF));
-    ICOMMAND(ismaster, "i", (int *cn), intret(0));
-    ICOMMAND(isadmin, "i", (int *cn), intret(0));
+    ICOMMAND(ismaster, "i", (int *cn),
+    {
+        gameent *d = clients.inrange(*cn) ? clients[*cn] : NULL;
+        if(player1 && player1->clientnum == *cn) d = player1;
+        intret(d && d->privilege >= PRIV_ADMIN ? 1 : 0);
+    });
+    ICOMMAND(isadmin, "i", (int *cn),
+    {
+        gameent *d = clients.inrange(*cn) ? clients[*cn] : NULL;
+        if(player1 && player1->clientnum == *cn) d = player1;
+        intret(d && d->privilege >= PRIV_ADMIN ? 1 : 0);
+    });
+    ICOMMAND(setmaster, "ss", (char *password, char *who),
+    {
+        if(who[0])
+        {
+            conoutf(CON_ERROR, "delegating admin is not supported; each admin must authenticate");
+            return;
+        }
+        addmsg(N_SETMASTER, "rs", password);
+    });
     ICOMMAND(isai, "ii", (int *cn, int *type), intret(0));
     ICOMMAND(isspectator, "i", (int *cn), intret(0));
     ICOMMAND(isdead, "i", (int *cn), intret(0));
@@ -1145,22 +1327,253 @@ namespace game
 
 namespace server
 {
+    enum
+    {
+        SERVER_DAY_MILLIS = 20 * 60 * 1000,
+        SERVER_START_MILLIS = 8 * SERVER_DAY_MILLIS / 24,
+        SERVER_JOURNAL_VERSION = 1
+    };
+
+    SVAR(serverpass, "");
+    SVAR(adminpass, "");
+    SVAR(serverworld, "multiplayer");
+    SVAR(serverdesc, "Cube-Craft authoritative server");
+    SVAR(servermotd, "");
+    VAR(serverworldseed, 0, 1337, INT_MAX);
+
     struct clientinfo
     {
-        int clientnum;
-        bool connected, local;
+        int clientnum, privilege, lastpositionmillis;
+        bool connected, local, worldready, hasposition;
         string name;
         vector<uchar> position;
+        vec o;
         ENetPacket *getmap;
 
-        clientinfo() : clientnum(-1), connected(false), local(false), getmap(NULL) { name[0] = '\0'; }
+        clientinfo() : clientnum(-1), privilege(PRIV_NONE), lastpositionmillis(0),
+                       connected(false), local(false),
+                       worldready(false), hasposition(false), o(0, 0, 0), getmap(NULL)
+        {
+            name[0] = '\0';
+        }
+    };
+
+    struct serveredit
+    {
+        uint revision, timestamp;
+        int author, type;
+        bool active, hasselection;
+        selinfo selection;
+        vector<uchar> payload;
+
+        serveredit() : revision(0), timestamp(0), author(-1), type(-1),
+                       active(true), hasselection(false) {}
     };
 
     vector<clientinfo *> clients;
+    vector<serveredit *> worldhistory, worldredostack;
     string smapname = "";
     stream *mapdata = NULL;
     int gamemode = STARTGAMEMODE;
     uint worldeditrevision = 0;
+    int worldclockmillis = SERVER_START_MILLIS, lastworldtimesync = 0;
+    bool worldtimefrozen = false, serverworldready = true, journalinitialized = false;
+
+    static void journalput32(vector<uchar> &out, uint value)
+    {
+        value = lilswap(value);
+        out.put((uchar *)&value, sizeof(value));
+    }
+
+    static uint journalchecksum(const uchar *data, int length)
+    {
+        uint hash = 2166136261U;
+        loopi(length) { hash ^= data[i]; hash *= 16777619U; }
+        return hash;
+    }
+
+    static bool journalread32(ucharbuf &p, uint &value)
+    {
+        if(p.remaining() < 4) return false;
+        memcpy(&value, p.pad(4), 4);
+        value = lilswap(value);
+        return true;
+    }
+
+    static bool readselection(ucharbuf &p, selinfo &sel)
+    {
+        sel.o.x = getint(p); sel.o.y = getint(p); sel.o.z = getint(p);
+        sel.s.x = getint(p); sel.s.y = getint(p); sel.s.z = getint(p);
+        sel.grid = getint(p); sel.orient = getint(p);
+        sel.cx = getint(p); sel.cxs = getint(p); sel.cy = getint(p); sel.cys = getint(p);
+        sel.corner = getint(p);
+        return !p.overread();
+    }
+
+    static bool editselectiontype(int type)
+    {
+        return type == N_EDITF || type == N_EDITT || type == N_EDITM ||
+               type == N_FLIP || type == N_ROTATE || type == N_REPLACE ||
+               type == N_DELCUBE || type == N_EDITVSLOT;
+    }
+
+    static void updateservereditmetadata(serveredit &edit)
+    {
+        edit.hasselection = false;
+        if(!editselectiontype(edit.type)) return;
+        ucharbuf p(edit.payload.getbuf(), edit.payload.length());
+        if(readselection(p, edit.selection)) edit.hasselection = true;
+    }
+
+    static void serverjournalname(char *name, size_t len)
+    {
+        string safe;
+        int n = 0;
+        for(const char *s = serverworld; *s && n < int(sizeof(safe)) - 1; ++s)
+            if(iscubealnum(*s) || *s == '_' || *s == '-') safe[n++] = *s;
+        safe[n] = '\0';
+        if(!safe[0]) copystring(safe, "multiplayer");
+        snprintf(name, len, "media/map/%s/server.diff", safe);
+        path(name);
+    }
+
+    static bool writeserverjournalheader(stream &file)
+    {
+        return file.write("CCJ1", 4) == 4 &&
+               file.putlil<uint>(SERVER_JOURNAL_VERSION) &&
+               file.putlil<uint>(PROTOCOL_VERSION) &&
+               file.putlil<uint>(uint(serverworldseed)) &&
+               file.putlil<uint>(worldeditrevision);
+    }
+
+    static bool writeserveredit(stream &file, const serveredit &edit)
+    {
+        vector<uchar> body;
+        journalput32(body, edit.revision);
+        journalput32(body, edit.timestamp);
+        journalput32(body, uint(edit.author));
+        journalput32(body, uint(edit.type));
+        journalput32(body, edit.active ? 1U : 0U);
+        journalput32(body, uint(edit.payload.length()));
+        body.put(edit.payload.getbuf(), edit.payload.length());
+        return file.write("OP01", 4) == 4 &&
+               file.putlil<uint>(uint(body.length())) &&
+               file.putlil<uint>(journalchecksum(body.getbuf(), body.length())) &&
+               file.write(body.getbuf(), body.length()) == size_t(body.length());
+    }
+
+    static bool rewriteserverjournal()
+    {
+        string filename;
+        serverjournalname(filename, sizeof(filename));
+        stream *file = openrawfile(filename, "wb");
+        if(!file) return false;
+        bool ok = writeserverjournalheader(*file);
+        loopv(worldhistory) if(ok) ok = writeserveredit(*file, *worldhistory[i]);
+        delete file;
+        if(!ok) conoutf(CON_ERROR, "could not write authoritative world journal %s", filename);
+        return ok;
+    }
+
+    static bool appendserveredit(const serveredit &edit)
+    {
+        string filename;
+        serverjournalname(filename, sizeof(filename));
+        stream *file = openrawfile(filename, "ab");
+        if(!file) return false;
+        bool ok = writeserveredit(*file, edit);
+        delete file;
+        return ok;
+    }
+
+    static void loadserverjournal()
+    {
+        worldhistory.deletecontents();
+        worldredostack.deletecontents();
+        worldeditrevision = 0;
+        serverworldready = true;
+
+        string filename;
+        serverjournalname(filename, sizeof(filename));
+        stream *file = openrawfile(filename, "rb");
+        if(!file)
+        {
+            rewriteserverjournal();
+            return;
+        }
+
+        char magic[4];
+        uint version = 0, protocol = 0, seed = 0, headerrevision = 0;
+        if(file->read(magic, 4) != 4 || memcmp(magic, "CCJ1", 4) ||
+           (version = file->getlil<uint>()) != SERVER_JOURNAL_VERSION ||
+           (protocol = file->getlil<uint>()) != PROTOCOL_VERSION ||
+           (seed = file->getlil<uint>()) != uint(serverworldseed))
+        {
+            conoutf(CON_ERROR, "authoritative journal %s is incompatible (version %u, protocol %u, seed %u; configured seed %d)",
+                    filename, version, protocol, seed, serverworldseed);
+            serverworldready = false;
+            delete file;
+            return;
+        }
+        headerrevision = file->getlil<uint>();
+        worldeditrevision = headerrevision;
+
+        bool recovered = false;
+        while(!file->end())
+        {
+            if(file->read(magic, 4) != 4) break;
+            uint length = file->getlil<uint>(), checksum = file->getlil<uint>();
+            if(memcmp(magic, "OP01", 4) || length < 24 || length > uint(MAXTRANS + 64))
+            {
+                recovered = true;
+                break;
+            }
+            vector<uchar> body;
+            body.setsize(length);
+            if(file->read(body.getbuf(), length) != length ||
+               journalchecksum(body.getbuf(), body.length()) != checksum)
+            {
+                recovered = true;
+                break;
+            }
+            ucharbuf p(body.getbuf(), body.length());
+            uint revision, timestamp, author, type, active, payloadlen;
+            if(!journalread32(p, revision) || !journalread32(p, timestamp) ||
+               !journalread32(p, author) || !journalread32(p, type) ||
+               !journalread32(p, active) || !journalread32(p, payloadlen) ||
+               payloadlen != uint(p.remaining()))
+            {
+                recovered = true;
+                break;
+            }
+            serveredit *edit = new serveredit;
+            edit->revision = revision;
+            edit->timestamp = timestamp;
+            edit->author = int(author);
+            edit->type = int(type);
+            edit->active = active != 0;
+            edit->payload.put(p.pad(payloadlen), payloadlen);
+            updateservereditmetadata(*edit);
+            worldhistory.add(edit);
+            worldeditrevision = max(worldeditrevision, revision);
+        }
+        delete file;
+        if(recovered)
+            conoutf(CON_WARN, "authoritative journal had a corrupt tail; recovered %d valid revisions",
+                    worldhistory.length());
+        conoutf("loaded %d authoritative world revisions for seed %d",
+                worldhistory.length(), serverworldseed);
+    }
+
+    static bool ensureserverworld()
+    {
+        if(!journalinitialized)
+        {
+            journalinitialized = true;
+            loadserverjournal();
+        }
+        return serverworldready;
+    }
 
     clientinfo *getinfo(int n)
     {
@@ -1175,7 +1588,54 @@ namespace server
             clients[ci->clientnum] = NULL;
         delete ci;
     }
-    void serverinit() {}
+    static void sendprivilege(int cn, int subject, int privilege)
+    {
+        sendf(cn, 1, "ri3", N_SETPRIVILEGE, subject, privilege);
+    }
+
+    static void sendworldtime(int cn = -1)
+    {
+        sendf(cn, 1, "ri3", N_WORLDTIME, worldclockmillis, worldtimefrozen ? 1 : 0);
+    }
+
+    static void sendserveredit(int cn, const serveredit &edit)
+    {
+        packetbuf q(MAXTRANS, ENET_PACKET_FLAG_RELIABLE);
+        putint(q, N_EDITAUTHOR);
+        putint(q, edit.author);
+        putint(q, int(edit.revision));
+        putint(q, edit.type);
+        q.put(edit.payload.getbuf(), edit.payload.length());
+        sendpacket(cn, 1, q.finalize());
+    }
+
+    static void sendworldstate(clientinfo &ci, bool reset)
+    {
+        ci.worldready = false;
+        sendf(ci.clientnum, 1, "ri6", N_WORLDSTATE, serverworldseed,
+              int(worldeditrevision), worldclockmillis, worldtimefrozen ? 1 : 0,
+              reset ? 1 : 0);
+    }
+
+    static void replayworld(clientinfo &ci)
+    {
+        loopv(worldhistory) if(worldhistory[i]->active)
+            sendserveredit(ci.clientnum, *worldhistory[i]);
+        sendf(ci.clientnum, 1, "ri2", N_WORLDSYNC, int(worldeditrevision));
+        ci.worldready = true;
+    }
+
+    static void resetallclients()
+    {
+        loopv(clients) if(clients[i] && clients[i]->connected)
+            sendworldstate(*clients[i], true);
+    }
+
+    void serverinit()
+    {
+        copystring(smapname, serverworld);
+        journalinitialized = false;
+    }
     int reserveclients() { return 0; }
     int numchannels() { return 3; }
     void clientdisconnect(int n)
@@ -1189,47 +1649,456 @@ namespace server
 
     int clientconnect(int n, uint ip)
     {
+        if(!ensureserverworld()) return DISC_PRIVATE;
         while(clients.length() <= n) clients.add(NULL);
         clientinfo *ci = (clientinfo *)getclientinfo(n);
         clients[n] = ci;
         ci->clientnum = n;
-        ci->connected = true;
+        ci->connected = false;
         ci->local = false;
-        sendf(n, 1, "ri5ss", N_SERVINFO, n, PROTOCOL_VERSION, rnd(INT_MAX), 0, "", "");
-        sendf(n, 1, "ri", N_WELCOME);
+        sendf(n, 1, "ri5ss", N_SERVINFO, n, PROTOCOL_VERSION, rnd(INT_MAX), 0, serverdesc, "");
         return DISC_NONE;
     }
 
     void localconnect(int n)
     {
+        if(!ensureserverworld()) return;
         while(clients.length() <= n) clients.add(NULL);
         clientinfo *ci = (clientinfo *)getclientinfo(n);
         clients[n] = ci;
         ci->clientnum = n;
         ci->connected = ci->local = true;
-        sendf(n, 1, "ri5ss", N_SERVINFO, n, PROTOCOL_VERSION, rnd(INT_MAX), 0, "", "");
+        ci->privilege = PRIV_ADMIN;
+        sendf(n, 1, "ri5ss", N_SERVINFO, n, PROTOCOL_VERSION, rnd(INT_MAX), 0, serverdesc, "");
         sendf(n, 1, "ri", N_WELCOME);
+        sendprivilege(n, n, ci->privilege);
+        sendworldstate(*ci, false);
     }
 
     void localdisconnect(int n) { clientdisconnect(n); }
     bool allowbroadcast(int n) { clientinfo *ci = getinfo(n); return ci && ci->connected; }
     void recordpacket(int chan, void *data, int len) {}
 
-    void broadcastedit(int sender, int chan, packetbuf &p, int msg)
+    static bool validselection(const clientinfo &ci, const selinfo &sel, const char *&error)
     {
-        packetbuf q(MAXTRANS, ENET_PACKET_FLAG_RELIABLE);
-        bool worldop = msg == N_EDITF || msg == N_EDITT || msg == N_EDITM ||
-                       msg == N_FLIP || msg == N_PASTE || msg == N_ROTATE ||
-                       msg == N_REPLACE || msg == N_DELCUBE;
-        if(worldop)
+        if(sel.grid <= 0 || sel.grid > 4096 || (sel.grid & (sel.grid - 1)) ||
+           sel.s.x <= 0 || sel.s.y <= 0 || sel.s.z <= 0 ||
+           sel.orient < 0 || sel.orient > 5 ||
+           sel.o.x % sel.grid || sel.o.y % sel.grid || sel.o.z % sel.grid)
         {
-            putint(q, N_EDITAUTHOR);
-            putint(q, sender);
-            putint(q, int(++worldeditrevision));
+            error = "invalid or unaligned edit selection";
+            return false;
         }
-        putint(q, msg);
-        q.put(p.buf, p.remaining());
-        sendpacket(-1, chan, q.finalize(), sender);
+        long long volume = (long long)sel.s.x * sel.s.y * sel.s.z,
+                  maxx = (long long)sel.o.x + (long long)sel.s.x * sel.grid,
+                  maxy = (long long)sel.o.y + (long long)sel.s.y * sel.grid,
+                  maxz = (long long)sel.o.z + (long long)sel.s.z * sel.grid;
+        if(volume <= 0 || volume > (1 << 20) ||
+           maxx < INT_MIN || maxx > INT_MAX || maxy < INT_MIN || maxy > INT_MAX ||
+           sel.o.z < 0 || maxz > (1 << 13))
+        {
+            error = "edit selection is outside the generated world or too large";
+            return false;
+        }
+        if(ci.privilege < PRIV_ADMIN)
+        {
+            if(sel.grid != 16 || sel.s != ivec(1, 1, 1))
+            {
+                error = "normal players may only modify one gridsize 4 (16-unit) block";
+                return false;
+            }
+            if(!ci.hasposition)
+            {
+                error = "send a valid position before editing";
+                return false;
+            }
+            vec center(sel.o.x + 8.0f, sel.o.y + 8.0f, sel.o.z + 8.0f);
+            if(center.dist(ci.o) > 160.0f)
+            {
+                error = "block is beyond creative reach";
+                return false;
+            }
+        }
+        return true;
+    }
+
+    static bool validateedit(clientinfo &ci, int type, packetbuf &p,
+                             serveredit &edit, const char *&error)
+    {
+        int start = p.length();
+        selinfo sel;
+        if(!editselectiontype(type) || !readselection(p, sel) ||
+           !validselection(ci, sel, error))
+            return false;
+
+        int arg1 = 0, arg2 = 0, arg3 = 0, extra = 0;
+        switch(type)
+        {
+            case N_EDITF:
+                arg1 = getint(p); arg2 = getint(p);
+                if(arg1 < -1 || arg1 > 1 || arg2 < 0 || arg2 > 2)
+                {
+                    error = "invalid face edit";
+                    return false;
+                }
+                break;
+            case N_EDITT:
+                arg1 = getint(p); arg2 = getint(p);
+                if(p.remaining() < 2) { error = "truncated texture edit"; return false; }
+                extra = lilswap(*(const ushort *)p.pad(2));
+                if(extra > p.remaining()) { error = "truncated texture payload"; return false; }
+                p.pad(extra);
+                if(arg1 < 0 || arg1 > 0xFFFF || arg2 < 0 || arg2 > 1)
+                {
+                    error = "invalid texture edit";
+                    return false;
+                }
+                break;
+            case N_EDITM:
+                arg1 = getint(p); arg2 = getint(p);
+                break;
+            case N_FLIP:
+            case N_DELCUBE:
+                break;
+            case N_ROTATE:
+                arg1 = getint(p);
+                if(arg1 < -3 || arg1 > 3 || !arg1)
+                {
+                    error = "invalid rotation";
+                    return false;
+                }
+                break;
+            case N_REPLACE:
+                arg1 = getint(p); arg2 = getint(p); arg3 = getint(p);
+                if(p.remaining() < 2) { error = "truncated replace edit"; return false; }
+                extra = lilswap(*(const ushort *)p.pad(2));
+                if(extra > p.remaining()) { error = "truncated replace payload"; return false; }
+                p.pad(extra);
+                if(arg1 < 0 || arg2 < 0 || arg3 != 1)
+                {
+                    error = "invalid replace edit";
+                    return false;
+                }
+                break;
+            case N_EDITVSLOT:
+                arg1 = getint(p); arg2 = getint(p);
+                if(p.remaining() < 2) { error = "truncated vslot edit"; return false; }
+                extra = lilswap(*(const ushort *)p.pad(2));
+                if(extra > p.remaining()) { error = "truncated vslot payload"; return false; }
+                p.pad(extra);
+                break;
+            default:
+                error = "unsupported world edit";
+                return false;
+        }
+        if(p.overread() || p.remaining())
+        {
+            error = "malformed edit packet";
+            return false;
+        }
+        if(ci.privilege < PRIV_ADMIN)
+        {
+            bool allowedface = type == N_EDITF && arg1 == -1 && arg2 == 1,
+                 allowedtexture = type == N_EDITT && arg1 <= 0xFFF &&
+                                  arg2 == 1 && extra == 0,
+                 alloweddelete = type == N_DELCUBE;
+            if(!allowedface && !allowedtexture && !alloweddelete)
+            {
+                error = "this edit operation requires admin";
+                return false;
+            }
+        }
+
+        edit.author = ci.clientnum;
+        edit.type = type;
+        edit.selection = sel;
+        edit.hasselection = true;
+        edit.payload.put(&p.buf[start], p.length() - start);
+        return true;
+    }
+
+    static void acceptededit(serveredit *edit)
+    {
+        edit->revision = ++worldeditrevision;
+        edit->timestamp = uint(time(NULL));
+        if(!appendserveredit(*edit))
+        {
+            --worldeditrevision;
+            clientinfo *ci = getinfo(edit->author);
+            if(ci) sendf(ci->clientnum, 1, "ris", N_SERVMSG,
+                         "world edit rejected: server could not persist it");
+            delete edit;
+            return;
+        }
+        worldhistory.add(edit);
+        worldredostack.deletecontents();
+        loopv(clients)
+        {
+            clientinfo *recipient = clients[i];
+            if(recipient && recipient->connected && recipient->worldready)
+                sendserveredit(recipient->clientnum, *edit);
+        }
+    }
+
+    static serveredit *cloneserveredit(const serveredit &source)
+    {
+        serveredit *edit = new serveredit;
+        edit->revision = source.revision;
+        edit->timestamp = source.timestamp;
+        edit->author = source.author;
+        edit->type = source.type;
+        edit->active = source.active;
+        edit->hasselection = source.hasselection;
+        edit->selection = source.selection;
+        edit->payload.put(source.payload.getbuf(), source.payload.length());
+        return edit;
+    }
+
+    static bool sameserveredit(const serveredit &a, const serveredit &b)
+    {
+        return a.type == b.type && a.payload.length() == b.payload.length() &&
+               (!a.payload.length() ||
+                !memcmp(a.payload.getbuf(), b.payload.getbuf(), a.payload.length()));
+    }
+
+    static void sendcommandresult(clientinfo &ci, const char *message)
+    {
+        sendf(ci.clientnum, 1, "ris", N_SERVMSG, message);
+    }
+
+    static bool editinarea(const serveredit &edit, const ivec &minimum, const ivec &maximum)
+    {
+        if(!edit.hasselection) return false;
+        ivec end = ivec(edit.selection.s).mul(edit.selection.grid).add(edit.selection.o);
+        return edit.selection.o.x < maximum.x && end.x > minimum.x &&
+               edit.selection.o.y < maximum.y && end.y > minimum.y &&
+               edit.selection.o.z < maximum.z && end.z > minimum.z;
+    }
+
+    static void serverworldcommand(clientinfo &ci, const char *request)
+    {
+        if(ci.privilege < PRIV_ADMIN)
+        {
+            sendcommandresult(ci, "permission denied: this world command requires admin");
+            return;
+        }
+
+        string command;
+        filtertext(command, request ? request : "", false, false, sizeof(command));
+        char *args = command;
+        while(*args && !iscubespace(*args)) ++args;
+        if(*args) *args++ = '\0';
+        while(iscubespace(*args)) ++args;
+
+        if(cubecaseequal(command, "time"))
+        {
+            if(cubecaseequal(args, "freeze")) worldtimefrozen = true;
+            else
+            {
+                char *end = NULL;
+                double hour = strtod(args, &end);
+                while(end && iscubespace(*end)) ++end;
+                if(end == args || (end && *end) || hour < 0 || hour > 24)
+                {
+                    sendcommandresult(ci, "usage: /time <hour 0-24|freeze>");
+                    return;
+                }
+                if(hour == 24) hour = 0;
+                worldclockmillis = int(hour * SERVER_DAY_MILLIS / 24.0);
+                worldtimefrozen = false;
+            }
+            sendworldtime();
+            sendcommandresult(ci, "authoritative world time updated");
+            return;
+        }
+
+        if(cubecaseequal(command, "worldundo"))
+        {
+            int requested = args[0] ? clamp(atoi(args), 1, 1000) : 1, applied = 0;
+            for(int i = worldhistory.length() - 1; i >= 0 && applied < requested; --i)
+            {
+                serveredit *edit = worldhistory[i];
+                if(!edit->active || !editselectiontype(edit->type)) continue;
+                edit->active = false;
+                serveredit *redo = cloneserveredit(*edit);
+                redo->active = true;
+                worldredostack.add(redo);
+                ++worldeditrevision;
+                ++applied;
+            }
+            if(applied)
+            {
+                rewriteserverjournal();
+                resetallclients();
+            }
+            defformatstring(message, "worldundo: %d authoritative change%s reverted",
+                            applied, applied == 1 ? "" : "s");
+            sendcommandresult(ci, message);
+            return;
+        }
+
+        if(cubecaseequal(command, "worldredo"))
+        {
+            int requested = args[0] ? clamp(atoi(args), 1, 1000) : 1, applied = 0;
+            while(applied < requested)
+            {
+                serveredit *edit = NULL;
+                if(!worldredostack.empty()) edit = worldredostack.pop();
+                else for(int i = worldhistory.length() - 1; i >= 0; --i)
+                    if(!worldhistory[i]->active && editselectiontype(worldhistory[i]->type))
+                    {
+                        bool alreadyactive = false;
+                        for(int j = i + 1; j < worldhistory.length(); ++j)
+                            if(worldhistory[j]->active &&
+                               sameserveredit(*worldhistory[i], *worldhistory[j]))
+                            {
+                                alreadyactive = true;
+                                break;
+                            }
+                        if(alreadyactive) continue;
+                        edit = cloneserveredit(*worldhistory[i]);
+                        break;
+                    }
+                if(!edit) break;
+                edit->revision = ++worldeditrevision;
+                edit->timestamp = uint(time(NULL));
+                edit->author = ci.clientnum;
+                edit->active = true;
+                worldhistory.add(edit);
+                ++applied;
+            }
+            if(applied)
+            {
+                rewriteserverjournal();
+                resetallclients();
+            }
+            defformatstring(message, "worldredo: %d authoritative change%s restored",
+                            applied, applied == 1 ? "" : "s");
+            sendcommandresult(ci, message);
+            return;
+        }
+
+        if(cubecaseequal(command, "worldlog"))
+        {
+            int shown = 0;
+            for(int i = worldhistory.length() - 1; i >= 0 && shown < 20; --i)
+            {
+                const serveredit &edit = *worldhistory[i];
+                if(!editselectiontype(edit.type)) continue;
+                defformatstring(message, "rev %u author %d op %d at %d %d %d%s",
+                                edit.revision, edit.author, edit.type,
+                                edit.hasselection ? edit.selection.o.x : 0,
+                                edit.hasselection ? edit.selection.o.y : 0,
+                                edit.hasselection ? edit.selection.o.z : 0,
+                                edit.active ? "" : " (undone)");
+                sendcommandresult(ci, message);
+                ++shown;
+            }
+            if(!shown) sendcommandresult(ci, "worldlog: no authoritative edits");
+            return;
+        }
+
+        if(cubecaseequal(command, "worldrevert"))
+        {
+            int applied = 0;
+            if(!strncmp(args, "player ", 7))
+            {
+                int author = atoi(args + 7);
+                loopv(worldhistory)
+                {
+                    serveredit &edit = *worldhistory[i];
+                    if(edit.active && edit.author == author && editselectiontype(edit.type))
+                    {
+                        edit.active = false;
+                        ++worldeditrevision;
+                        ++applied;
+                    }
+                }
+            }
+            else if(!strncmp(args, "area ", 5))
+            {
+                int x1, y1, z1, x2, y2, z2;
+                if(sscanf(args + 5, "%d %d %d %d %d %d", &x1, &y1, &z1, &x2, &y2, &z2) != 6)
+                {
+                    sendcommandresult(ci, "usage: /worldrevert player <id> | area <x1 y1 z1> <x2 y2 z2>");
+                    return;
+                }
+                ivec minimum(min(x1, x2), min(y1, y2), min(z1, z2)),
+                     maximum(max(x1, x2) + 1, max(y1, y2) + 1, max(z1, z2) + 1);
+                loopv(worldhistory)
+                {
+                    serveredit &edit = *worldhistory[i];
+                    if(edit.active && editinarea(edit, minimum, maximum))
+                    {
+                        edit.active = false;
+                        ++worldeditrevision;
+                        ++applied;
+                    }
+                }
+            }
+            else
+            {
+                sendcommandresult(ci, "usage: /worldrevert player <id> | area <x1 y1 z1> <x2 y2 z2>");
+                return;
+            }
+            if(applied)
+            {
+                worldredostack.deletecontents();
+                rewriteserverjournal();
+                resetallclients();
+            }
+            defformatstring(message, "worldrevert: %d authoritative change%s reverted",
+                            applied, applied == 1 ? "" : "s");
+            sendcommandresult(ci, message);
+            return;
+        }
+
+        if(cubecaseequal(command, "worldrestore"))
+        {
+            int x, y, z;
+            uint revision;
+            if(sscanf(args, "chunk %d %d %d %u", &x, &y, &z, &revision) != 4)
+            {
+                sendcommandresult(ci, "usage: /worldrestore chunk <x y z> <revision>");
+                return;
+            }
+            int applied = 0;
+            ivec minimum(x * 1024, y * 1024, 0), maximum((x + 1) * 1024, (y + 1) * 1024, 8192);
+            loopv(worldhistory)
+            {
+                serveredit &edit = *worldhistory[i];
+                if(edit.active && edit.revision > revision && editinarea(edit, minimum, maximum))
+                {
+                    edit.active = false;
+                    ++worldeditrevision;
+                    ++applied;
+                }
+            }
+            if(applied) { rewriteserverjournal(); resetallclients(); }
+            defformatstring(message, "worldrestore: %d change%s reverted in chunk %d %d",
+                            applied, applied == 1 ? "" : "s", x, y);
+            sendcommandresult(ci, message);
+            return;
+        }
+
+        if(cubecaseequal(command, "worlddiff"))
+        {
+            int active = 0;
+            loopv(worldhistory) if(worldhistory[i]->active) ++active;
+            if(!strncmp(args, "compact", 7)) rewriteserverjournal();
+            if(strncmp(args, "stats", 5) && strncmp(args, "compact", 7) &&
+               strncmp(args, "verify", 6))
+            {
+                sendcommandresult(ci, "usage: /worlddiff <stats|compact|verify>");
+                return;
+            }
+            defformatstring(message, "worlddiff: %d active, %d audit records, revision %u, seed %d",
+                            active, worldhistory.length(), worldeditrevision, serverworldseed);
+            sendcommandresult(ci, message);
+            return;
+        }
+
+        sendcommandresult(ci, "unknown authoritative world command");
     }
 
     void parsepacket(int sender, int chan, packetbuf &p)
@@ -1237,7 +2106,7 @@ namespace server
         if(chan == 0)
         {
             clientinfo *ci = getinfo(sender);
-            while(ci && ci->connected && p.remaining())
+            while(ci && ci->connected && ci->worldready && p.remaining())
             {
                 int packetstart = p.length();
                 int type = getint(p);
@@ -1247,14 +2116,11 @@ namespace server
                     break;
                 }
 
-                int cn = getuint(p), physstate = p.get();
+                int cn = getuint(p);
+                int coords[3];
+                loopk(3) coords[k] = getint(p);
+                int physstate = p.get();
                 uint flags = getuint(p);
-                loopk(3)
-                {
-                    p.get();
-                    p.get();
-                    if(flags&(1<<k)) p.get();
-                }
                 p.get();
                 p.get();
                 p.get();
@@ -1275,8 +2141,18 @@ namespace server
                 if(p.overread()) return;
                 if(cn != sender || (physstate&7) > PHYS_BOUNCE) continue;
 
+                vec nextposition(coords[0]/DMF, coords[1]/DMF, coords[2]/DMF);
+                int now = max(totalmillis, 1),
+                    elapsed = ci->hasposition ? max(now - ci->lastpositionmillis, 1) : 0;
+                if(nextposition.z < 0 || nextposition.z > (1 << 13) ||
+                   (ci->hasposition && nextposition.dist(ci->o) > 32.0f + elapsed * 0.5f))
+                    continue;
+
                 ci->position.setsize(0);
                 ci->position.put(&p.buf[packetstart], p.length() - packetstart);
+                ci->o = nextposition;
+                ci->hasposition = true;
+                ci->lastpositionmillis = now;
             }
             return;
         }
@@ -1288,10 +2164,30 @@ namespace server
             {
                 case N_CONNECT:
                 {
+                    clientinfo *ci = getinfo(sender);
                     string pass;
                     getstring(pass, p, sizeof(pass));
-                    sendf(sender, 1, "ri5ss", N_SERVINFO, sender, PROTOCOL_VERSION, rnd(INT_MAX), 0, "", "");
+                    if(!ci || ci->connected) break;
+                    if(!serverworldready)
+                    {
+                        disconnect_client(sender, DISC_PRIVATE);
+                        return;
+                    }
+                    if(serverpass[0] && strcmp(pass, serverpass))
+                    {
+                        disconnect_client(sender, DISC_PASSWORD);
+                        return;
+                    }
+                    ci->connected = true;
                     sendf(sender, 1, "ri", N_WELCOME);
+                    loopv(clients)
+                    {
+                        clientinfo *other = clients[i];
+                        if(other && other->connected)
+                            sendprivilege(sender, other->clientnum, other->privilege);
+                    }
+                    if(servermotd[0]) sendcommandresult(*ci, servermotd);
+                    sendworldstate(*ci, false);
                     break;
                 }
                 case N_INITCLIENT:
@@ -1299,7 +2195,7 @@ namespace server
                     clientinfo *ci = getinfo(sender);
                     string name;
                     getstring(name, p, sizeof(name));
-                    if(!ci) break;
+                    if(!ci || !ci->connected) break;
 
                     bool firstinit = !ci->name[0];
                     filtertext(ci->name, name, false, false, MAXSTRLEN);
@@ -1311,33 +2207,96 @@ namespace server
                             sendf(sender, 1, "ri2s", N_INITCLIENT, i, other->name);
                     }
                     sendf(-1, 1, "ri2s", N_INITCLIENT, sender, ci->name);
+                    sendprivilege(-1, sender, ci->privilege);
                     break;
                 }
                 case N_TEXT:
                 {
+                    clientinfo *ci = getinfo(sender);
                     string text;
                     getstring(text, p, sizeof(text));
-                    sendf(-1, 1, "ris", N_SERVMSG, text);
+                    if(ci && ci->connected)
+                    {
+                        defformatstring(message, "%s: %s", ci->name[0] ? ci->name : "player", text);
+                        sendf(-1, 1, "ris", N_SERVMSG, message);
+                    }
                     break;
                 }
                 case N_EDITENT:
                 case N_EDITF: case N_EDITT: case N_EDITM: case N_FLIP: case N_COPY: case N_PASTE: case N_ROTATE: case N_REPLACE: case N_DELCUBE: case N_CALCLIGHT: case N_REMIP: case N_EDITVSLOT: case N_UNDO: case N_REDO: case N_EDITVAR:
-                    broadcastedit(sender, 1, p, type);
-                    p.pad(p.remaining());
+                {
+                    clientinfo *ci = getinfo(sender);
+                    if(!ci || !ci->connected || !ci->worldready)
+                    {
+                        p.pad(p.remaining());
+                        break;
+                    }
+                    serveredit *edit = new serveredit;
+                    const char *error = NULL;
+                    if(!validateedit(*ci, type, p, *edit, error))
+                    {
+                        delete edit;
+                        sendcommandresult(*ci, error ? error : "world edit rejected");
+                        p.pad(p.remaining());
+                        break;
+                    }
+                    acceptededit(edit);
                     break;
+                }
                 case N_NEWMAP:
-                    worldeditrevision = 0;
-                    broadcastedit(sender, 1, p, type);
-                    p.pad(p.remaining());
+                {
+                    clientinfo *ci = getinfo(sender);
+                    getint(p);
+                    if(ci) sendcommandresult(*ci, "newmap is disabled: the server seed owns the base world");
                     break;
+                }
+                case N_WORLDREADY:
+                {
+                    clientinfo *ci = getinfo(sender);
+                    getint(p);
+                    if(ci && ci->connected) replayworld(*ci);
+                    break;
+                }
+                case N_SETMASTER:
+                {
+                    clientinfo *ci = getinfo(sender);
+                    string password;
+                    getstring(password, p, sizeof(password));
+                    if(!ci || !ci->connected) break;
+                    if(!strcmp(password, "0") && !ci->local)
+                    {
+                        ci->privilege = PRIV_NONE;
+                        sendprivilege(-1, sender, ci->privilege);
+                        sendcommandresult(*ci, "admin privilege relinquished");
+                    }
+                    else if(ci->local || (adminpass[0] && !strcmp(password, adminpass)))
+                    {
+                        ci->privilege = PRIV_ADMIN;
+                        sendprivilege(-1, sender, ci->privilege);
+                        sendcommandresult(*ci, "admin privilege granted");
+                    }
+                    else sendcommandresult(*ci, "admin authentication failed");
+                    break;
+                }
+                case N_SERVERCOMMAND:
+                {
+                    clientinfo *ci = getinfo(sender);
+                    string command;
+                    getstring(command, p, sizeof(command));
+                    if(ci && ci->connected) serverworldcommand(*ci, command);
+                    break;
+                }
                 case N_GETMAP:
                     if(mapdata) sendfile(sender, 2, mapdata, "i", N_SENDMAP);
+                    break;
+                case N_EDITMODE:
+                    getint(p);
                     break;
                 default:
                 {
                     int size = msgsizelookup(type);
                     if(size > 0) loopi(size-1) getint(p);
-                    else p.pad(p.remaining());
+                    p.pad(p.remaining());
                     break;
                 }
             }
@@ -1369,13 +2328,14 @@ namespace server
         loopv(clients)
         {
             clientinfo *recipient = clients[i];
-            if(!recipient || !recipient->connected) continue;
+            if(!recipient || !recipient->connected || !recipient->worldready) continue;
 
             vector<uchar> batch;
             loopvj(clients)
             {
                 clientinfo *source = clients[j];
-                if(!source || !source->connected || source == recipient || source->position.empty()) continue;
+                if(!source || !source->connected || !source->worldready ||
+                   source == recipient || source->position.empty()) continue;
                 if(!batch.empty() && batch.length() + source->position.length() > mtu)
                     sent |= sendpositionbatch(recipient->clientnum, batch);
                 batch.put(source->position.getbuf(), source->position.length());
@@ -1388,17 +2348,32 @@ namespace server
     void serverinforeply(ucharbuf &req, ucharbuf &p)
     {
         putint(p, PROTOCOL_VERSION);
-        putint(p, 0);
+        int players = 0;
+        loopv(clients) if(clients[i] && clients[i]->connected) ++players;
+        putint(p, players);
         putint(p, maxclients);
         putint(p, 3);
         putint(p, gamemode);
         putint(p, 0);
         putint(p, MM_OPEN);
         sendstring(smapname, p);
-        sendstring("Hover engine", p);
+        sendstring(serverdesc, p);
         sendserverinforeply(p);
     }
-    void serverupdate() {}
+    void serverupdate()
+    {
+        if(!journalinitialized) return;
+        if(!worldtimefrozen && curtime > 0)
+        {
+            worldclockmillis += curtime;
+            while(worldclockmillis >= SERVER_DAY_MILLIS) worldclockmillis -= SERVER_DAY_MILLIS;
+        }
+        if(totalmillis - lastworldtimesync >= 5000)
+        {
+            lastworldtimesync = totalmillis;
+            sendworldtime();
+        }
+    }
     int protocolversion() { return PROTOCOL_VERSION; }
     int laninfoport() { return TESSERACT_LANINFO_PORT; }
     int serverport() { return TESSERACT_SERVER_PORT; }

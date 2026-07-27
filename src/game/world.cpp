@@ -629,6 +629,14 @@ namespace game
     }
 }
 
-ICOMMAND(worldloadseed, "i", (int *seed), game::loadworldseed(*seed));
+ICOMMAND(worldloadseed, "i", (int *seed),
+{
+    if(game::waitforserveredit())
+    {
+        conoutf(CON_ERROR, "the multiplayer server owns the world seed");
+        return;
+    }
+    game::loadworldseed(*seed);
+});
 
 #endif

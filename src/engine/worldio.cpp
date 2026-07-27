@@ -463,6 +463,30 @@ static int worldeditauthor = -1, lastworlddiffflush = 0;
 static ullong worldeditrevision = 0, incomingworldeditrevision = 0;
 static vector<worldeditrecord *> worldredostack;
 
+void worldpositiontoabsolute(vec &position)
+{
+    position.x += float(double(worldfirstchunkx) * WORLD_CHUNK_SIZE);
+    position.y += float(double(worldfirstchunky) * WORLD_CHUNK_SIZE);
+}
+
+void worldpositiontolocal(vec &position)
+{
+    position.x -= float(double(worldfirstchunkx) * WORLD_CHUNK_SIZE);
+    position.y -= float(double(worldfirstchunky) * WORLD_CHUNK_SIZE);
+}
+
+void worldselectiontoabsolute(selinfo &selection)
+{
+    selection.o.x += worldfirstchunkx * WORLD_CHUNK_SIZE;
+    selection.o.y += worldfirstchunky * WORLD_CHUNK_SIZE;
+}
+
+void worldselectiontolocal(selinfo &selection)
+{
+    selection.o.x -= worldfirstchunkx * WORLD_CHUNK_SIZE;
+    selection.o.y -= worldfirstchunky * WORLD_CHUNK_SIZE;
+}
+
 struct worldeditcapture
 {
     bool active;
@@ -2461,7 +2485,7 @@ static void rebuildworldchunks(int chunkx, int chunky, int aheadx, int aheady, b
     ZoneTextF("focus %d_%d ahead %d_%d", chunkx, chunky, aheadx, aheady);
     rebuildingworldchunks = true;
     int cancelled = reprioritizeworldchunkqueue(chunkx, chunky, aheadx, aheady),
-        queued = queueworldchunkview(chunkx, chunky, aheadx, aheady);
+        queued = load ? 0 : queueworldchunkview(chunkx, chunky, aheadx, aheady);
 
     vector<int> entering, leaving;
     loopv(worldchunks)
@@ -2491,9 +2515,12 @@ static void rebuildworldchunks(int chunkx, int chunky, int aheadx, int aheady, b
         if(load)
         {
             ZoneScopedN("Chunks/Rebuild all geometry");
-            allchanged(true);
+            allchanged(worldfolder[0] != '\0');
         }
     }
+    // Keep CPU-heavy generation workers out of the synchronous bootstrap.
+    // In optimized builds their startup used to overlap VA/material creation.
+    if(load) queued = queueworldchunkview(chunkx, chunky, aheadx, aheady);
 
     int released = pruneworldchunkcache(chunkx, chunky, 1);
     activeworldchunk = findworldchunk(chunkx, chunky);
@@ -4459,6 +4486,49 @@ static void subdivideworlddiffcube(cube &c, bool prepared, int &families)
     }
 }
 
+bool worldselectionready(const selinfo &selection)
+{
+    if(!worldroot || selection.grid <= 0 || selection.s.x <= 0 ||
+       selection.s.y <= 0 || selection.s.z <= 0)
+        return false;
+
+    int minx = worldfirstchunkx + int(floor(double(selection.o.x) / WORLD_CHUNK_SIZE)),
+        miny = worldfirstchunky + int(floor(double(selection.o.y) / WORLD_CHUNK_SIZE)),
+        maxx = worldfirstchunkx + int(floor(double(selection.o.x +
+                    selection.s.x * selection.grid - 1) / WORLD_CHUNK_SIZE)),
+        maxy = worldfirstchunky + int(floor(double(selection.o.y +
+                    selection.s.y * selection.grid - 1) / WORLD_CHUNK_SIZE));
+    for(int y = miny; y <= maxy; ++y) for(int x = minx; x <= maxx; ++x)
+    {
+        int index = findworldchunk(x, y);
+        if(!worldchunks.inrange(index) || worldchunks[index].loading ||
+           !worldchunks[index].root || !worldchunkmounted(worldchunks[index]))
+            return false;
+        const worldchunk &chunk = worldchunks[index];
+        ivec origin = worldchunkorigin(chunk);
+        int localminx = clamp(selection.o.x - origin.x, 0, int(WORLD_CHUNK_SIZE) - 1),
+            localminy = clamp(selection.o.y - origin.y, 0, int(WORLD_CHUNK_SIZE) - 1),
+            localmaxx = clamp(selection.o.x + selection.s.x * selection.grid - 1 - origin.x,
+                              0, int(WORLD_CHUNK_SIZE) - 1),
+            localmaxy = clamp(selection.o.y + selection.s.y * selection.grid - 1 - origin.y,
+                              0, int(WORLD_CHUNK_SIZE) - 1),
+            minsection = clamp(selection.o.z / WORLD_SECTION_SIZE, 0,
+                               int(WORLD_SECTION_LAYERS) - 1),
+            maxsection = clamp((selection.o.z + selection.s.z * selection.grid - 1) /
+                               WORLD_SECTION_SIZE, 0, int(WORLD_SECTION_LAYERS) - 1);
+        for(int section = minsection; section <= maxsection; ++section)
+            for(int tiley = localminy / WORLD_SECTION_SIZE;
+                tiley <= localmaxy / WORLD_SECTION_SIZE; ++tiley)
+                for(int tilex = localminx / WORLD_SECTION_SIZE;
+                    tilex <= localmaxx / WORLD_SECTION_SIZE; ++tilex)
+                {
+                    int tile = tiley * WORLD_SECTION_COLUMNS + tilex;
+                    if(!(chunk.mountedtiles[section] & (1U << tile))) return false;
+                }
+    }
+    return true;
+}
+
 static void applyworlddiffnode(cube *root, const worlddiffnode &node,
                                bool prepared, int &families)
 {
@@ -5445,6 +5515,37 @@ static void loadworldcommand(const char *requested)
     hasrequestedworldspawn = false;
 }
 
+void startnetworkworld(int seed)
+{
+    game::loadworldseed(seed);
+    if(!emptymap(WORLD_RUNTIME_SCALE, true, "network/0_0", true, false)) return;
+    worldfolder[0] = '\0';
+    worldfirstchunkx = worldfirstchunky = -WORLD_RUNTIME_CENTER;
+    if(!loadworlddefinitions()) return;
+
+    freeocta(worldroot);
+    worldroot = NULL;
+    activeworldchunk = worldchunks.length();
+    worldchunks.add(worldchunk(0, 0, generateworldchunk(0, 0)));
+    loadinitialworldchunks(0, 0);
+
+    setvar("mapscale", WORLD_RUNTIME_SCALE, true, false);
+    setvar("mapsize", WORLD_RUNTIME_SIZE, true, false);
+    worldroot = newcubes(F_EMPTY);
+    if(player)
+    {
+        player->o = vec(WORLD_RUNTIME_CENTER * WORLD_CHUNK_SIZE + WORLD_CHUNK_SIZE / 2,
+                        WORLD_RUNTIME_CENTER * WORLD_CHUNK_SIZE + WORLD_CHUNK_SIZE / 2,
+                        WORLD_GROUND_HEIGHT + player->eyeheight + 1);
+    }
+    preparedworldspawn = false;
+    worldspawnmetadata spawn;
+    if(!prepareworldspawn(spawn)) return;
+    updateworldchunks(true);
+    applypreparedworldspawn();
+    conoutf("joined authoritative world with seed %d", seed);
+}
+
 ICOMMAND(loadworld, "s", (char *name), loadworldcommand(name));
 
 void saveworld()
@@ -5629,6 +5730,12 @@ static worldeditrecord *latestworldauditrecord()
 
 static void worldundocommand(int *requested)
 {
+    if(game::waitforserveredit())
+    {
+        defformatstring(command, "worldundo %d", max(*requested, 1));
+        game::requestworldcommand(command);
+        return;
+    }
     int count = max(*requested, 1), applied = 0;
     while(applied < count)
     {
@@ -5642,6 +5749,12 @@ static void worldundocommand(int *requested)
 
 static void worldredocommand(int *requested)
 {
+    if(game::waitforserveredit())
+    {
+        defformatstring(command, "worldredo %d", max(*requested, 1));
+        game::requestworldcommand(command);
+        return;
+    }
     int count = max(*requested, 1), applied = 0;
     while(applied < count)
     {
@@ -5677,6 +5790,13 @@ COMMANDN(worldredo, worldredocommand, "i");
 
 static void worldlogcommand(char *playertext, int *radius, int *minutes)
 {
+    if(game::waitforserveredit())
+    {
+        defformatstring(command, "worldlog %s %d %d",
+                        playertext ? playertext : "", *radius, *minutes);
+        game::requestworldcommand(command);
+        return;
+    }
     int author = playertext && playertext[0] ? game::findclientnum(playertext) : INT_MIN,
         seconds = *minutes > 0 ? *minutes * 60 : INT_MAX, shown = 0;
     if(playertext && playertext[0] && author < 0)
@@ -5714,6 +5834,13 @@ COMMANDN(worldlog, worldlogcommand, "sii");
 static void worldrevertcommand(char *mode, char *arg1, char *arg2, char *arg3,
                                char *arg4, char *arg5, char *arg6, char *arg7)
 {
+    if(game::waitforserveredit())
+    {
+        defformatstring(command, "worldrevert %s %s %s %s %s %s %s %s",
+                        mode, arg1, arg2, arg3, arg4, arg5, arg6, arg7);
+        game::requestworldcommand(command);
+        return;
+    }
     int reverted = 0;
     ullong now = ullong(time(NULL));
     if(!strcmp(mode, "player"))
@@ -5790,6 +5917,13 @@ COMMANDN(worldrevert, worldrevertcommand, "ssssssss");
 static void worldrestorecommand(char *kind, char *xtext, char *ytext,
                                 char *ztext, char *revisiontext)
 {
+    if(game::waitforserveredit())
+    {
+        defformatstring(command, "worldrestore %s %s %s %s %s",
+                        kind, xtext, ytext, ztext, revisiontext);
+        game::requestworldcommand(command);
+        return;
+    }
     if(strcmp(kind, "chunk"))
     {
         conoutf(CON_ERROR, "usage: /worldrestore chunk <x y z> <revision>");
@@ -5824,6 +5958,14 @@ COMMANDN(worldrestore, worldrestorecommand, "sssss");
 
 static void worlddiffcommand(char *action, char *xtext, char *ytext, char *ztext)
 {
+    if(game::waitforserveredit())
+    {
+        defformatstring(command, "worlddiff %s %s %s %s",
+                        action ? action : "", xtext ? xtext : "",
+                        ytext ? ytext : "", ztext ? ztext : "");
+        game::requestworldcommand(command);
+        return;
+    }
     if(!action || !action[0])
     {
         conoutf(CON_ERROR, "usage: /worlddiff <stats|compact|verify> [x y z|all]");

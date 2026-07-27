@@ -125,8 +125,32 @@ namespace game
             applylighting(false);
         }
 
+        void synctime(int millis, bool frozen)
+        {
+            cyclemillis = clamp(millis, 0, CYCLE_MILLIS - 1);
+            initialized = true;
+            timefrozen = frozen;
+            applylighting(true);
+        }
+
+        int gettimemillis()
+        {
+            return int(cyclemillis);
+        }
+
+        bool istimefrozen()
+        {
+            return timefrozen;
+        }
+
         ICOMMAND(time, "sN", (char *value, int *numargs),
         {
+            if(game::waitforserveredit())
+            {
+                defformatstring(command, "time %s", *numargs == 1 ? value : "");
+                game::requestworldcommand(command);
+                return;
+            }
             if(*numargs == 1 && cubecaseequal(value, "freeze"))
             {
                 const double hour = cyclemillis * 24.0 / CYCLE_MILLIS;

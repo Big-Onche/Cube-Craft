@@ -2064,28 +2064,38 @@ void drawminimap()
         return;
     }
 
-    GLERROR;
-    renderprogress(0, "generating mini-map...", !renderedframe);
-
-    drawtex = DRAWTEX_MINIMAP;
-
-    GLERROR;
-    gl_setupframe(true);
-
     int size = 1<<minimapsize, sizelimit = min(hwtexsize, min(gw, gh));
+    if(!player || !worldroot || sizelimit <= 0)
+    {
+        clearminimap();
+        return;
+    }
     while(size > sizelimit) size /= 2;
-    if(!minimaptex) glGenTextures(1, &minimaptex);
+    if(size <= 1)
+    {
+        clearminimap();
+        return;
+    }
 
     ivec bbmin(worldsize, worldsize, worldsize), bbmax(0, 0, 0);
+    bool hasbounds = false;
     loopv(valist)
     {
         vtxarray *va = valist[i];
+        bool valid = true;
+        loopk(3) if(va->geommin[k] > va->geommax[k]) { valid = false; break; }
+        if(!valid) continue;
         loopk(3)
         {
-            if(va->geommin[k]>va->geommax[k]) continue;
             bbmin[k] = min(bbmin[k], va->geommin[k]);
             bbmax[k] = max(bbmax[k], va->geommax[k]);
         }
+        hasbounds = true;
+    }
+    if(!hasbounds)
+    {
+        clearminimap();
+        return;
     }
     if(minimapclip)
     {
@@ -2095,10 +2105,31 @@ void drawminimap()
         loopk(2) bbmax[k] = min(bbmax[k], clipmax[k]);
     }
 
+    if(bbmax.x <= bbmin.x || bbmax.y <= bbmin.y || bbmax.z < bbmin.z)
+    {
+        clearminimap();
+        return;
+    }
+
     minimapradius = vec(bbmax).sub(vec(bbmin)).mul(0.5f);
     minimapcenter = vec(bbmin).add(minimapradius);
     minimapradius.x = minimapradius.y = max(minimapradius.x, minimapradius.y);
+    if(minimapradius.x <= 0 || minimapradius.y <= 0)
+    {
+        clearminimap();
+        return;
+    }
     minimapscale = vec((0.5f - 1.0f/size)/minimapradius.x, (0.5f - 1.0f/size)/minimapradius.y, 1.0f);
+
+    GLERROR;
+    renderprogress(0, "generating mini-map...", !renderedframe);
+
+    drawtex = DRAWTEX_MINIMAP;
+
+    GLERROR;
+    gl_setupframe(true);
+
+    if(!minimaptex) glGenTextures(1, &minimaptex);
 
     physent *oldcamera = camera1;
     static physent cmcamera;

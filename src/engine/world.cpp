@@ -1475,7 +1475,7 @@ void startmap(const char *name)
     game::startmap(name);
 }
 
-bool emptymap(int scale, bool force, const char *mname, bool usecfg)    // main empty world creation routine
+bool emptymap(int scale, bool force, const char *mname, bool usecfg, bool rebuild)    // main empty world creation routine
 {
     if(!force && !editmode)
     {
@@ -1506,7 +1506,16 @@ bool emptymap(int scale, bool force, const char *mname, bool usecfg)    // main 
         identflags &= ~IDF_OVERRIDDEN;
     }
 
-    allchanged(true);
+    if(rebuild) allchanged(true);
+    else
+    {
+        // Procedural network worlds replace this temporary root immediately.
+        // Do not build VAs or load materials for an octree that is about to be
+        // discarded. The old root's VAs were destroyed by freeocta() above.
+        resetqueries();
+        resetclipplanes();
+        clearshadowcache();
+    }
 
     startmap(mname);
 

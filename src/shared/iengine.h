@@ -231,7 +231,8 @@ static inline bool insideworld(const ivec &o)
 }
 
 // world
-extern bool emptymap(int factor, bool force, const char *mname = "", bool usecfg = true);
+extern bool emptymap(int factor, bool force, const char *mname = "", bool usecfg = true,
+                     bool rebuild = true);
 extern bool enlargemap(bool force);
 extern int findentity(int type, int index = 0, int attr1 = -1, int attr2 = -1);
 extern void findents(int low, int high, bool notspawned, const vec &pos, const vec &radius, vector<int> &found);
@@ -503,6 +504,15 @@ extern void sendserverinforeply(ucharbuf &p);
 extern bool requestmaster(const char *req);
 extern bool requestmasterf(const char *fmt, ...) PRINTFARGS(1, 2);
 extern bool isdedicatedserver();
+
+#ifndef STANDALONE
+extern void startnetworkworld(int seed);
+extern void worldpositiontoabsolute(vec &position);
+extern void worldpositiontolocal(vec &position);
+extern void worldselectiontoabsolute(selinfo &selection);
+extern void worldselectiontolocal(selinfo &selection);
+extern bool worldselectionready(const selinfo &selection);
+#endif
 
 // serverbrowser
 
