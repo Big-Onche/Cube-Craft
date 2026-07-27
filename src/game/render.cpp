@@ -28,7 +28,8 @@ namespace game
     static const float HIP_HEIGHT = 11.25f, SHOULDER_HEIGHT = 22.5f;
     static const float MIN_GAIT_CADENCE = 0.65f, MAX_GAIT_CADENCE = 3.0f;
     static const float LEG_SWING = 32.0f, ARM_SWING = 28.0f;
-    static const float IDLE_HEAD_YAW = 65.0f, IDLE_BODY_TURN_SPEED = 180.0f;
+    static const float IDLE_HEAD_YAW = 65.0f, MOVING_HEAD_YAW = 75.0f;
+    static const float IDLE_BODY_TURN_SPEED = 180.0f, MOVING_BODY_TURN_RESPONSE = 14.0f;
     static const float CROUCH_HIP_DROP = 2.0f, CROUCH_HEAD_DROP = 0.75f;
     static const float CROUCH_TORSO_PITCH = -35.0f, CROUCH_ARM_PITCH = -15.0f,
                        CROUCH_LEG_PITCH = 35.0f;
@@ -121,7 +122,7 @@ namespace game
 
     static float headyawlimit(float movement)
     {
-        return movement > 0.05f ? 0.0f : IDLE_HEAD_YAW;
+        return movement > 0.05f ? MOVING_HEAD_YAW : IDLE_HEAD_YAW;
     }
 
     static float updatebodyyaw(gameent *d, float movement)
@@ -136,10 +137,15 @@ namespace game
         int elapsed = min(lastmillis - d->renderbodyyawmillis, 100);
         d->renderbodyyawmillis = lastmillis;
 
-        // Movement always faces the whole body in the player's direction.
+        // Follow the shortest arc with exponential smoothing so the response
+        // stays fast and consistent at any frame rate.
         if(movement > 0.05f)
         {
-            d->renderbodyyaw = normalizeyaw(d->yaw);
+            float turn = yawoffset(d->yaw, d->renderbodyyaw);
+            float blend = 1.0f - expf(-MOVING_BODY_TURN_RESPONSE * elapsed / 1000.0f);
+            d->renderbodyyaw = fabsf(turn) < 0.05f
+                             ? normalizeyaw(d->yaw)
+                             : normalizeyaw(d->renderbodyyaw + turn * blend);
             return d->renderbodyyaw;
         }
 
