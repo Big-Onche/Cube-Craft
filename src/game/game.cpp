@@ -1548,7 +1548,7 @@ namespace server
         stream *file = openrawfile(filename, "rb");
         if(!file)
         {
-            rewriteserverjournal();
+            if(!rewriteserverjournal()) serverworldready = false;
             return;
         }
 
@@ -1579,8 +1579,11 @@ namespace server
                 break;
             }
             vector<uchar> body;
-            body.setsize(length);
-            if(file->read(body.getbuf(), length) != length ||
+            // vector::setsize() only shrinks an existing allocation. Using it
+            // here left getbuf() unallocated in release builds, so every valid
+            // first record looked like a corrupt tail after a restart.
+            uchar *bodybuf = body.pad(length);
+            if(file->read(bodybuf, length) != length ||
                journalchecksum(body.getbuf(), body.length()) != checksum)
             {
                 recovered = true;
@@ -1609,8 +1612,13 @@ namespace server
         }
         delete file;
         if(recovered)
+        {
             conoutf(CON_WARN, "authoritative journal had a corrupt tail; recovered %d valid revisions",
                     worldhistory.length());
+            // Remove an actually incomplete tail before future appends;
+            // otherwise every later record would remain hidden behind it.
+            if(!rewriteserverjournal()) serverworldready = false;
+        }
         conoutf("loaded %d authoritative world revisions for seed %d",
                 worldhistory.length(), serverworldseed);
     }
