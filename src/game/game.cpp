@@ -555,6 +555,7 @@ namespace game
         }
 #endif
         findplayerspawn(player1, -1, 0);
+        if(player1) player1->renderbodyyawmillis = -1;
     }
     void preload()
     {

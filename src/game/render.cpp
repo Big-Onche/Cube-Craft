@@ -27,16 +27,16 @@ namespace game
     // Their configs recenter articulated pieces on these joint heights.
     static const float HIP_HEIGHT = 11.25f, SHOULDER_HEIGHT = 22.5f;
     static const float RUN_CYCLE_SPEED = 9.0f, LEG_SWING = 32.0f, ARM_SWING = 28.0f;
+    static const float IDLE_HEAD_YAW = 65.0f, IDLE_BODY_TURN_SPEED = 180.0f;
 
     void preloadplayermodels()
     {
         loopi(NUM_PLAYER_PARTS) preloadmodel(playermodels[i]);
     }
 
-    static void renderpart(gameent *d, int part, const vec &origin, float pitch, int flags)
+    static void renderpart(gameent *d, int part, const vec &origin, float yaw, float pitch, int flags)
     {
-        rendermodel(playermodels[part], ANIM_MAPMODEL | ANIM_LOOP,
-                    origin, d->yaw, pitch, 0, flags, d);
+        rendermodel(playermodels[part], ANIM_MAPMODEL | ANIM_LOOP, origin, yaw, pitch, 0, flags, d);
     }
 
     static float movementamount(const gameent *d)
@@ -49,6 +49,57 @@ namespace game
         return amount;
     }
 
+    static float yawoffset(float yaw, float reference)
+    {
+        float offset = fmodf(yaw - reference, 360.0f);
+        if(offset > 180.0f) offset -= 360.0f;
+        else if(offset < -180.0f) offset += 360.0f;
+        return offset;
+    }
+
+    static float normalizeyaw(float yaw)
+    {
+        yaw = fmodf(yaw, 360.0f);
+        return yaw < 0 ? yaw + 360.0f : yaw;
+    }
+
+    static float headyawlimit(float movement)
+    {
+        return movement > 0.05f ? 0.0f : IDLE_HEAD_YAW;
+    }
+
+    static float updatebodyyaw(gameent *d, float movement)
+    {
+        if(d->renderbodyyawmillis < 0 || lastmillis < d->renderbodyyawmillis)
+        {
+            d->renderbodyyaw = normalizeyaw(d->yaw);
+            d->renderbodyyawmillis = lastmillis;
+            return d->renderbodyyaw;
+        }
+
+        int elapsed = min(lastmillis - d->renderbodyyawmillis, 100);
+        d->renderbodyyawmillis = lastmillis;
+
+        // Movement always faces the whole body in the player's direction.
+        if(movement > 0.05f)
+        {
+            d->renderbodyyaw = normalizeyaw(d->yaw);
+            return d->renderbodyyaw;
+        }
+
+        float headlimit = headyawlimit(movement);
+        float offset = yawoffset(d->yaw, d->renderbodyyaw);
+        if(fabsf(offset) > headlimit)
+        {
+            float target = d->yaw - (offset < 0 ? -headlimit : headlimit);
+            float turn = yawoffset(target, d->renderbodyyaw);
+            float maxturn = IDLE_BODY_TURN_SPEED * elapsed / 1000.0f;
+            d->renderbodyyaw = normalizeyaw(d->renderbodyyaw + clamp(turn, -maxturn, maxturn));
+        }
+
+        return d->renderbodyyaw;
+    }
+
     static void renderplayer(gameent *d, bool local)
     {
         if(!d || d->state == CS_SPECTATOR || (!local && d->smoothmillis < 0)) return;
@@ -57,21 +108,23 @@ namespace game
         if(local && !isthirdperson()) flags |= MDL_ONLYSHADOW;
 
         float movement = movementamount(d);
-        float phase = lastmillis * (RUN_CYCLE_SPEED / 1000.0f)
-                    + max(d->clientnum, 0) * 1.37f;
+        float phase = lastmillis * (RUN_CYCLE_SPEED / 1000.0f) + max(d->clientnum, 0) * 1.37f;
         float stride = sinf(phase) * movement;
         float bob = fabsf(cosf(phase)) * 0.45f * movement;
+        float bodyyaw = updatebodyyaw(d, movement);
+        float headlimit = headyawlimit(movement);
+        float headyaw = normalizeyaw(bodyyaw + clamp(yawoffset(d->yaw, bodyyaw), -headlimit, headlimit));
 
         vec feet = d->feetpos(bob);
         vec hips = vec(feet).addz(HIP_HEIGHT);
         vec shoulders = vec(feet).addz(SHOULDER_HEIGHT);
 
-        renderpart(d, PART_TORSO, feet, 0, flags);
-        renderpart(d, PART_HEAD, shoulders, sinf(phase * 2.0f) * 1.5f * movement, flags);
-        renderpart(d, PART_LEFT_ARM, shoulders, -stride * ARM_SWING, flags);
-        renderpart(d, PART_RIGHT_ARM, shoulders, stride * ARM_SWING, flags);
-        renderpart(d, PART_LEFT_LEG, hips, stride * LEG_SWING, flags);
-        renderpart(d, PART_RIGHT_LEG, hips, -stride * LEG_SWING, flags);
+        renderpart(d, PART_TORSO, feet, bodyyaw, 0, flags);
+        renderpart(d, PART_HEAD, shoulders, headyaw, clamp(d->pitch, -80.0f, 80.0f) + sinf(phase * 2.0f) * 1.5f * movement, flags);
+        renderpart(d, PART_LEFT_ARM, shoulders, bodyyaw, -stride * ARM_SWING, flags);
+        renderpart(d, PART_RIGHT_ARM, shoulders, bodyyaw, stride * ARM_SWING, flags);
+        renderpart(d, PART_LEFT_LEG, hips, bodyyaw, stride * LEG_SWING, flags);
+        renderpart(d, PART_RIGHT_LEG, hips, bodyyaw, -stride * LEG_SWING, flags);
     }
 
     void rendergame()
