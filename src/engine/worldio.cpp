@@ -3582,26 +3582,18 @@ static uint hashworldgrass(uint seed, uint worldx, uint worldy, uint salt)
 
 static void cacheworldscattertransform(int chunkx, int chunky, float maxoffset, const worldscatterinstance &scatter)
 {
-    if(scatter.rendertransformvalid &&
-       scatter.rendermaxoffset == maxoffset)
-        return;
-    const uint worldx = uint(chunkx * WORLD_CHUNK_BLOCKS
-                            + scatter.x / WORLD_BLOCK_SIZE),
-               worldy = uint(chunky * WORLD_CHUNK_BLOCKS
-                            + scatter.y / WORLD_BLOCK_SIZE),
+    if(scatter.rendertransformvalid && scatter.rendermaxoffset == maxoffset) return;
+
+    const uint worldx = uint(chunkx * WORLD_CHUNK_BLOCKS + scatter.x / WORLD_BLOCK_SIZE),
+               worldy = uint(chunky * WORLD_CHUNK_BLOCKS + scatter.y / WORLD_BLOCK_SIZE),
                seed = uint(game::getworldseed());
-    scatter.renderyaw =
-        int(worldtreeunit(hashworldgrass(seed, worldx, worldy,
-                                        0x63D83595U)) * 360.0f);
-    const float angle =
-                    worldtreeunit(hashworldgrass(seed, worldx, worldy,
-                                                 0xC2B2AE35U))
-                  * 2.0f * M_PI,
-                offsetunit =
-                    worldtreeunit(hashworldgrass(seed, worldx, worldy,
-                                                 0x27D4EB2FU)),
-                offset = maxoffset * WORLD_BLOCK_SIZE
-                       * offsetunit * offsetunit;
+
+    scatter.renderyaw = int(worldtreeunit(hashworldgrass(seed, worldx, worldy, 0x63D83595U)) * 360.0f);
+
+    const float angle = worldtreeunit(hashworldgrass(seed, worldx, worldy, 0xC2B2AE35U)) * 2.0f * M_PI,
+                offsetunit = worldtreeunit(hashworldgrass(seed, worldx, worldy, 0x27D4EB2FU)),
+                offset = maxoffset * WORLD_BLOCK_SIZE * offsetunit * offsetunit;
+
     scatter.renderoffsetx = cosf(angle) * offset;
     scatter.renderoffsety = sinf(angle) * offset;
     scatter.rendermaxoffset = maxoffset;
@@ -3610,12 +3602,11 @@ static void cacheworldscattertransform(int chunkx, int chunky, float maxoffset, 
 
 static void cacheworldscattertransforms(int chunkx, int chunky, float maxoffset, const vector<worldscatterinstance> &scatter)
 {
-    loopv(scatter)
-        cacheworldscattertransform(chunkx, chunky, maxoffset, scatter[i]);
+    loopv(scatter) cacheworldscattertransform(chunkx, chunky, maxoffset, scatter[i]);
 }
 
-VARP(grassmaxdistance, 0, 32, 1024);
-VARP(grassmaxamount, 0, 2048, MAXENTS);
+VARP(staticentsmaxdistance, 0, 64, 1024);
+VARP(staticentsmaxamount, 0, 8192, MAXENTS);
 
 struct worldgrasscollectcontext
 {
@@ -3625,11 +3616,8 @@ struct worldgrasscollectcontext
     int chunkx, chunky;
     uint seed;
 
-    worldgrasscollectcontext(int chunkx, int chunky,
-                             const game::worldsettings &settings,
-                             vector<worldscatterinstance> &scatter)
-        : settings(settings), scatter(scatter), chunkx(chunkx), chunky(chunky),
-          seed(uint(game::getworldseed()))
+    worldgrasscollectcontext(int chunkx, int chunky, const game::worldsettings &settings, vector<worldscatterinstance> &scatter)
+        : settings(settings), scatter(scatter), chunkx(chunkx), chunky(chunky), seed(uint(game::getworldseed()))
     {
         distribution.SetSeed(game::getworldseed() ^ 0x6E624EB7);
         distribution.SetNoiseType(FastNoiseLite::NoiseType_OpenSimplex2S);
@@ -3919,8 +3907,7 @@ static float worldscatterchunkdistance(const worldchunk &chunk, const vec &focus
 static void updateworldscatterers()
 {
     const vec *focus = player ? &player->o : camera1 ? &camera1->o : NULL;
-    if(grassmaxdistance <= 0 || grassmaxamount <= 0 ||
-       !focus || worldchunks.empty())
+    if(staticentsmaxdistance <= 0 || staticentsmaxamount <= 0 || !focus || worldchunks.empty())
     {
         clearworldscattererentities();
         return;
@@ -3929,16 +3916,15 @@ static void updateworldscatterers()
     vector<worldgrasscandidate> candidates;
     vector<worldscatterchunkcandidate> scatterchunks;
     const game::worldsettings settings;
-    const float radius = grassmaxdistance * WORLD_BLOCK_SIZE,
+    const float radius = staticentsmaxdistance * WORLD_BLOCK_SIZE,
                 radiussquared = radius * radius,
-                maxoffset = max(settings.grassmaxoffset, 0.0f)
-                          * WORLD_BLOCK_SIZE;
+                maxoffset = max(settings.grassmaxoffset, 0.0f) * WORLD_BLOCK_SIZE;
+
     loopv(worldchunks)
     {
         const worldchunk &chunk = worldchunks[i];
         if(chunk.loading || !chunk.root || !worldchunkmounted(chunk)) continue;
-        const float distance =
-            worldscatterchunkdistance(chunk, *focus, maxoffset);
+        const float distance = worldscatterchunkdistance(chunk, *focus, maxoffset);
         if(distance > radiussquared) continue;
         scatterchunks.add(worldscatterchunkcandidate(i, distance));
     }
@@ -3963,9 +3949,9 @@ static void updateworldscatterers()
             candidates.add(worldgrasscandidate(
                 worldscatterkey(chunk, scatter), position,
                 worldscatterdefinitions[scatter.type]->mapmodel, yaw));
-            if(candidates.length() >= grassmaxamount) break;
+            if(candidates.length() >= staticentsmaxamount) break;
         }
-        if(candidates.length() >= grassmaxamount) break;
+        if(candidates.length() >= staticentsmaxamount) break;
     }
 
     hashtable<ivec, int> desired(1<<12);
