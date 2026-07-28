@@ -409,7 +409,9 @@ enum
     WORLD_EDIT_FILL_VOLUME,
     WORLD_EDIT_DELETE_VOLUME,
     WORLD_EDIT_PASTE_BLUEPRINT,
-    WORLD_EDIT_DELETE_BLUEPRINT
+    WORLD_EDIT_DELETE_BLUEPRINT,
+    WORLD_EDIT_SET_SCATTER,
+    WORLD_EDIT_DELETE_SCATTER
 };
 extern void beginworldedit(int operation, const selinfo &sel,
                            int arg1 = 0, int arg2 = 0, int arg3 = 0, int arg4 = 0);

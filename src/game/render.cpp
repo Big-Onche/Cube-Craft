@@ -279,6 +279,18 @@ namespace game
         rendermodelwithskins(heldcubemodel, ANIM_MAPMODEL | ANIM_LOOP, origin, camera1->yaw, camera1->pitch - swingpitch * 0.35f, 0, MDL_NOSHADOW, player1, skins, 3, HUD_CUBE_SIZE);
     }
 
+    static void renderheldscatter(int selected, float armpitch, float armroll, float bob, float actionpitch)
+    {
+        const char *model = getworldscattermodel(selected);
+        if(!model[0]) return;
+        vec origin = hudarmhand(1, armpitch, armroll, bob);
+        origin.madd(camdir, HUD_CUBE_GRIP_FORWARD)
+              .madd(camright, HUD_CUBE_GRIP_SIDE)
+              .madd(camup, HUD_CUBE_GRIP_UP);
+
+        rendermodel(model, ANIM_MAPMODEL | ANIM_LOOP, origin, camera1->yaw, camera1->pitch - max(actionpitch, 0.0f) * 0.35f, 0, MDL_NOBATCH | MDL_NOSHADOW, player1, NULL, 0, 0, 0.45f);
+    }
+
     void renderavatar()
     {
         if(!hudgun || editmode || !player1 || player1->state != CS_ALIVE) return;
@@ -306,7 +318,14 @@ namespace game
         // The exported left-arm mesh is the visually correct right action hand.
         renderhudarm(PART_LEFT_ARM, 1, rightarmpitch, rightarmroll, bob);
 
-        if(m_creative && numworldcubes() > 0) renderheldcube(selectedcreativeblock(), rightarmpitch, rightarmroll, bob, actionpitch);
+        if(m_creative && numworldcubes() + numworldscatters() > 0)
+        {
+            const int selected = selectedcreativeblock(),
+                      cubecount = numworldcubes();
+
+            if(selected < cubecount) renderheldcube(selected, rightarmpitch, rightarmroll, bob, actionpitch);
+            else renderheldscatter(selected - cubecount, rightarmpitch, rightarmroll, bob, actionpitch);
+        }
     }
 
     void renderplayerpreview(int model, int color, int team, int weap) {}

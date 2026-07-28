@@ -120,6 +120,15 @@ extern int numworldcubes();
 extern int getworldcubeslot(int index);
 extern const char *getworldcubename(int index);
 extern const char *getworldcubetexture(int index, int face = WORLD_CUBE_TOP);
+extern int numworldscatters();
+extern const char *getworldscattername(int index);
+extern const char *getworldscattermodel(int index);
+extern const char *getworldscattericon(int index);
+extern bool isworldscatterentity(int id);
+extern bool getworldscatterentityedit(int id, int &type, ivec &support);
+extern bool editworldscatter(int type, const ivec &support, bool place);
+extern float rayent(const vec &o, const vec &ray, float radius, int mode,
+                    int size, int &orient, int &ent);
 
 // command
 extern int variable(const char *name, int min, int cur, int max, int *storage, identfun fun, int flags);

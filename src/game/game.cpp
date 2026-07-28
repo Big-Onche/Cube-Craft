@@ -387,6 +387,9 @@ namespace game
                 break;
             }
             case N_DELCUBE: mpdelcube(sel, false); break;
+            case N_EDITSCATTER:
+                return editworldscatter(edit.args[0], sel.o,
+                                        edit.args[1] != 0);
             case N_EDITVSLOT:
             {
                 ucharbuf extra(edit.extra.getbuf(), edit.extra.length());
@@ -538,6 +541,29 @@ namespace game
         sendclientpacket(p.finalize(), 1);
     }
 
+    static void scatteredittrigger(int type, const ivec &support, bool place)
+    {
+        if(!waitforserveredit())
+        {
+            editworldscatter(type, support, place);
+            return;
+        }
+        selinfo sel;
+        sel.o = support;
+        sel.s = ivec(1, 1, 1);
+        sel.grid = 16;
+        sel.orient = 5; // top face
+        sel.cx = sel.cy = sel.corner = 0;
+        sel.cxs = sel.cys = 2;
+        worldselectiontoabsolute(sel);
+        packetbuf p(MAXTRANS, ENET_PACKET_FLAG_RELIABLE);
+        putint(p, N_EDITSCATTER);
+        putsel(p, sel);
+        putint(p, type);
+        putint(p, place ? 1 : 0);
+        sendclientpacket(p.finalize(), 1);
+    }
+
     void vartrigger(ident *id)
     {
         if(!id || (!connected && !remote && !isconnected(false, true))) return;
@@ -635,7 +661,7 @@ namespace game
 
     static int clampcreativeblock()
     {
-        int count = numworldcubes();
+        int count = numworldcubes() + numworldscatters();
         creativeblock = count > 0 ? clamp(creativeblock, 0, count - 1) : 0;
         return creativeblock;
     }
@@ -726,7 +752,19 @@ namespace game
     static void creativeplace()
     {
         selinfo hit;
-        if(!creativehit(hit) || numworldcubes() <= 0) return;
+        if(!creativehit(hit)) return;
+
+        const int selected = clampcreativeblock(),
+                  cubecount = numworldcubes();
+        if(selected >= cubecount)
+        {
+            if(hit.orient != 5) return; // scatter is supported from below
+            scatteredittrigger(selected - cubecount, hit.o, true);
+            player1->renderplacemillis = lastmillis;
+            player1->renderplacetoggle = !player1->renderplacetoggle;
+            return;
+        }
+        if(cubecount <= 0) return;
 
         ivec target = creativeplacecell(hit);
         if(!insideworld(target) || !insideworld(ivec(target).add(CREATIVE_GRID - 1)) ||
@@ -737,13 +775,27 @@ namespace game
         selinfo placed = hit;
         placed.o = target;
         mpeditface(-1, 1, hit, true);
-        mpedittex(getworldcubeslot(clampcreativeblock()), 1, placed, true);
+        mpedittex(getworldcubeslot(selected), 1, placed, true);
         player1->renderplacemillis = lastmillis;
         player1->renderplacetoggle = !player1->renderplacetoggle;
     }
 
     static void creativeremove()
     {
+        if(!creativeenabled()) return;
+        const vec origin = camera1 ? camera1->o : player1->o;
+        int orient = -1, entity = -1;
+        rayent(origin, camdir, CREATIVE_REACH,
+               RAY_CLIPMAT | RAY_POLY | RAY_SKIPFIRST,
+               CREATIVE_GRID, orient, entity);
+        if(entity >= 0 && isworldscatterentity(entity))
+        {
+            int type;
+            ivec support;
+            if(getworldscatterentityedit(entity, type, support))
+                scatteredittrigger(type, support, false);
+            return;
+        }
         selinfo hit;
         if(!creativehit(hit)) return;
         mpdelcube(hit, true);
@@ -772,12 +824,12 @@ namespace game
     ICOMMAND(creativeplaceblock, "D", (int *down), { if(*down) creativeplace(); });
     ICOMMAND(creativeselect, "i", (int *index),
     {
-        int count = numworldcubes();
+        int count = numworldcubes() + numworldscatters();
         if(count > 0) creativeblock = clamp(*index, 0, count - 1);
     });
     ICOMMAND(creativecycle, "i", (int *dir),
     {
-        int count = numworldcubes();
+        int count = numworldcubes() + numworldscatters();
         if(count > 0)
         {
             creativeblock = (clampcreativeblock() - *dir) % count;
@@ -785,9 +837,22 @@ namespace game
         }
     });
     ICOMMAND(getcreativeblock, "", (), intret(clampcreativeblock()));
-    ICOMMAND(creativeblockcount, "", (), intret(numworldcubes()));
-    ICOMMAND(creativeblockslot, "i", (int *index), intret(getworldcubeslot(*index)));
-    ICOMMAND(creativeblockname, "i", (int *index), result(getworldcubename(*index)));
+    ICOMMAND(creativeblockcount, "", (),
+             intret(numworldcubes() + numworldscatters()));
+    ICOMMAND(creativecubecount, "", (), intret(numworldcubes()));
+    ICOMMAND(creativeblockslot, "i", (int *index),
+             intret(*index < numworldcubes() ? getworldcubeslot(*index)
+                                             : getworldcubeslot(0)));
+    ICOMMAND(creativeblockname, "i", (int *index),
+    {
+        if(*index < numworldcubes()) result(getworldcubename(*index));
+        else result(getworldscattername(*index - numworldcubes()));
+    });
+    ICOMMAND(creativeblockmodel, "i", (int *index),
+             result(getworldscattermodel(*index - numworldcubes())));
+    ICOMMAND(creativeblockicon, "i", (int *index),
+             result(*index < numworldcubes() ? getworldcubetexture(*index)
+                                             : getworldscattericon(*index - numworldcubes())));
 
     static void hudtexquad(float x1, float y1, float x2, float y2,
                            float x3, float y3, float x4, float y4)
@@ -807,7 +872,7 @@ namespace game
 
     static void drawcreativehotbar(int w, int h)
     {
-        int count = numworldcubes();
+        int count = numworldcubes() + numworldscatters();
         if(count <= 0) return;
 
         int selected = clampcreativeblock();
@@ -825,7 +890,8 @@ namespace game
             else gle::colorf(0.08f, 0.08f, 0.08f, 0.72f);
             hudrect(x - 4, y - 4, cell + 8, cell + 8);
 
-            settexture(getworldcubetexture(i), 3);
+            settexture(i < numworldcubes() ? getworldcubetexture(i)
+                                          : getworldscattericon(i - numworldcubes()), 3);
             gle::colorf(1, 1, 1, 1);
             hudrect(x, y, cell, cell);
             x += cell + gap;
@@ -1281,6 +1347,7 @@ namespace game
             case N_REPLACE:
             case N_DELCUBE:
             case N_EDITVSLOT:
+            case N_EDITSCATTER:
             {
                 networkedit *edit = new networkedit;
                 edit->type = type;
@@ -1328,6 +1395,10 @@ namespace game
                         break;
                     }
                     case N_DELCUBE: break;
+                    case N_EDITSCATTER:
+                        edit->args[0] = getint(p);
+                        edit->args[1] = getint(p);
+                        break;
                     case N_EDITVSLOT:
                     {
                         edit->args[0] = getint(p);
@@ -1560,7 +1631,8 @@ namespace server
     {
         return type == N_EDITF || type == N_EDITT || type == N_EDITM ||
                type == N_FLIP || type == N_ROTATE || type == N_REPLACE ||
-               type == N_DELCUBE || type == N_EDITVSLOT;
+               type == N_DELCUBE || type == N_EDITVSLOT ||
+               type == N_EDITSCATTER;
     }
 
     static void updateservereditmetadata(serveredit &edit)
@@ -1944,6 +2016,17 @@ namespace server
                 if(extra > p.remaining()) { error = "truncated vslot payload"; return false; }
                 p.pad(extra);
                 break;
+            case N_EDITSCATTER:
+                arg1 = getint(p);
+                arg2 = getint(p);
+                if(arg1 < 0 || arg1 > 255 || (arg2 != 0 && arg2 != 1) ||
+                   sel.grid != 16 || sel.s != ivec(1, 1, 1) ||
+                   sel.orient != 5)
+                {
+                    error = "invalid scatter edit";
+                    return false;
+                }
+                break;
             default:
                 error = "unsupported world edit";
                 return false;
@@ -1958,8 +2041,10 @@ namespace server
             bool allowedface = type == N_EDITF && arg1 == -1 && arg2 == 1,
                  allowedtexture = type == N_EDITT && arg1 <= 0xFFF &&
                                   arg2 == 1 && extra == 0,
-                 alloweddelete = type == N_DELCUBE;
-            if(!allowedface && !allowedtexture && !alloweddelete)
+                 alloweddelete = type == N_DELCUBE,
+                 allowedscatter = type == N_EDITSCATTER;
+            if(!allowedface && !allowedtexture && !alloweddelete &&
+               !allowedscatter)
             {
                 error = "this edit operation requires admin";
                 return false;
@@ -2382,7 +2467,7 @@ namespace server
                     break;
                 }
                 case N_EDITENT:
-                case N_EDITF: case N_EDITT: case N_EDITM: case N_FLIP: case N_COPY: case N_PASTE: case N_ROTATE: case N_REPLACE: case N_DELCUBE: case N_CALCLIGHT: case N_REMIP: case N_EDITVSLOT: case N_UNDO: case N_REDO: case N_EDITVAR:
+                case N_EDITF: case N_EDITT: case N_EDITM: case N_FLIP: case N_COPY: case N_PASTE: case N_ROTATE: case N_REPLACE: case N_DELCUBE: case N_CALCLIGHT: case N_REMIP: case N_EDITVSLOT: case N_EDITSCATTER: case N_UNDO: case N_REDO: case N_EDITVAR:
                 {
                     clientinfo *ci = getinfo(sender);
                     if(!ci || !ci->connected || !ci->worldready)
