@@ -36,6 +36,9 @@ void quit()                     // normal exit
 {
     writeinitcfg();
     writeservercfg();
+    // Offline procedural worlds have no network connection for disconnect()
+    // to close, so persist them explicitly before cleanup discards the chunks.
+    if(game::islocalworld()) closeproceduralworld(true);
     abortconnect();
     disconnect();
     localdisconnect();
