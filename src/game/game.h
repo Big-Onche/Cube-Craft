@@ -79,7 +79,7 @@ static const int msgsizes[] =
 #define TESSERACT_SERVER_PORT 42000
 #define TESSERACT_LANINFO_PORT 41998
 #define TESSERACT_MASTER_PORT 41999
-#define PROTOCOL_VERSION 7
+#define PROTOCOL_VERSION 8
 
 struct gameent : dynent
 {
@@ -140,6 +140,7 @@ namespace game
 
 #ifndef STANDALONE
     extern void preloadplayermodels();
+    extern bool heldtorchemitterposition(vec &position);
 
     namespace environment
     {

@@ -388,7 +388,7 @@ namespace game
             }
             case N_DELCUBE: mpdelcube(sel, false); break;
             case N_EDITSCATTER:
-                return editworldscatter(edit.args[0], sel.o,
+                return editworldscatter(edit.args[0], sel.o, sel.orient,
                                         edit.args[1] != 0);
             case N_EDITVSLOT:
             {
@@ -541,18 +541,19 @@ namespace game
         sendclientpacket(p.finalize(), 1);
     }
 
-    static void scatteredittrigger(int type, const ivec &support, bool place)
+    static void scatteredittrigger(int type, const ivec &support,
+                                   int orient, bool place)
     {
         if(!waitforserveredit())
         {
-            editworldscatter(type, support, place);
+            editworldscatter(type, support, orient, place);
             return;
         }
         selinfo sel;
         sel.o = support;
         sel.s = ivec(1, 1, 1);
         sel.grid = 16;
-        sel.orient = 5; // top face
+        sel.orient = orient;
         sel.cx = sel.cy = sel.corner = 0;
         sel.cxs = sel.cys = 2;
         worldselectiontoabsolute(sel);
@@ -758,8 +759,13 @@ namespace game
                   cubecount = numworldcubes();
         if(selected >= cubecount)
         {
-            if(hit.orient != 5) return; // scatter is supported from below
-            scatteredittrigger(selected - cubecount, hit.o, true);
+            const int type = selected - cubecount;
+            if(isworldtorch(type))
+            {
+                if(hit.orient == WORLD_ORIENT_BOTTOM) return;
+            }
+            else if(hit.orient != WORLD_ORIENT_TOP) return;
+            scatteredittrigger(type, hit.o, hit.orient, true);
             player1->renderplacemillis = lastmillis;
             player1->renderplacetoggle = !player1->renderplacetoggle;
             return;
@@ -768,7 +774,7 @@ namespace game
 
         ivec target = creativeplacecell(hit);
         if(!insideworld(target) || !insideworld(ivec(target).add(CREATIVE_GRID - 1)) ||
-           creativeplayeroverlap(target))
+           creativeplayeroverlap(target) || worldtorchincell(target))
             return;
 
         // Extrude exactly one 16-unit voxel, then deliberately paint every face.
@@ -790,10 +796,10 @@ namespace game
                CREATIVE_GRID, orient, entity);
         if(entity >= 0 && isworldscatterentity(entity))
         {
-            int type;
+            int type, mountorient;
             ivec support;
-            if(getworldscatterentityedit(entity, type, support))
-                scatteredittrigger(type, support, false);
+            if(getworldscatterentityedit(entity, type, support, mountorient))
+                scatteredittrigger(type, support, mountorient, false);
             return;
         }
         selinfo hit;
@@ -837,25 +843,18 @@ namespace game
         }
     });
     ICOMMAND(getcreativeblock, "", (), intret(clampcreativeblock()));
-    ICOMMAND(creativeblockcount, "", (),
-             intret(numworldcubes() + numworldscatters()));
+    ICOMMAND(creativeblockcount, "", (), intret(numworldcubes() + numworldscatters()));
     ICOMMAND(creativecubecount, "", (), intret(numworldcubes()));
-    ICOMMAND(creativeblockslot, "i", (int *index),
-             intret(*index < numworldcubes() ? getworldcubeslot(*index)
-                                             : getworldcubeslot(0)));
+    ICOMMAND(creativeblockslot, "i", (int *index), intret(*index < numworldcubes() ? getworldcubeslot(*index) : getworldcubeslot(0)));
     ICOMMAND(creativeblockname, "i", (int *index),
     {
         if(*index < numworldcubes()) result(getworldcubename(*index));
         else result(getworldscattername(*index - numworldcubes()));
     });
-    ICOMMAND(creativeblockmodel, "i", (int *index),
-             result(getworldscattermodel(*index - numworldcubes())));
-    ICOMMAND(creativeblockicon, "i", (int *index),
-             result(*index < numworldcubes() ? getworldcubetexture(*index)
-                                             : getworldscattericon(*index - numworldcubes())));
+    ICOMMAND(creativeblockmodel, "i", (int *index), result(getworldscattermodel(*index - numworldcubes())));
+    ICOMMAND(creativeblockicon, "i", (int *index), result(*index < numworldcubes() ? getworldcubetexture(*index) : getworldscattericon(*index - numworldcubes())));
 
-    static void hudtexquad(float x1, float y1, float x2, float y2,
-                           float x3, float y3, float x4, float y4)
+    static void hudtexquad(float x1, float y1, float x2, float y2, float x3, float y3, float x4, float y4)
     {
         gle::begin(GL_QUADS);
         gle::attribf(x1, y1); gle::attribf(0, 0);
@@ -897,7 +896,7 @@ namespace game
             x += cell + gap;
         }
 
-        const char *name = getworldcubename(selected);
+        const char *name = selected < numworldcubes() ? getworldcubename(selected) : getworldscattername(selected - numworldcubes());
         float textscale = 0.55f, textx = (w - text_width(name) * textscale) * 0.5f;
         pushhudtranslate(textx, y - 42, textscale);
         draw_text(name, 0, 0);
@@ -927,7 +926,32 @@ namespace game
     bool allowthirdperson(bool msg) { return true; }
     bool detachcamera() { return false; }
     bool collidecamera() { return false; }
-    void adddynlights() {}
+
+    static bool heldtorchflame(vec &flame)
+    {
+        if(!creativeenabled() || !player1) return false;
+        const int selected = clampcreativeblock(), cubecount = numworldcubes();
+        if(selected < cubecount || !isworldtorch(selected - cubecount)) return false;
+
+        return heldtorchemitterposition(flame);
+    }
+
+    void adddynlights()
+    {
+        addworldtorchlights();
+        vec flame;
+        if(!heldtorchflame(flame)) return;
+        adddynlight(flame, 14.0f * CREATIVE_GRID, vec(1.0f, 0.58f, 0.24f));
+    }
+
+    void addparticles()
+    {
+        addworldtorchparticles();
+        vec flame;
+        if(!heldtorchflame(flame)) return;
+        regular_particle_flame(PART_FLAME, flame, 0.3f, 0.55f, 0xFF7628, 1, 2.2f, 30.0f, 180.0f, -8);
+        regular_particle_flame(PART_SMOKE, flame, 0.22f, 0.9f, 0x4A443E, 1, 2.7f, 14.0f, 900.0f, -10);
+    }
     void particletrack(physent *owner, vec &o, vec &d) {}
     void dynlighttrack(physent *owner, vec &o, vec &hud) {}
     int maxsoundradius(int n) { return 500; }
@@ -1036,7 +1060,6 @@ namespace game
 
         if(!force && totalmillis - lastpositionsend < 33) return;
         lastpositionsend = totalmillis;
-
         {
             // packetbuf inspects its ENet packet when it leaves scope. Release
             // builds can transmit and free an unreliable packet immediately
@@ -2021,7 +2044,7 @@ namespace server
                 arg2 = getint(p);
                 if(arg1 < 0 || arg1 > 255 || (arg2 != 0 && arg2 != 1) ||
                    sel.grid != 16 || sel.s != ivec(1, 1, 1) ||
-                   sel.orient != 5)
+                   sel.orient == WORLD_ORIENT_BOTTOM)
                 {
                     error = "invalid scatter edit";
                     return false;

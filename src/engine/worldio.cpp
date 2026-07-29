@@ -117,21 +117,23 @@ enum
 
 struct worldscatterinstance
 {
-    int x, y, z, type;
+    int x, y, z, type, orient;
     mutable float renderoffsetx, renderoffsety, rendermaxoffset;
     mutable int renderyaw;
     mutable bool rendertransformvalid;
 
     worldscatterinstance()
-        : x(0), y(0), z(0), type(-1), renderoffsetx(0), renderoffsety(0),
+        : x(0), y(0), z(0), type(-1), orient(O_TOP),
+          renderoffsetx(0), renderoffsety(0),
           rendermaxoffset(0), renderyaw(0), rendertransformvalid(false) {}
-    worldscatterinstance(int x, int y, int z, int type)
-        : x(x), y(y), z(z), type(type), renderoffsetx(0), renderoffsety(0),
+    worldscatterinstance(int x, int y, int z, int type, int orient = O_TOP)
+        : x(x), y(y), z(z), type(type), orient(orient),
+          renderoffsetx(0), renderoffsety(0),
           rendermaxoffset(0), renderyaw(0), rendertransformvalid(false) {}
 
     bool operator==(const worldscatterinstance &other) const
     {
-        return x == other.x && y == other.y && z == other.z && type == other.type;
+        return x == other.x && y == other.y && z == other.z && type == other.type && orient == other.orient;
     }
 };
 
@@ -225,8 +227,9 @@ struct worldscatterdefinition
 {
     string name, model;
     int mapmodel;
+    bool torch;
 
-    worldscatterdefinition() : mapmodel(-1)
+    worldscatterdefinition() : mapmodel(-1), torch(false)
     {
         name[0] = model[0] = '\0';
     }
@@ -296,6 +299,11 @@ const char *getworldscattericon(int index)
     formatstring(iconpath, "media/model/%s/diffuse.png", worldscatterdefinitions[index]->model);
     return iconpath;
 }
+
+bool isworldtorch(int index)
+{
+    return worldscatterdefinitions.inrange(index) && worldscatterdefinitions[index]->torch;
+}
 VARFP(leavesalpha, 0, 1, 1, updateleavesalpha());
 
 static bool isworldleaftexture(const cube &c)
@@ -361,7 +369,7 @@ ICOMMAND(worldcube, "ssfssN", (char *name, char *texture, float *texsize,
     defineworldcube(name, texture, *texsize, side, bottom, *numargs);
 });
 
-static void defineworldscatter(const char *name, const char *model)
+static void defineworldscatter(const char *name, const char *model, bool torch)
 {
     if(!name[0] || !model[0])
     {
@@ -372,11 +380,17 @@ static void defineworldscatter(const char *name, const char *model)
     if(!type) type = worldscatterdefinitions.add(new worldscatterdefinition);
     copystring(type->name, name);
     copystring(type->model, model);
+    type->torch = torch;
 }
 
 ICOMMAND(worldscatter, "ss", (char *name, char *model),
 {
-    defineworldscatter(name, model);
+    defineworldscatter(name, model, false);
+});
+
+ICOMMAND(worldtorch, "ss", (char *name, char *model),
+{
+    defineworldscatter(name, model, true);
 });
 
 static int loadworldtextureslot(const char *path, float texsize, bool alpha)
@@ -1021,26 +1035,46 @@ static void captureworldscatterregion(const worldchunk &chunk, const ivec &bbmin
             scatter.add(chunk.scatter[i]);
 }
 
+static ivec worldorientnormal(int orient)
+{
+    ivec normal(0, 0, 0);
+    if(orient >= O_LEFT && orient <= O_TOP)
+        normal[dimension(orient)] = dimcoord(orient) ? 1 : -1;
+    return normal;
+}
+
 static bool validworldscatter(const worldchunk &chunk, const worldscatterinstance &scatter)
 {
     if(scatter.type < 0 || scatter.type >= numworldscatters() ||
        scatter.x < 0 || scatter.x >= WORLD_CHUNK_SIZE ||
        scatter.y < 0 || scatter.y >= WORLD_CHUNK_SIZE ||
-       scatter.z <= 0 || scatter.z >= WORLD_MAP_SIZE)
+       scatter.z < 0 || scatter.z + WORLD_BLOCK_SIZE > WORLD_MAP_SIZE ||
+       scatter.orient < O_LEFT || scatter.orient > O_TOP)
         return false;
 
     const ivec origin = worldchunkorigin(chunk);
-    const ivec center = ivec(origin).add(
-        ivec(scatter.x + WORLD_BLOCK_SIZE / 2,
-             scatter.y + WORLD_BLOCK_SIZE / 2, scatter.z));
+    const ivec center = ivec(origin).add(ivec(
+        scatter.x + WORLD_BLOCK_SIZE / 2,
+        scatter.y + WORLD_BLOCK_SIZE / 2,
+        scatter.z + WORLD_BLOCK_SIZE / 2));
+    const ivec normal = worldorientnormal(scatter.orient),
+               supportcenter = ivec(center).sub(
+                   ivec(normal).mul(WORLD_BLOCK_SIZE));
+    if(!insideworld(center) || !insideworld(supportcenter)) return false;
     ivec cubeorigin;
     int cubesize;
-    const cube &support = lookupcube(ivec(center).add(ivec(0, 0, -1)), 0, cubeorigin, cubesize);
+    const cube &occupied = lookupcube(center, 0, cubeorigin, cubesize);
+    if(!isempty(occupied) || occupied.material != MAT_AIR) return false;
+
+    const bool torch = isworldtorch(scatter.type);
+    if((!torch && scatter.orient != O_TOP) ||
+       (torch && scatter.orient == O_BOTTOM))
+        return false;
+    const cube &support = lookupcube(supportcenter, 0, cubeorigin, cubesize);
     if(isempty(support) || !isentirelysolid(support) ||
        support.material != MAT_AIR)
         return false;
-    const cube &above = lookupcube(ivec(center).add(ivec(0, 0, WORLD_BLOCK_SIZE / 2)), 0, cubeorigin, cubesize);
-    return isempty(above) && above.material == MAT_AIR;
+    return true;
 }
 
 static void removeworldinvalidscatter(worldchunk &chunk, const ivec &bbmin, const ivec &bbmax)
@@ -1102,16 +1136,18 @@ void beginworldedit(int operation, const selinfo &selection, int arg1, int arg2,
 
     ivec bbmin = selection.o,
          bbmax = ivec(selection.s).mul(selection.grid).add(selection.o);
-    const ivec scattermin = ivec(bbmin).sub(ivec(0, 0, WORLD_BLOCK_SIZE)),
-               scattermax = ivec(bbmax).add(ivec(0, 0, WORLD_BLOCK_SIZE));
+    const ivec scattermin = ivec(bbmin).sub(WORLD_BLOCK_SIZE),
+               scattermax = ivec(bbmax).add(WORLD_BLOCK_SIZE);
     loopv(worldchunks)
     {
         worldchunk &chunk = worldchunks[i];
         if(chunk.loading || !chunk.root || !worldchunkmounted(chunk)) continue;
         ivec origin = worldchunkorigin(chunk);
-        if(bbmax.x <= origin.x || bbmin.x >= origin.x + WORLD_CHUNK_SIZE ||
-           bbmax.y <= origin.y || bbmin.y >= origin.y + WORLD_CHUNK_SIZE ||
-           bbmax.z <= 0 || bbmin.z >= WORLD_MAP_SIZE)
+        if(scattermax.x <= origin.x ||
+           scattermin.x >= origin.x + WORLD_CHUNK_SIZE ||
+           scattermax.y <= origin.y ||
+           scattermin.y >= origin.y + WORLD_CHUNK_SIZE ||
+           scattermax.z <= 0 || scattermin.z >= WORLD_MAP_SIZE)
             continue;
 
         worldeditrecord *record = currentworldedit.records.add(new worldeditrecord);
@@ -1131,8 +1167,8 @@ void commitworldedit()
     if(!currentworldedit.active) return;
     ivec bbmin = currentworldedit.selection.o,
          bbmax = ivec(currentworldedit.selection.s).mul(currentworldedit.selection.grid) .add(currentworldedit.selection.o);
-    const ivec scattermin = ivec(bbmin).sub(ivec(0, 0, WORLD_BLOCK_SIZE)),
-               scattermax = ivec(bbmax).add(ivec(0, 0, WORLD_BLOCK_SIZE));
+    const ivec scattermin = ivec(bbmin).sub(WORLD_BLOCK_SIZE),
+               scattermax = ivec(bbmax).add(WORLD_BLOCK_SIZE);
     ullong timestamp = ullong(time(NULL));
     ullong revision = incomingworldeditrevision
                     ? max(worldeditrevision, incomingworldeditrevision)
@@ -1221,10 +1257,12 @@ static void serializeworlddiffnode(vector<uchar> &out, const worlddiffnode &node
 
 static void serializeworldscatterinstance(vector<uchar> &out, const worldscatterinstance &scatter)
 {
+    const uint encodedtype = uint(scatter.type & 0xFFFF) |
+                             (uint((scatter.orient + 1) & 0x7) << 16);
     worlddiffput32(out, uint(scatter.x));
     worlddiffput32(out, uint(scatter.y));
     worlddiffput32(out, uint(scatter.z));
-    worlddiffput32(out, uint(scatter.type));
+    worlddiffput32(out, encodedtype);
 }
 
 static void serializeworldeditrecord(vector<uchar> &out, const worldeditrecord &record)
@@ -3607,6 +3645,7 @@ static void cacheworldscattertransforms(int chunkx, int chunky, float maxoffset,
 
 VARP(staticentsmaxdistance, 0, 64, 1024);
 VARP(staticentsmaxamount, 0, 8192, MAXENTS);
+VARP(staticlightmaxdistance, 0, 64, 1024);
 
 struct worldgrasscollectcontext
 {
@@ -3661,19 +3700,33 @@ static bool validgeneratedworldscatter(const cube *root,
 {
     if(!root || scatter.x < 0 || scatter.x >= WORLD_CHUNK_SIZE ||
        scatter.y < 0 || scatter.y >= WORLD_CHUNK_SIZE ||
-       scatter.z <= 0 || scatter.z >= WORLD_MAP_SIZE ||
-       scatter.type < 0 || scatter.type >= numworldscatters())
+       scatter.z < 0 || scatter.z + WORLD_BLOCK_SIZE > WORLD_MAP_SIZE ||
+       scatter.type < 0 || scatter.type >= numworldscatters() ||
+       scatter.orient < O_LEFT || scatter.orient > O_TOP)
         return false;
     const ivec center(scatter.x + WORLD_BLOCK_SIZE / 2,
-                      scatter.y + WORLD_BLOCK_SIZE / 2, scatter.z);
+                      scatter.y + WORLD_BLOCK_SIZE / 2,
+                      scatter.z + WORLD_BLOCK_SIZE / 2);
+    const cube &occupied = lookupgeneratedworldcube(root, center);
+    if(!isempty(occupied) || occupied.material != MAT_AIR) return false;
+
+    const bool torch = isworldtorch(scatter.type);
+    if((!torch && scatter.orient != O_TOP) ||
+       (torch && scatter.orient == O_BOTTOM))
+        return false;
+    const ivec supportcenter = ivec(center).sub(
+        ivec(worldorientnormal(scatter.orient)).mul(WORLD_BLOCK_SIZE));
+    // An edge-mounted torch can be owned by the neighboring chunk. Its support
+    // is checked once both chunks are mounted in the runtime world.
+    if(supportcenter.x < 0 || supportcenter.x >= WORLD_CHUNK_SIZE ||
+       supportcenter.y < 0 || supportcenter.y >= WORLD_CHUNK_SIZE)
+        return torch;
     const cube &support = lookupgeneratedworldcube(
-        root, ivec(center).add(ivec(0, 0, -1)));
+        root, supportcenter);
     if(isempty(support) || !isentirelysolid(support) ||
        support.material != MAT_AIR)
         return false;
-    const cube &above = lookupgeneratedworldcube(
-        root, ivec(center).add(ivec(0, 0, WORLD_BLOCK_SIZE / 2)));
-    return isempty(above) && above.material == MAT_AIR;
+    return true;
 }
 
 static bool worldflowerspaced(const worldgrasscollectcontext &ctx, uint worldx,
@@ -3827,11 +3880,13 @@ struct worldgrasscandidate
 {
     ivec key;
     vec position;
-    int model, yaw;
+    int model, yaw, pitch, roll;
     bool matched;
 
-    worldgrasscandidate(const ivec &key, const vec &position, int model, int yaw)
-        : key(key), position(position), model(model), yaw(yaw), matched(false) {}
+    worldgrasscandidate(const ivec &key, const vec &position, int model,
+                        int yaw, int pitch, int roll)
+        : key(key), position(position), model(model), yaw(yaw),
+          pitch(pitch), roll(roll), matched(false) {}
 };
 
 struct worldscatterchunkcandidate
@@ -3872,12 +3927,45 @@ static ivec worldscatterkey(const worldchunk &chunk, const worldscatterinstance 
                 scatter.z);
 }
 
-static void worldscattertransform(const worldchunk &chunk, const worldscatterinstance &scatter, float maxoffset, vec &position, int &yaw)
+static void worldscattertransform(const worldchunk &chunk, const worldscatterinstance &scatter, float maxoffset, vec &position, int &yaw, int &pitch, int &roll)
 {
+    pitch = roll = 0;
+    const ivec origin = worldchunkorigin(chunk);
+    if(isworldtorch(scatter.type))
+    {
+        yaw = 0;
+        position = vec(origin.x + scatter.x + WORLD_BLOCK_SIZE * 0.5f,
+                       origin.y + scatter.y + WORLD_BLOCK_SIZE * 0.5f,
+                       float(scatter.z));
+        if(scatter.orient == O_TOP) return;
+
+        const ivec normal = worldorientnormal(scatter.orient);
+        position.z += WORLD_BLOCK_SIZE * 0.25f;
+        const int axis = dimension(scatter.orient);
+        position[axis] -= normal[axis] * WORLD_BLOCK_SIZE * 0.5f;
+        position[axis] += normal[axis] * 1.25f;
+        switch(scatter.orient)
+        {
+            case O_BACK:  yaw = 0; break;
+            case O_RIGHT: yaw = 90; break;
+            case O_FRONT: yaw = 180; break;
+            case O_LEFT:  yaw = 270; break;
+        }
+        pitch = 23;
+        return;
+    }
+
     cacheworldscattertransform(chunk.x, chunk.y, maxoffset, scatter);
     yaw = scatter.renderyaw;
-    const ivec origin = worldchunkorigin(chunk);
     position = vec(origin.x + scatter.x + WORLD_BLOCK_SIZE * 0.5f + scatter.renderoffsetx, origin.y + scatter.y + WORLD_BLOCK_SIZE * 0.5f + scatter.renderoffsety, float(scatter.z));
+}
+
+static bool worldtorchflameposition(const worldchunk &chunk, const worldscatterinstance &scatter, float maxoffset, vec &flame)
+{
+    vec position;
+    int yaw, pitch, roll;
+    worldscattertransform(chunk, scatter, maxoffset, position, yaw, pitch, roll);
+    return worldscatterdefinitions.inrange(scatter.type) && modeltagposition(worldscatterdefinitions[scatter.type]->model, "tag_emitter", flame, position, yaw, pitch, roll);
 }
 
 static bool worldscattermounted(const worldchunk &chunk, const worldscatterinstance &scatter)
@@ -3885,8 +3973,7 @@ static bool worldscattermounted(const worldchunk &chunk, const worldscatterinsta
     const int tilex = scatter.x / WORLD_SECTION_SIZE,
               tiley = scatter.y / WORLD_SECTION_SIZE,
               tile = tiley * WORLD_SECTION_COLUMNS + tilex,
-              section = clamp((scatter.z - 1) / WORLD_SECTION_SIZE,
-                              0, int(WORLD_SECTION_LAYERS) - 1);
+              section = clamp((scatter.z - 1) / WORLD_SECTION_SIZE, 0, int(WORLD_SECTION_LAYERS) - 1);
     return (chunk.mountedtiles[section] & (1U << tile)) != 0;
 }
 
@@ -3936,19 +4023,14 @@ static void updateworldscatterers()
         loopvj(chunk.scatter)
         {
             const worldscatterinstance &scatter = chunk.scatter[j];
-            if(!worldscatterdefinitions.inrange(scatter.type) ||
-               worldscatterdefinitions[scatter.type]->mapmodel < 0 ||
-               !worldscattermounted(chunk, scatter))
+            if(!worldscatterdefinitions.inrange(scatter.type) || worldscatterdefinitions[scatter.type]->mapmodel < 0 || !worldscattermounted(chunk, scatter))
                 continue;
             vec position;
-            int yaw;
-            worldscattertransform(chunk, scatter, settings.grassmaxoffset,
-                                  position, yaw);
+            int yaw, pitch, roll;
+            worldscattertransform(chunk, scatter, settings.grassmaxoffset, position, yaw, pitch, roll);
             const float dx = position.x - focus->x, dy = position.y - focus->y;
             if(dx * dx + dy * dy > radiussquared) continue;
-            candidates.add(worldgrasscandidate(
-                worldscatterkey(chunk, scatter), position,
-                worldscatterdefinitions[scatter.type]->mapmodel, yaw));
+            candidates.add(worldgrasscandidate(worldscatterkey(chunk, scatter), position, worldscatterdefinitions[scatter.type]->mapmodel, yaw, pitch, roll));
             if(candidates.length() >= staticentsmaxamount) break;
         }
         if(candidates.length() >= staticentsmaxamount) break;
@@ -3960,8 +4042,14 @@ static void updateworldscatterers()
     {
         worldgrassentity &active = worldgrassentities[i];
         int *candidateindex = desired.access(active.key);
-        if(!candidateindex ||
-           !isworldmapmodelentity(active.id, candidates[*candidateindex].model))
+        if(!candidateindex || !isworldmapmodelentity(active.id, candidates[*candidateindex].model))
+        {
+            destroyworldmapmodelentity(active.id);
+            worldgrassentities.removeunordered(i);
+            continue;
+        }
+        worldgrasscandidate &candidate = candidates[*candidateindex];
+        if(!updateworldmapmodelentity(active.id, candidate.position, candidate.model, candidate.yaw, candidate.pitch, candidate.roll))
         {
             destroyworldmapmodelentity(active.id);
             worldgrassentities.removeunordered(i);
@@ -3972,19 +4060,74 @@ static void updateworldscatterers()
 
     loopv(candidates) if(!candidates[i].matched)
     {
-        int id = createworldmapmodelentity(candidates[i].position,
-                                           candidates[i].model,
-                                           candidates[i].yaw);
+        int id = createworldmapmodelentity(candidates[i].position, candidates[i].model, candidates[i].yaw, candidates[i].pitch, candidates[i].roll);
         if(id < 0) break;
         worldgrassentities.add(worldgrassentity(candidates[i].key, id));
+    }
+}
+
+void addworldtorchlights()
+{
+    if(staticlightmaxdistance <= 0 || !camera1 || worldchunks.empty()) return;
+
+    static const float TORCH_LIGHT_RADIUS = 14.0f * WORLD_BLOCK_SIZE;
+    const float maxdistance = staticlightmaxdistance * WORLD_BLOCK_SIZE,
+                maxdistancesquared = maxdistance * maxdistance,
+                fullshadowdistance = maxdistance / 3.0f,
+                dynshadowdistance = fullshadowdistance * 2.0f;
+    const game::worldsettings settings;
+
+    loopv(worldchunks)
+    {
+        const worldchunk &chunk = worldchunks[i];
+        if(chunk.loading || !chunk.root || !worldchunkmounted(chunk)) continue;
+        loopvj(chunk.scatter)
+        {
+            const worldscatterinstance &scatter = chunk.scatter[j];
+            if(!isworldtorch(scatter.type) || !worldscattermounted(chunk, scatter)) continue;
+
+            vec flame;
+            if(!worldtorchflameposition(chunk, scatter, settings.grassmaxoffset, flame)) continue;
+
+            const float distancesquared = flame.squaredist(camera1->o);
+            if(distancesquared > maxdistancesquared) continue;
+            const float distance = sqrtf(distancesquared);
+            const int flags = distance <= fullshadowdistance ? 0 : distance <= dynshadowdistance ? L_NODYNSHADOW : L_NOSHADOW;
+            adddynlight(flame, TORCH_LIGHT_RADIUS, vec(1.0f, 0.58f, 0.24f), 0, 0, flags | DL_NODIST);
+        }
+    }
+}
+
+void addworldtorchparticles()
+{
+    if(staticentsmaxdistance <= 0 || !camera1 || worldchunks.empty()) return;
+
+    const float maxdistance = staticentsmaxdistance * WORLD_BLOCK_SIZE, maxdistancesquared = maxdistance * maxdistance;
+    const game::worldsettings settings;
+    loopv(worldchunks)
+    {
+        const worldchunk &chunk = worldchunks[i];
+        if(chunk.loading || !chunk.root || !worldchunkmounted(chunk)) continue;
+        loopvj(chunk.scatter)
+        {
+            const worldscatterinstance &scatter = chunk.scatter[j];
+            if(!isworldtorch(scatter.type) ||
+               !worldscattermounted(chunk, scatter))
+                continue;
+
+            vec flame;
+            if(!worldtorchflameposition(chunk, scatter, settings.grassmaxoffset, flame)) continue;
+            if(flame.squaredist(camera1->o) > maxdistancesquared) continue;
+            regular_particle_flame(PART_FLAME, flame, 0.8f, 0.7f, 0xFF7628, 1, 2.4f, 35.0f, 220.0f, -50);
+            regular_particle_flame(PART_SMOKE, flame, 1.2f, 1.1f, 0x4A443E, 1, 3.0f, 16.0f, 1100.0f, -150);
+        }
     }
 }
 
 ICOMMAND(getworldgrasscount, "", (),
 {
     int count = 0;
-    const int model = worldscatterdefinitions.inrange(worldgrassscatter)
-                    ? worldscatterdefinitions[worldgrassscatter]->mapmodel : -1;
+    const int model = worldscatterdefinitions.inrange(worldgrassscatter) ? worldscatterdefinitions[worldgrassscatter]->mapmodel : -1;
     if(model >= 0) loopv(worldgrassentities)
         if(isworldmapmodelentity(worldgrassentities[i].id, model)) ++count;
     intret(count);
@@ -4030,7 +4173,7 @@ bool isworldscatterentity(int id)
     return false;
 }
 
-bool getworldscatterentityedit(int id, int &type, ivec &support)
+bool getworldscatterentityedit(int id, int &type, ivec &support, int &orient)
 {
     loopv(worldgrassentities)
     {
@@ -4044,9 +4187,11 @@ bool getworldscatterentityedit(int id, int &type, ivec &support)
                 const worldscatterinstance &scatter = chunk.scatter[k];
                 if(worldscatterkey(chunk, scatter) != active.key) continue;
                 type = scatter.type;
-                support = ivec(worldchunkorigin(chunk)).add(
-                    ivec(scatter.x, scatter.y,
-                         scatter.z - WORLD_BLOCK_SIZE));
+                orient = scatter.orient;
+                support = ivec(worldchunkorigin(chunk))
+                    .add(ivec(scatter.x, scatter.y, scatter.z))
+                    .sub(ivec(worldorientnormal(orient)).mul(
+                        WORLD_BLOCK_SIZE));
                 return true;
             }
         }
@@ -4074,7 +4219,7 @@ static void commitworldscatterrecord(worldchunk &chunk,
     record.selection.o = support;
     record.selection.s = ivec(1, 1, 1);
     record.selection.grid = WORLD_BLOCK_SIZE;
-    record.selection.orient = O_TOP;
+    record.selection.orient = scatter.orient;
     record.selection.cx = record.selection.cy = record.selection.corner = 0;
     record.selection.cxs = record.selection.cys = 2;
     if(place) record.scatterafter.add(scatter);
@@ -4088,32 +4233,61 @@ static void commitworldscatterrecord(worldchunk &chunk,
     chunk.dirty = true;
 }
 
-bool editworldscatter(int type, const ivec &support, bool place)
+bool worldtorchincell(const ivec &cell)
 {
-    if(!worldscatterdefinitions.inrange(type) ||
-       support.x < 0 || support.y < 0 || support.z < 0 ||
-       support.x >= worldsize || support.y >= worldsize ||
-       support.z + WORLD_BLOCK_SIZE >= WORLD_MAP_SIZE)
+    if(cell.x < 0 || cell.y < 0 || cell.z < 0 ||
+       cell.x >= worldsize || cell.y >= worldsize ||
+       cell.z + WORLD_BLOCK_SIZE > WORLD_MAP_SIZE)
         return false;
-    const int chunkx = worldfirstchunkx + support.x / WORLD_CHUNK_SIZE,
-              chunky = worldfirstchunky + support.y / WORLD_CHUNK_SIZE,
+    const int chunkx = worldfirstchunkx + cell.x / WORLD_CHUNK_SIZE,
+              chunky = worldfirstchunky + cell.y / WORLD_CHUNK_SIZE,
               chunkindex = findworldchunk(chunkx, chunky);
+    if(!worldchunks.inrange(chunkindex)) return false;
+    const worldchunk &chunk = worldchunks[chunkindex];
+    const ivec origin = worldchunkorigin(chunk);
+    loopv(chunk.scatter)
+    {
+        const worldscatterinstance &scatter = chunk.scatter[i];
+        if(isworldtorch(scatter.type) &&
+           scatter.x == cell.x - origin.x &&
+           scatter.y == cell.y - origin.y &&
+           scatter.z == cell.z)
+            return true;
+    }
+    return false;
+}
+
+bool editworldscatter(int type, const ivec &support, int orient, bool place)
+{
+    if(!worldscatterdefinitions.inrange(type) || orient < O_LEFT || orient > O_TOP || (!isworldtorch(type) && orient != O_TOP) || (isworldtorch(type) && orient == O_BOTTOM))
+        return false;
+
+    const ivec target = ivec(support).add(ivec(worldorientnormal(orient)).mul(WORLD_BLOCK_SIZE));
+
+    if(target.x < 0 || target.y < 0 || target.z < 0 || target.x >= worldsize || target.y >= worldsize || target.z + WORLD_BLOCK_SIZE > WORLD_MAP_SIZE)
+        return false;
+
+    const int chunkx = worldfirstchunkx + target.x / WORLD_CHUNK_SIZE,
+              chunky = worldfirstchunky + target.y / WORLD_CHUNK_SIZE,
+              chunkindex = findworldchunk(chunkx, chunky);
+
     if(!worldchunks.inrange(chunkindex)) return false;
     worldchunk &chunk = worldchunks[chunkindex];
     if(chunk.loading || !chunk.root || !worldchunkmounted(chunk)) return false;
     const ivec origin = worldchunkorigin(chunk);
-    worldscatterinstance scatter(support.x - origin.x, support.y - origin.y, support.z + WORLD_BLOCK_SIZE, type);
+    worldscatterinstance scatter(target.x - origin.x, target.y - origin.y, target.z, type, orient);
     cacheworldscattertransform(chunk.x, chunk.y, game::worldsettings().grassmaxoffset, scatter);
 
     int existing = -1;
     loopv(chunk.scatter)
-        if(chunk.scatter[i].x == scatter.x &&
-           chunk.scatter[i].y == scatter.y &&
-           chunk.scatter[i].z == scatter.z)
+    {
+        if(chunk.scatter[i].x == scatter.x && chunk.scatter[i].y == scatter.y && chunk.scatter[i].z == scatter.z)
         {
             existing = i;
             break;
         }
+    }
+
     if(place)
     {
         if(existing >= 0 || !validworldscatter(chunk, scatter)) return false;
@@ -4121,7 +4295,9 @@ bool editworldscatter(int type, const ivec &support, bool place)
     }
     else
     {
-        if(existing < 0 || chunk.scatter[existing].type != type) return false;
+        if(existing < 0 || chunk.scatter[existing].type != type || chunk.scatter[existing].orient != orient)
+            return false;
+
         scatter = chunk.scatter[existing];
         chunk.scatter.removeunordered(existing);
     }
@@ -4132,14 +4308,11 @@ bool editworldscatter(int type, const ivec &support, bool place)
 
 static void addworldtreeblock(vector<ivec> &blocks, int blockx, int blocky, int blockz)
 {
-    if(blockx < 0 || blockx >= WORLD_CHUNK_BLOCKS ||
-       blocky < 0 || blocky >= WORLD_CHUNK_BLOCKS ||
-       blockz < 0 || blockz >= WORLD_HEIGHT_BLOCKS) return;
+    if(blockx < 0 || blockx >= WORLD_CHUNK_BLOCKS || blocky < 0 || blocky >= WORLD_CHUNK_BLOCKS || blockz < 0 || blockz >= WORLD_HEIGHT_BLOCKS) return;
     blocks.add(ivec(blockx * WORLD_BLOCK_SIZE, blocky * WORLD_BLOCK_SIZE, blockz * WORLD_BLOCK_SIZE));
 }
 
-static void addworldregulartree(vector<ivec> &wood, vector<ivec> &leaves, int blockx, int blocky,
-                                int basez, int height, uint shapehash)
+static void addworldregulartree(vector<ivec> &wood, vector<ivec> &leaves, int blockx, int blocky, int basez, int height, uint shapehash)
 {
     loop(z, height) addworldtreeblock(wood, blockx, blocky, basez + z);
 
@@ -4148,23 +4321,20 @@ static void addworldregulartree(vector<ivec> &wood, vector<ivec> &leaves, int bl
         const int radius = z == height ? 1 : 2;
         for(int y = -radius; y <= radius; ++y) for(int x = -radius; x <= radius; ++x)
         {
-            if(radius == 2 && abs(x) == 2 && abs(y) == 2 &&
-               (hashworldtree(shapehash, x, y, z, height, 0xA511E9B3U) & 1U)) continue;
+            if(radius == 2 && abs(x) == 2 && abs(y) == 2 && (hashworldtree(shapehash, x, y, z, height, 0xA511E9B3U) & 1U)) continue;
             addworldtreeblock(leaves, blockx + x, blocky + y, basez + z);
         }
     }
 }
 
-static void addworldpinetree(vector<ivec> &wood, vector<ivec> &leaves, int blockx, int blocky,
-                             int basez, int height)
+static void addworldpinetree(vector<ivec> &wood, vector<ivec> &leaves, int blockx, int blocky, int basez, int height)
 {
     loop(z, height) addworldtreeblock(wood, blockx, blocky, basez + z);
     addworldtreeblock(leaves, blockx, blocky, basez + height);
 
     for(int z = 2; z < height; ++z)
     {
-        const int fromtop = height - z,
-                  radius = min(3, 1 + fromtop / 3);
+        const int fromtop = height - z, radius = min(3, 1 + fromtop / 3);
         for(int y = -radius; y <= radius; ++y) for(int x = -radius; x <= radius; ++x)
         {
             if(abs(x) + abs(y) > radius + 1) continue;
@@ -4242,15 +4412,11 @@ static long long worldfloordiv(long long value, int divisor)
     return quotient;
 }
 
-static bool generateworldcaveentrance(const worldgencontext &ctx, int chunkx, int chunky,
-                                      int blockx, int blocky, int height)
+static bool generateworldcaveentrance(const worldgencontext &ctx, int chunkx, int chunky, int blockx, int blocky, int height)
 {
-    const int mindepth = min(ctx.settings.cavemindepth, ctx.settings.cavefulldepth),
-              logicalz = height / WORLD_BLOCK_SIZE - 1;
+    const int mindepth = min(ctx.settings.cavemindepth, ctx.settings.cavefulldepth), logicalz = height / WORLD_BLOCK_SIZE - 1;
     const float tunnelweight = worldsmoothstep(1.0f, float(mindepth), 1.0f),
-                veinwidth = ctx.settings.caveentrancewidth
-                          + (ctx.settings.tunnelwidth - ctx.settings.caveentrancewidth)
-                          * tunnelweight,
+                veinwidth = ctx.settings.caveentrancewidth + (ctx.settings.tunnelwidth - ctx.settings.caveentrancewidth) * tunnelweight,
                 noisex = float(chunkx) * WORLD_CHUNK_BLOCKS + blockx + 17500.5f,
                 noisey = float(chunky) * WORLD_CHUNK_BLOCKS + blocky - 17500.5f,
                 noisez = logicalz + 3500.5f;
@@ -4260,72 +4426,75 @@ static bool generateworldcaveentrance(const worldgencontext &ctx, int chunkx, in
 
 static bool generateworldcheesecaves(worldgencontext &ctx, uchar *carvemap, int chunkx, int chunky)
 {
-    const int bottomlayers = clamp(ctx.settings.bottomlavalayers, 0, int(WORLD_HEIGHT_BLOCKS)),
-              minheight = WORLD_MIN_HEIGHT + bottomlayers,
-              mindepth = min(ctx.settings.cavemindepth, ctx.settings.cavefulldepth),
-              fulldepth = max(ctx.settings.cavemindepth, ctx.settings.cavefulldepth);
+    const int bottomlayers = clamp(ctx.settings.bottomlavalayers, 0, int(WORLD_HEIGHT_BLOCKS));
+    const int minheight = WORLD_MIN_HEIGHT + bottomlayers;
+    const int mindepth = min(ctx.settings.cavemindepth, ctx.settings.cavefulldepth);
+    const int fulldepth = max(ctx.settings.cavemindepth, ctx.settings.cavefulldepth);
+
     const float deepdenominator = max(float(ctx.settings.cavedeepheight - minheight), 1.0f);
 
     loop(y, WORLD_CHUNK_BLOCKS)
     {
         if(ctx.iscanceled()) return false;
+
         loop(x, WORLD_CHUNK_BLOCKS)
         {
-            const int index = y * WORLD_CHUNK_BLOCKS + x,
-                      surfaceheight = ctx.heightmap[index] / WORLD_BLOCK_SIZE,
-                      caveceiling = min(surfaceheight - 1, WORLD_MAX_HEIGHT - 1);
-            const float tectonicactivity = ctx.tectonicactivitymap[index] / 255.0f,
-                        tectonicuplift = ctx.tectonicupliftmap[index] / 255.0f,
-                        fracturecorridor = ctx.fracturecorridormap[index] / 255.0f,
-                        foundationprotection = 1.0f - tectonicuplift * 0.70f,
-                        tectonicprotecteddepth = max(float(mindepth), 12.0f),
-                        tectonicfulldepth = max(float(fulldepth), 20.0f);
+            const int index = y * WORLD_CHUNK_BLOCKS + x;
+            const int surfaceheight = ctx.heightmap[index] / WORLD_BLOCK_SIZE;
+            const int caveceiling = min(surfaceheight - 1, WORLD_MAX_HEIGHT - 1);
+
+            const float tectonicactivity = ctx.tectonicactivitymap[index] / 255.0f;
+            const float tectonicuplift = ctx.tectonicupliftmap[index] / 255.0f;
+            const float fracturecorridor = ctx.fracturecorridormap[index] / 255.0f;
+            const float foundationprotection = 1.0f - tectonicuplift * 0.70f;
+            const float tectonicprotecteddepth = max(float(mindepth), 12.0f);
+            const float tectonicfulldepth = max(float(fulldepth), 20.0f);
+
+            const float noisex = float(chunkx) * WORLD_CHUNK_BLOCKS + x + 17500.5f;
+            const float noisey = float(chunky) * WORLD_CHUNK_BLOCKS + y - 17500.5f;
+
             for(int logicalz = minheight; logicalz <= caveceiling; ++logicalz)
             {
-                const float depth = float(surfaceheight - logicalz),
-                            depthweight = worldsmoothstep(float(mindepth), float(fulldepth), depth),
-                            tectonicdepthweight = worldsmoothstep(tectonicprotecteddepth,
-                                                                 max(tectonicfulldepth,
-                                                                     tectonicprotecteddepth + 1.0f),
-                                                                 depth),
-                            tectonicbase = tectonicactivity * tectonicdepthweight
-                                         * foundationprotection,
-                            caveexpansion = tectonicbase * ctx.settings.tectoniccavestrength,
-                            tunnelweight = worldsmoothstep(1.0f, float(mindepth), depth),
-                            veinwidth = ctx.settings.caveentrancewidth
-                                      + (ctx.settings.tunnelwidth - ctx.settings.caveentrancewidth)
-                                      * tunnelweight,
-                            surfacepenalty = (1.0f - depthweight) * 0.35f,
-                            deepweight = clamp((ctx.settings.cavedeepheight - logicalz) / deepdenominator,
-                                               0.0f, 1.0f),
-                            largecavethreshold = ctx.settings.largecavethreshold
-                                               + (ctx.settings.largecavedeepthreshold
-                                                - ctx.settings.largecavethreshold) * deepweight
-                                               + surfacepenalty - caveexpansion * 0.22f,
-                            fracturewidth = ctx.settings.tectonicfracturestrength
-                                          * tectonicbase * 0.06f;
-                const float noisex = float(chunkx) * WORLD_CHUNK_BLOCKS + x + 17500.5f,
-                            noisey = float(chunky) * WORLD_CHUNK_BLOCKS + y - 17500.5f,
-                            noisez = logicalz + 3500.5f;
-                bool carve = fabs(ctx.generator.tunnela.GetNoise(noisex, noisey, noisez)) < veinwidth &&
-                             fabs(ctx.generator.tunnelb.GetNoise(noisex, noisey, noisez)) < veinwidth;
+                const float depth = float(surfaceheight - logicalz);
+                const float depthweight = worldsmoothstep(float(mindepth), float(fulldepth), depth);
+                const float tectonicdepthweight = worldsmoothstep(tectonicprotecteddepth, max(tectonicfulldepth, tectonicprotecteddepth + 1.0f), depth );
+                const float tectonicbase = tectonicactivity * tectonicdepthweight * foundationprotection;
+                const float caveexpansion = tectonicbase * ctx.settings.tectoniccavestrength;
+                const float tunnelweight = worldsmoothstep(1.0f, float(mindepth), depth);
+
+                const float veinwidth = ctx.settings.caveentrancewidth + (ctx.settings.tunnelwidth - ctx.settings.caveentrancewidth) * tunnelweight;
+
+                const float surfacepenalty = (1.0f - depthweight) * 0.35f;
+                const float deepweight = clamp((ctx.settings.cavedeepheight - logicalz) / deepdenominator, 0.0f, 1.0f );
+
+                const float largecavethreshold = ctx.settings.largecavethreshold +
+                    (ctx.settings.largecavedeepthreshold - ctx.settings.largecavethreshold) * deepweight + surfacepenalty - caveexpansion * 0.22f;
+
+                const float fracturewidth = ctx.settings.tectonicfracturestrength * tectonicbase * 0.06f;
+                const float noisez = logicalz + 3500.5f;
+
+                bool carve =
+                    fabs(ctx.generator.tunnela.GetNoise(noisex, noisey, noisez)) < veinwidth &&
+                    fabs(ctx.generator.tunnelb.GetNoise(noisex, noisey, noisez)) < veinwidth;
+
                 if(!carve && fracturecorridor < fracturewidth)
                 {
                     const float fracturez = logicalz * 0.18f + 5000.5f;
-                    carve = ctx.generator.fracturevertical.GetNoise(noisex + 13500.0f,
-                                                                    noisey - 13500.0f,
-                                                                    fracturez) > -0.25f;
+
+                    carve = ctx.generator.fracturevertical.GetNoise(noisex + 13500.0f, noisey - 13500.0f, fracturez) > -0.25f;
                 }
+
                 if(!carve && depth >= mindepth)
-                    carve = ctx.generator.caves.GetNoise(noisex, noisey, noisez)
-                                > ctx.settings.cavethreshold + surfacepenalty ||
-                            ctx.generator.largecaves.GetNoise(noisex, noisey, noisez)
-                                > largecavethreshold;
-                if(carve)
-                    carvemap[worldcarveindex(x, y, logicalz - WORLD_MIN_HEIGHT)] = WORLD_CARVE_AIR;
+                {
+                    carve = ctx.generator.caves.GetNoise(noisex, noisey, noisez) > ctx.settings.cavethreshold + surfacepenalty ||
+                            ctx.generator.largecaves.GetNoise(noisex, noisey, noisez) > largecavethreshold;
+                }
+
+                if(carve) carvemap[worldcarveindex(x, y, logicalz - WORLD_MIN_HEIGHT)] = WORLD_CARVE_AIR;
             }
         }
     }
+
     return true;
 }
 
@@ -4358,8 +4527,7 @@ static bool generateworldlavalakes(worldgencontext &ctx, uchar *carvemap, int ch
                    sizehash = hashworldfeature(uint(ctx.seed), cellx, celly, cellz, 0xD192ED03U);
         const long long centerx = cellx * spacing + int(positionhash % uint(spacing)),
                         centery = celly * spacing + int((positionhash >> 8) % uint(spacing));
-        const int centerz = cellz * verticalspacing
-                          + int((positionhash >> 16) % uint(verticalspacing));
+        const int centerz = cellz * verticalspacing + int((positionhash >> 16) % uint(verticalspacing));
         if(centerz < minimumheight || centerz > startheight) continue;
 
         const float approachweight = deepheight < startheight
@@ -4961,12 +5129,17 @@ static bool deserializeworldscatterinstance(worldchunkreader &reader,
     if(!reader.readuint(value)) return false;
     scatter.z = int(value);
     if(!reader.readuint(value)) return false;
-    scatter.type = int(value);
+    // Legacy records stored only the type and were always mounted on top.
+    const int encodedorient = int((value >> 16) & 0x7);
+    scatter.orient = encodedorient ? encodedorient - 1 : O_TOP;
+    scatter.type = int(value & 0xFFFF);
     scatter.rendertransformvalid = false;
     return scatter.x >= 0 && scatter.x < WORLD_CHUNK_SIZE &&
            scatter.y >= 0 && scatter.y < WORLD_CHUNK_SIZE &&
-           scatter.z > 0 && scatter.z < WORLD_MAP_SIZE &&
-           scatter.type >= 0 && scatter.type < numworldscatters();
+           scatter.z >= 0 &&
+           scatter.z + WORLD_BLOCK_SIZE <= WORLD_MAP_SIZE &&
+           scatter.type >= 0 && scatter.type < numworldscatters() &&
+           scatter.orient >= O_LEFT && scatter.orient <= O_TOP;
 }
 
 static bool deserializeworldeditrecord(worldchunkreader &reader, worldeditrecord &record)

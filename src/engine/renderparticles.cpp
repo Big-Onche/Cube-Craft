@@ -841,7 +841,7 @@ static partrenderer *parts[] =
 {
     new quadrenderer("<grey>media/particle/blood.png", PT_PART|PT_FLIP|PT_MOD|PT_RND4|PT_COLLIDE, STAIN_BLOOD), // blood spats (note: rgb is inverted)
     new trailrenderer("media/particle/base.png", PT_TRAIL|PT_LERP),                            // water, entity
-    new quadrenderer("<grey>media/particle/smoke.png", PT_PART|PT_FLIP|PT_LERP),               // smoke
+    new quadrenderer("<grey>media/particle/smoke.png", PT_PART|PT_FLIP|PT_RND4|PT_LERP),       // smoke
     new quadrenderer("<grey>media/particle/steam.png", PT_PART|PT_FLIP),                       // steam
     new quadrenderer("<grey>media/particle/flames.png", PT_PART|PT_HFLIP|PT_RND4|PT_BRIGHT),   // flame
     new taperenderer("media/particle/flare.png", PT_TAPE|PT_BRIGHT),                           // streak
@@ -1397,6 +1397,7 @@ void updateparticles()
     {
         int emitted = 0, replayed = 0;
         addedparticles = 0;
+        game::addparticles();
         loopv(emitters)
         {
             particleemitter &pe = emitters[i];

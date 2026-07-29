@@ -55,7 +55,7 @@ vector<dynlight *> closedynlights;
 void adddynlight(const vec &o, float radius, const vec &color, int fade, int peak, int flags, float initradius, const vec &initcolor, physent *owner, const vec &dir, int spot)
 {
     if(!usedynlights) return;
-    if(o.dist(camera1->o) > dynlightdist || radius <= 0) return;
+    if((!(flags&DL_NODIST) && o.dist(camera1->o) > dynlightdist) || radius <= 0) return;
 
     int insert = 0, expire = fade + peak + lastmillis;
     loopvrev(dynlights) if(expire>=dynlights[i].expire) { insert = i+1; break; }
@@ -113,7 +113,7 @@ int finddynlights()
         dynlight &d = dynlights[j];
         if(d.curradius <= 0) continue;
         d.dist = camera1->o.dist(d.o) - d.curradius;
-        if(d.dist > dynlightdist || isfoggedsphere(d.curradius, d.o) || pvsoccludedsphere(d.o, d.curradius))
+        if((!(d.flags&DL_NODIST) && d.dist > dynlightdist) || isfoggedsphere(d.curradius, d.o) || pvsoccludedsphere(d.o, d.curradius))
             continue;
         e.o = d.o;
         e.radius = e.xradius = e.yradius = e.eyeheight = e.aboveeye = d.curradius;
@@ -138,4 +138,3 @@ bool getdynlight(int n, vec &o, float &radius, vec &color, vec &dir, int &spot, 
     flags = d.flags & 0xFF;
     return true;
 }
-

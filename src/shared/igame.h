@@ -92,6 +92,7 @@ namespace game
     extern bool detachcamera();
     extern bool collidecamera();
     extern void adddynlights();
+    extern void addparticles();
     extern void particletrack(physent *owner, vec &o, vec &d);
     extern void dynlighttrack(physent *owner, vec &o, vec &hud);
     extern int maxsoundradius(int n);

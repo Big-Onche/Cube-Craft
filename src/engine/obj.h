@@ -11,6 +11,55 @@ struct obj : vertloader<obj>
 
     struct objmeshgroup : vertmeshgroup
     {
+        bool loadtags(const char *filename)
+        {
+            stream *file = openfile(filename, "rb");
+            if(!file) return false;
+
+            md3header header;
+            memset(&header, 0, sizeof(header));
+            const bool readheader = file->read(&header, sizeof(header)) == sizeof(header);
+            if(readheader)
+            {
+                lilswap(&header.version, 1);
+                lilswap(&header.flags, 9);
+            }
+            const stream::offset filelength = file->size();
+            const long long tagslength = (long long)header.numtags * sizeof(md3tag);
+            if(!readheader || memcmp(header.id, "IDP3", 4) ||
+               header.version != 15 || header.numframes <= 0 ||
+               header.numtags <= 0 || header.ofs_tags < 0 ||
+               tagslength > INT_MAX ||
+               (long long)header.ofs_tags + tagslength > filelength ||
+               !file->seek(header.ofs_tags, SEEK_SET))
+            {
+                delete file;
+                return false;
+            }
+
+            int loaded = 0;
+            loopi(header.numtags)
+            {
+                md3tag tag;
+                if(file->read(&tag, sizeof(tag)) != sizeof(tag)) break;
+                lilswap(tag.translation, 12);
+                tag.name[sizeof(tag.name) - 1] = '\0';
+                if(!tag.name[0]) continue;
+
+                tag.translation[1] *= -1;
+                loopj(3) tag.rotation[1][j] *= -1;
+                loopj(3) tag.rotation[j][1] *= -1;
+                matrix4x3 matrix;
+                matrix.a = vec(tag.rotation[0]);
+                matrix.b = vec(tag.rotation[1]);
+                matrix.c = vec(tag.rotation[2]);
+                matrix.d = vec(tag.translation);
+                if(addtag(tag.name, matrix)) ++loaded;
+            }
+            delete file;
+            return loaded > 0;
+        }
+
         void parsevert(char *s, vector<vec> &out)
         {
             vec &v = out.add(vec(0, 0, 0));
@@ -184,4 +233,3 @@ struct obj : vertloader<obj>
 };
 
 vertcommands<obj> objcommands;
-

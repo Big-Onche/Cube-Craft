@@ -558,7 +558,7 @@ void addbatchedmodel(model *m, batchedmodel &bm, int idx)
         if(b->m == m && (b->flags & MDL_MAPMODEL) == (bm.flags & MDL_MAPMODEL))
             goto foundbatch;
     }
-    
+
     m->batch = batches.length();
     b = &batches.add();
     b->m = m;
@@ -876,7 +876,7 @@ void rendertransparentmodelbatches(int stencil)
 
 static occludequery *modelquery = NULL;
 static int modelquerybatches = -1, modelquerymodels = -1, modelqueryattached = -1;
- 
+
 void startmodelquery(occludequery *query)
 {
     modelquery = query;
@@ -1069,6 +1069,23 @@ hasboundbox:
     b.attached = a ? modelattached.length() : -1;
     if(a) for(int i = 0;; i++) { modelattached.add(a[i]); if(!a[i].tag) break; }
     addbatchedmodel(m, b, batchedmodels.length()-1);
+}
+
+bool modeltagposition(const char *mdl, const char *tag, vec &position, const vec &o, float yaw, float pitch, float roll, float size, int anim)
+{
+    model *m = loadmodel(mdl);
+    if(!m || !tag || !tag[0]) return false;
+
+    vec tagposition(FLT_MAX, FLT_MAX, FLT_MAX);
+    modelattach attachments[] =
+    {
+        modelattach(tag, &tagposition),
+        modelattach()
+    };
+    m->render(anim | ANIM_NORENDER, 0, 0, o, yaw, pitch, roll, NULL, attachments, size);
+    if(tagposition.x == FLT_MAX) return false;
+    position = tagposition;
+    return true;
 }
 
 void rendermodelwithskins(const char *mdl, int anim, const vec &o, float yaw, float pitch, float roll, int flags, dynent *d, const modelskinoverride *skins, int numskins, float size, const vec4 &color)

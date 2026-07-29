@@ -690,8 +690,8 @@ struct mapmodelinfo { string name; model *m, *collide; };
 
 extern vector<mapmodelinfo> mapmodels;
 extern int registermapmodelpath(const char *name);
-extern int createworldmapmodelentity(const vec &o, int model, int yaw);
-extern bool updateworldmapmodelentity(int id, const vec &o, int model, int yaw);
+extern int createworldmapmodelentity(const vec &o, int model, int yaw, int pitch = 0, int roll = 0);
+extern bool updateworldmapmodelentity(int id, const vec &o, int model, int yaw, int pitch = 0, int roll = 0);
 extern bool isworldmapmodelentity(int id, int model);
 extern void destroyworldmapmodelentity(int id);
 

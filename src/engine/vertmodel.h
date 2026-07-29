@@ -218,6 +218,8 @@ struct vertmodel : animmodel
             return -1;
         }
 
+        virtual bool loadtags(const char *filename) { return false; }
+
         bool addtag(const char *name, const matrix4x3 &matrix)
         {
             int idx = findtag(name);
@@ -466,16 +468,25 @@ template<class MDL> struct vertcommands : modelcommands<MDL, struct MDL::vertmes
         else mdl.initskins();
     }
 
-    static void settag(char *tagname, float *tx, float *ty, float *tz, float *rx, float *ry, float *rz)
+    static void settag(char *tagname, float *tx, float *ty, float *tz, float *rx, float *ry, float *rz, int *numargs)
     {
         if(!MDL::loading || MDL::loading->parts.empty()) { conoutf(CON_ERROR, "not loading an %s", MDL::formatname()); return; }
         part &mdl = *(part *)MDL::loading->parts.last();
+        if(*numargs <= 1)
+        {
+            defformatstring(filename, "%s/%s", MDL::dir, tagname);
+            if(!mdl.meshes || !((meshgroup *)mdl.meshes)->loadtags(path(filename)))
+            {
+                conoutf(CON_ERROR, "could not load model tags from %s", filename);
+                return;
+            }
+        }
+
         float cx = *rx ? cosf(*rx/2*RAD) : 1, sx = *rx ? sinf(*rx/2*RAD) : 0,
               cy = *ry ? cosf(*ry/2*RAD) : 1, sy = *ry ? sinf(*ry/2*RAD) : 0,
               cz = *rz ? cosf(*rz/2*RAD) : 1, sz = *rz ? sinf(*rz/2*RAD) : 0;
-        matrix4x3 m(matrix3(quat(sx*cy*cz - cx*sy*sz, cx*sy*cz + sx*cy*sz, cx*cy*sz - sx*sy*cz, cx*cy*cz + sx*sy*sz)),
-                    vec(*tx, *ty, *tz));
-        ((meshgroup *)mdl.meshes)->addtag(tagname, m);
+
+        matrix4x3 m(matrix3(quat(sx*cy*cz - cx*sy*sz, cx*sy*cz + sx*cy*sz, cx*cy*sz - sx*sy*cz, cx*cy*cz + sx*sy*sz)), vec(*tx, *ty, *tz)); ((meshgroup *)mdl.meshes)->addtag(tagname, m);
     }
 
     static void setpitch(float *pitchscale, float *pitchoffset, float *pitchmin, float *pitchmax)
@@ -512,9 +523,8 @@ template<class MDL> struct vertcommands : modelcommands<MDL, struct MDL::vertmes
     vertcommands()
     {
         if(MDL::multiparted()) this->modelcommand(loadpart, "load", "sf");
-        this->modelcommand(settag, "tag", "sffffff");
+        this->modelcommand(settag, "tag", "sffffffN");
         this->modelcommand(setpitch, "pitch", "ffff");
         if(MDL::cananimate()) this->modelcommand(setanim, "anim", "siiff");
     }
 };
-

@@ -116,6 +116,12 @@ extern void mpcalclight(bool local);
 
 // Data-driven voxel types registered by worldcube in config/world.cfg.
 enum { WORLD_CUBE_TOP = 0, WORLD_CUBE_SIDE, WORLD_CUBE_BOTTOM };
+enum
+{
+    WORLD_ORIENT_LEFT = 0, WORLD_ORIENT_RIGHT,
+    WORLD_ORIENT_BACK, WORLD_ORIENT_FRONT,
+    WORLD_ORIENT_BOTTOM, WORLD_ORIENT_TOP
+};
 extern int numworldcubes();
 extern int getworldcubeslot(int index);
 extern const char *getworldcubename(int index);
@@ -124,9 +130,13 @@ extern int numworldscatters();
 extern const char *getworldscattername(int index);
 extern const char *getworldscattermodel(int index);
 extern const char *getworldscattericon(int index);
+extern bool isworldtorch(int index);
+extern bool worldtorchincell(const ivec &cell);
+extern void addworldtorchlights();
+extern void addworldtorchparticles();
 extern bool isworldscatterentity(int id);
-extern bool getworldscatterentityedit(int id, int &type, ivec &support);
-extern bool editworldscatter(int type, const ivec &support, bool place);
+extern bool getworldscatterentityedit(int id, int &type, ivec &support, int &orient);
+extern bool editworldscatter(int type, const ivec &support, int orient, bool place);
 extern float rayent(const vec &o, const vec &ray, float radius, int mode,
                     int size, int &orient, int &ent);
 
@@ -308,7 +318,8 @@ enum
 {
     DL_SHRINK = 1<<8,
     DL_EXPAND = 1<<9,
-    DL_FLASH  = 1<<10
+    DL_FLASH  = 1<<10,
+    DL_NODIST = 1<<11
 };
 
 extern void adddynlight(const vec &o, float radius, const vec &color, int fade = 0, int peak = 0, int flags = 0, float initradius = 0, const vec &initcolor = vec(0, 0, 0), physent *owner = NULL, const vec &dir = vec(0, 0, 0), int spot = 0);
@@ -459,6 +470,10 @@ struct modelattach
 };
 
 extern void rendermodel(const char *mdl, int anim, const vec &o, float yaw = 0, float pitch = 0, float roll = 0, int cull = MDL_CULL_VFC | MDL_CULL_DIST | MDL_CULL_OCCLUDED, dynent *d = NULL, modelattach *a = NULL, int basetime = 0, int basetime2 = 0, float size = 1, const vec4 &color = vec4(1, 1, 1, 1));
+extern bool modeltagposition(const char *mdl, const char *tag, vec &position,
+                             const vec &o, float yaw = 0, float pitch = 0,
+                             float roll = 0, float size = 1,
+                             int anim = ANIM_MAPMODEL | ANIM_LOOP);
 struct modelskinoverride
 {
     const char *mesh, *texture;
