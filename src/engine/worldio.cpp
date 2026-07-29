@@ -108,7 +108,7 @@ enum
 enum
 {
     WORLD_SAVE_FORMAT_VERSION = 1,
-    WORLDGEN_VERSION = 2,
+    WORLDGEN_VERSION = 4,
     WORLD_DIFF_Z = 0,
     WORLD_DIFF_FRAME_MAX = 64 << 20,
     WORLD_DIFF_FLUSH_MILLIS = 10000
@@ -242,7 +242,9 @@ static int worldgrasstexture = DEFAULT_GEOM, worldgrasssidetexture = DEFAULT_GEO
            worldgrassbottomtexture = DEFAULT_GEOM,
            worlddirttexture = DEFAULT_GEOM, worldstonetexture = DEFAULT_GEOM,
            worldsandtexture = DEFAULT_GEOM, worldsnowtexture = DEFAULT_GEOM,
-           worldwoodtexture = DEFAULT_GEOM, worldleaftexture = DEFAULT_GEOM;
+           worldwoodtexture = DEFAULT_GEOM, worldpinewoodtexture = DEFAULT_GEOM,
+           worldleaftexture = DEFAULT_GEOM,
+           worldneedlestexture = DEFAULT_GEOM;
 static void updateleavesalpha();
 static void setworldleavesalpha(cube *root, bool enabled);
 
@@ -309,8 +311,12 @@ VARFP(leavesalpha, 0, 1, 1, updateleavesalpha());
 
 static bool isworldleaftexture(const cube &c)
 {
-    if(worldleaftexture == DEFAULT_GEOM || c.children || isempty(c)) return false;
-    loopi(6) if(c.texture[i] != worldleaftexture) return false;
+    if(c.children || isempty(c)) return false;
+    const int texture = c.texture[0];
+    const bool foliage = (worldleaftexture != DEFAULT_GEOM && texture == worldleaftexture)
+                      || (worldneedlestexture != DEFAULT_GEOM && texture == worldneedlestexture);
+    if(!foliage) return false;
+    loopi(6) if(c.texture[i] != texture) return false;
     return true;
 }
 
@@ -340,7 +346,7 @@ void worldreset()
     worldgrassscatter = worldrosescatter = worldtulipscatter = worlddandelionscatter = -1;
     worldgrasstexture = worldgrasssidetexture = worldgrassbottomtexture = worlddirttexture =
         worldstonetexture = worldsandtexture = worldsnowtexture = worldwoodtexture =
-        worldleaftexture = DEFAULT_GEOM;
+        worldpinewoodtexture = worldleaftexture = worldneedlestexture = DEFAULT_GEOM;
 }
 
 COMMAND(worldreset, "");
@@ -454,10 +460,11 @@ static bool loadworlddefinitions()
     worldcubedefinition *grass = findworldcube("Grass"), *dirt = findworldcube("Dirt"),
                     *stone = findworldcube("Stone"), *sand = findworldcube("Sand"),
                     *snow = findworldcube("Snow"), *wood = findworldcube("Wood"),
-                    *leaves = findworldcube("Leaves");
-    if(!grass || !dirt || !stone || !sand || !snow || !wood || !leaves)
+                    *pinewood = findworldcube("Pine Wood"),
+                    *leaves = findworldcube("Leaves"), *needles = findworldcube("Needles");
+    if(!grass || !dirt || !stone || !sand || !snow || !wood || !pinewood || !leaves || !needles)
     {
-        conoutf(CON_ERROR, "world.cfg must define Grass, Dirt, Stone, Sand, Snow, Wood, and Leaves cubes");
+        conoutf(CON_ERROR, "world.cfg must define Grass, Dirt, Stone, Sand, Snow, Wood, Pine Wood, Leaves, and Needles cubes");
         return false;
     }
 
@@ -465,7 +472,7 @@ static bool loadworlddefinitions()
     loopv(worldcubedefinitions)
     {
         worldcubedefinition &type = *worldcubedefinitions[i];
-        const bool alpha = &type == leaves;
+        const bool alpha = &type == leaves || &type == needles;
         type.slot = loadworldtextureslot(type.texture, type.texsize, alpha);
         type.sideslot = type.sidetexture[0]
                       ? loadworldtextureslot(type.sidetexture, type.texsize, alpha)
@@ -477,14 +484,11 @@ static bool loadworlddefinitions()
         worldcubedefinition *bottomtype = type.bottom[0] ? findworldcube(type.bottom) : NULL;
         if(type.bottom[0] && !bottomtype)
         {
-            conoutf(CON_ERROR, "world cube %s references unknown bottom cube %s",
-                    type.name, type.bottom);
+            conoutf(CON_ERROR, "world cube %s references unknown bottom cube %s", type.name, type.bottom);
             return false;
         }
         type.bottomslot = bottomtype ? bottomtype->slot : type.sideslot;
-        copystring(type.bottomtexture, bottomtype ? bottomtype->texture
-                                                 : type.sidetexture[0] ? type.sidetexture
-                                                                       : type.texture);
+        copystring(type.bottomtexture, bottomtype ? bottomtype->texture : type.sidetexture[0] ? type.sidetexture : type.texture);
     }
 
     worldgrasstexture = grass->slot;
@@ -495,7 +499,9 @@ static bool loadworlddefinitions()
     worldsandtexture = sand->slot;
     worldsnowtexture = snow->slot;
     worldwoodtexture = wood->slot;
+    worldpinewoodtexture = pinewood->slot;
     worldleaftexture = leaves->slot;
+    worldneedlestexture = needles->slot;
     loopv(worldscatterdefinitions)
     {
         worldscatterdefinition &type = *worldscatterdefinitions[i];
@@ -512,8 +518,7 @@ static bool loadworlddefinitions()
     worldtulipscatter = worldscatterdefinitions.find(findworldscatter("Tulip"));
     worlddandelionscatter = worldscatterdefinitions.find(findworldscatter("Dandelion"));
     setworldleavesalpha(worldroot, leavesalpha != 0);
-    conoutf(CON_DEBUG, "loaded %d world cube and %d world scatter definitions",
-            worldcubedefinitions.length(), worldscatterdefinitions.length());
+    conoutf(CON_DEBUG, "loaded %d world cube and %d world scatter definitions", worldcubedefinitions.length(), worldscatterdefinitions.length());
     return true;
 }
 
@@ -568,7 +573,8 @@ VARP(chunkremip, 0, 0, 1); // optional CPU-for-memory octree collapse on generat
 struct worldchunkjob
 {
     int x, y, seed, grasstexture, grasssidetexture, grassbottomtexture;
-    int dirttexture, stonetexture, sandtexture, snowtexture, woodtexture, leaftexture;
+    int dirttexture, stonetexture, sandtexture, snowtexture, woodtexture, pinewoodtexture;
+    int leaftexture, needlestexture;
     game::worldsettings settings;
     int families, optimized, loaderror;
     ullong revision, canonicalhash;
@@ -585,7 +591,9 @@ struct worldchunkjob
           grassbottomtexture(worldgrassbottomtexture),
           dirttexture(worlddirttexture), stonetexture(worldstonetexture),
           sandtexture(worldsandtexture), snowtexture(worldsnowtexture),
-          woodtexture(worldwoodtexture), leaftexture(worldleaftexture),
+          woodtexture(worldwoodtexture), pinewoodtexture(worldpinewoodtexture),
+          leaftexture(worldleaftexture),
+          needlestexture(worldneedlestexture),
           families(0), optimized(0), loaderror(0), revision(0), canonicalhash(0),
           epoch(epoch), request(request),
           loaded(false), remip(chunkremip != 0), root(NULL)
@@ -676,7 +684,7 @@ static worldeditcapture currentworldedit;
 
 static void setworldleavesalpha(cube *root, bool enabled)
 {
-    if(!root || worldleaftexture == DEFAULT_GEOM) return;
+    if(!root || (worldleaftexture == DEFAULT_GEOM && worldneedlestexture == DEFAULT_GEOM)) return;
     loopi(8)
     {
         cube &c = root[i];
@@ -3195,20 +3203,23 @@ struct worldgencontext
     uchar tectonicupliftmap[WORLD_CHUNK_BLOCKS * WORLD_CHUNK_BLOCKS];
     uchar fracturecorridormap[WORLD_CHUNK_BLOCKS * WORLD_CHUNK_BLOCKS];
     int seed, grasstexture, grasssidetexture, grassbottomtexture;
-    int dirttexture, stonetexture, sandtexture, snowtexture, woodtexture, leaftexture;
+    int dirttexture, stonetexture, sandtexture, snowtexture, woodtexture, pinewoodtexture;
+    int leaftexture, needlestexture;
     bool prepared, remip;
     int families, optimized;
     SDL_atomic_t *cancelled;
 
     worldgencontext(int seed, int grasstexture, int grasssidetexture, int grassbottomtexture,
                     int dirttexture, int stonetexture, int sandtexture, int snowtexture,
-                    int woodtexture, int leaftexture,
+                    int woodtexture, int pinewoodtexture, int leaftexture, int needlestexture,
                     bool prepared, bool remip, const game::worldsettings &settings,
                     SDL_atomic_t *cancelled = NULL)
         : generator(seed, settings), settings(settings), seed(seed), grasstexture(grasstexture),
           grasssidetexture(grasssidetexture), grassbottomtexture(grassbottomtexture),
           dirttexture(dirttexture), stonetexture(stonetexture), sandtexture(sandtexture),
-          snowtexture(snowtexture), woodtexture(woodtexture), leaftexture(leaftexture),
+          snowtexture(snowtexture), woodtexture(woodtexture), pinewoodtexture(pinewoodtexture),
+          leaftexture(leaftexture),
+          needlestexture(needlestexture),
           prepared(prepared), remip(remip), families(0), optimized(0), cancelled(cancelled)
     {
     }
@@ -4579,10 +4590,11 @@ static void addworldregulartree(vector<ivec> &wood, vector<ivec> &leaves, int bl
     }
 }
 
-static void addworldpinetree(vector<ivec> &wood, vector<ivec> &leaves, int blockx, int blocky, int basez, int height)
+static void addworldpinetree(vector<ivec> &pinewood, vector<ivec> &needles,
+                            int blockx, int blocky, int basez, int height)
 {
-    loop(z, height) addworldtreeblock(wood, blockx, blocky, basez + z);
-    addworldtreeblock(leaves, blockx, blocky, basez + height);
+    loop(z, height) addworldtreeblock(pinewood, blockx, blocky, basez + z);
+    addworldtreeblock(needles, blockx, blocky, basez + height);
 
     for(int z = 2; z < height; ++z)
     {
@@ -4590,7 +4602,7 @@ static void addworldpinetree(vector<ivec> &wood, vector<ivec> &leaves, int block
         for(int y = -radius; y <= radius; ++y) for(int x = -radius; x <= radius; ++x)
         {
             if(abs(x) + abs(y) > radius + 1) continue;
-            addworldtreeblock(leaves, blockx + x, blocky + y, basez + z);
+            addworldtreeblock(needles, blockx + x, blocky + y, basez + z);
         }
     }
 }
@@ -4912,7 +4924,7 @@ static bool placeworldcaves(worldgencontext &ctx, cube *root, int chunkx, int ch
 
 static bool placeworldtrees(worldgencontext &ctx, cube *root, int chunkx, int chunky)
 {
-    vector<ivec> wood, leaves;
+    vector<ivec> wood, pinewood, leaves, needles;
     const int halo = 3,
               beachmin = (ctx.settings.sealevel
                         + min(ctx.settings.beachminheight, ctx.settings.beachmaxheight)) * WORLD_BLOCK_SIZE,
@@ -4963,14 +4975,14 @@ static bool placeworldtrees(worldgencontext &ctx, cube *root, int chunkx, int ch
                       basez = WORLD_GROUND_HEIGHT / WORLD_BLOCK_SIZE + height / WORLD_BLOCK_SIZE;
             if(basez + treeheight >= WORLD_HEIGHT_BLOCKS) continue;
 
-            if(pine) addworldpinetree(wood, leaves, x, y, basez, treeheight);
+            if(pine) addworldpinetree(pinewood, needles, x, y, basez, treeheight);
             else addworldregulartree(wood, leaves, x, y, basez, treeheight, shape);
         }
     }
 
     {
         ZoneScopedN("Chunks/Apply tree blocks");
-        ZoneValue(wood.length() + leaves.length());
+        ZoneValue(wood.length() + pinewood.length() + leaves.length() + needles.length());
         loopv(leaves)
         {
             cube &c = lookupworldgenblock(ctx, root, leaves[i]);
@@ -4978,11 +4990,26 @@ static bool placeworldtrees(worldgencontext &ctx, cube *root, int chunkx, int ch
                 setworldcubetexture(c, ctx.leaftexture, -1, -1,
                                     leavesalpha ? MAT_ALPHA : MAT_AIR);
         }
+        loopv(needles)
+        {
+            cube &c = lookupworldgenblock(ctx, root, needles[i]);
+            if(isempty(c) && c.material == MAT_AIR)
+                setworldcubetexture(c, ctx.needlestexture, -1, -1,
+                                    leavesalpha ? MAT_ALPHA : MAT_AIR);
+        }
         loopv(wood)
         {
             cube &c = lookupworldgenblock(ctx, root, wood[i]);
-            if((isempty(c) && c.material == MAT_AIR) || c.texture[0] == ctx.leaftexture)
+            if((isempty(c) && c.material == MAT_AIR) ||
+               c.texture[0] == ctx.leaftexture || c.texture[0] == ctx.needlestexture)
                 setworldcubetexture(c, ctx.woodtexture);
+        }
+        loopv(pinewood)
+        {
+            cube &c = lookupworldgenblock(ctx, root, pinewood[i]);
+            if((isempty(c) && c.material == MAT_AIR) ||
+               c.texture[0] == ctx.leaftexture || c.texture[0] == ctx.needlestexture)
+                setworldcubetexture(c, ctx.pinewoodtexture);
         }
     }
     return !ctx.iscanceled();
@@ -5051,7 +5078,8 @@ static cube *generateworldchunk(int chunkx, int chunky)
     worldgencontext ctx(game::getworldseed(), worldgrasstexture, worldgrasssidetexture,
                         worldgrassbottomtexture,
                         worlddirttexture, worldstonetexture, worldsandtexture, worldsnowtexture,
-                        worldwoodtexture, worldleaftexture, false, chunkremip != 0, settings);
+                        worldwoodtexture, worldpinewoodtexture, worldleaftexture, worldneedlestexture,
+                        false, chunkremip != 0, settings);
     return generateworldchunk(chunkx, chunky, ctx);
 }
 
@@ -5824,7 +5852,8 @@ static cube *prepareworldchunk(worldchunkjob &job)
         worldgencontext ctx(job.seed, job.grasstexture, job.grasssidetexture,
                             job.grassbottomtexture,
                             job.dirttexture, job.stonetexture, job.sandtexture, job.snowtexture,
-                            job.woodtexture, job.leaftexture, true, job.remip,
+                            job.woodtexture, job.pinewoodtexture, job.leaftexture, job.needlestexture,
+                            true, job.remip,
                             job.settings, &job.cancelled);
         cube *root = generateworldchunk(job.x, job.y, ctx);
         job.families = ctx.families;
