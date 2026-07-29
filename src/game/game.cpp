@@ -936,6 +936,12 @@ namespace game
         return heldtorchemitterposition(flame);
     }
 
+    static vec heldtorchparticleorigin;
+    static int heldtorchparticlemillis = -1;
+    FVARP(hudparticlemovementoffset, 0.0f, 0.25f, 2.0f);
+    static vec previoushudparticleorigin, hudparticlemovement;
+    static int previoushudparticlemillis = -1, hudparticlemovementmillis = -1;
+
     void adddynlights()
     {
         addworldtorchlights();
@@ -947,12 +953,59 @@ namespace game
     void addparticles()
     {
         addworldtorchparticles();
+        heldtorchparticlemillis = -1;
         vec flame;
-        if(!heldtorchflame(flame)) return;
-        regular_particle_flame(PART_FLAME, flame, 0.07f, 0.7f, 0xFF8628, 1, 2.4f, 9.2f, 220.0f, -100);
-        regular_particle_flame(PART_SMOKE, flame, 0.09f, 1.1f, 0xAA8C4E, 1, 3.0f, 4.0f, 1100.0f, -250);
+        if(!heldtorchflame(flame))
+        {
+            if(player1) removetrackedparticles(player1);
+            previoushudparticlemillis = hudparticlemovementmillis = -1;
+            hudparticlemovement = vec(0, 0, 0);
+            return;
+        }
+        heldtorchparticleorigin = flame;
+        heldtorchparticlemillis = lastmillis;
+        regular_particle_hud_flame(PART_HUD_FLAME, flame, 0.07f, 0.7f, 0xFF8628, 1, 2.4f, 9.2f, 220.0f, -100, player1);
+        regular_particle_hud_flame(PART_HUD_SMOKE, flame, 0.09f, 1.1f, 0xAA8C4E, 1, 3.0f, 4.0f, 1100.0f, -250, player1);
     }
+
+    static void updatehudparticlemovement(physent *owner, const vec &emitter)
+    {
+        if(hudparticlemovementmillis == totalmillis) return;
+
+        hudparticlemovement = vec(0, 0, 0);
+        if(previoushudparticlemillis >= 0)
+        {
+            const int elapsed = totalmillis - previoushudparticlemillis;
+            if(elapsed > 0 && elapsed <= 250 && hudparticlemovementoffset > 0)
+            {
+                vec velocity(emitter);
+                velocity.sub(previoushudparticleorigin).mul(1000.0f/elapsed);
+                const float speed = velocity.magnitude();
+                if(speed > 1e-4f)
+                {
+                    const float movement = clamp(speed / max(owner->maxspeed, 1.0f), 0.0f, 1.0f);
+                    velocity.div(speed);
+                    hudparticlemovement = vec(-velocity.dot(camright), -velocity.dot(camdir), -velocity.dot(camup)).mul(hudparticlemovementoffset * movement);
+                }
+            }
+        }
+        previoushudparticleorigin = emitter;
+        previoushudparticlemillis = hudparticlemovementmillis = totalmillis;
+    }
+
     void particletrack(physent *owner, vec &o, vec &d) {}
+
+    void hudparticletrack(physent *owner, vec &o, vec &d, int age)
+    {
+        if(!owner || owner != player1 || heldtorchparticlemillis != lastmillis) return;
+        vec emitter;
+        if(heldtorchemitterposition(emitter)) heldtorchparticleorigin = emitter;
+        updatehudparticlemovement(owner, heldtorchparticleorigin);
+        o.madd(hudparticlemovement, age/500.0f);
+        const vec localorigin(o), localvelocity(d);
+        o = vec(heldtorchparticleorigin).madd(camright, localorigin.x).madd(camdir, localorigin.y).madd(camup, localorigin.z);
+        d = vec(camright).mul(localvelocity.x).madd(camdir, localvelocity.y).madd(camup, localvelocity.z);
+    }
     void dynlighttrack(physent *owner, vec &o, vec &hud) {}
     int maxsoundradius(int n) { return 500; }
     // The procedural world is unbounded while the engine minimap assumes one

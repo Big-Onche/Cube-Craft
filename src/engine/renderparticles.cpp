@@ -119,6 +119,7 @@ enum
     PT_SHADER    = 1<<21,
     PT_NOLAYER   = 1<<22,
     PT_COLLIDE   = 1<<23,
+    PT_HUDTRACK  = 1<<24,
     PT_FLIP      = PT_HFLIP | PT_VFLIP | PT_ROT
 };
 
@@ -199,7 +200,8 @@ struct partrenderer
     {
         o = p->o;
         d = p->d;
-        if(type&PT_TRACK && p->owner) game::particletrack(p->owner, o, d);
+        const bool hudtrack = (type&PT_HUDTRACK) && p->owner;
+        if(!hudtrack && type&PT_TRACK && p->owner) game::particletrack(p->owner, o, d);
         if(p->fade <= 5)
         {
             ts = 1;
@@ -234,6 +236,10 @@ struct partrenderer
                 else blend = 0;
             }
         }
+        // HUD particles store both their origin and velocity in view-model
+        // local space. Apply their entire lifetime motion there before
+        // anchoring them to this frame's tag_emitter position.
+        if(hudtrack) game::hudparticletrack(p->owner, o, d, ts);
     }
 
     void debuginfo()
@@ -861,6 +867,8 @@ static partrenderer *parts[] =
     &texts,                                                                                    // text
     &meters,                                                                                   // meter
     &metervs,                                                                                  // meter vs.
+    new quadrenderer("<grey>media/particle/smoke.png", PT_PART|PT_FLIP|PT_RND4|PT_LERP|PT_TRACK|PT_HUDTRACK),       // held smoke
+    new quadrenderer("<grey>media/particle/flames.png", PT_PART|PT_HFLIP|PT_RND4|PT_BRIGHT|PT_TRACK|PT_HUDTRACK),   // held flame
     &flares                                                                                    // lens flares - must be done last
 };
 
@@ -1258,6 +1266,28 @@ void regular_particle_flame(int type, const vec &p, float radius, float height, 
 {
     if(!canaddparticles()) return;
     regularflame(type, p, radius, height, color, density, scale, speed, fade, gravity);
+}
+
+void regular_particle_hud_flame(int type, const vec &p, float radius, float height, int color, int density, float scale, float speed, float fade, int gravity, physent *owner)
+{
+    if(!canaddparticles() || !canemitparticles() || !owner) return;
+
+    const float size = scale * min(radius, height);
+    vec velocity(0, 0, min(1.0f, height)*speed);
+    // Keep Z as local screen-up so the normal particle gravity calculation
+    // remains valid before the particle is transformed back into the world.
+    velocity = vec(velocity.dot(camright), velocity.dot(camdir), velocity.dot(camup));
+
+    loopi(density)
+    {
+        vec origin = p;
+        origin.x += rndscale(radius*2.0f)-radius;
+        origin.y += rndscale(radius*2.0f)-radius;
+        origin.sub(p);
+        origin = vec(origin.dot(camright), origin.dot(camdir), origin.dot(camup));
+        particle *part = newparticle(origin, velocity, rnd(max(int(fade*height), 1))+1, type, color, size, gravity);
+        part->owner = owner;
+    }
 }
 
 static void makeparticles(entity &e)

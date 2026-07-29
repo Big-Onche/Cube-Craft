@@ -45,6 +45,9 @@ namespace game
 
     VARP(hudgun, 0, 1, 1);
 
+    static vec renderedheldtorchemitter;
+    static int renderedheldtorchemittermillis = -1;
+
     void preloadplayermodels()
     {
         loopi(NUM_PLAYER_PARTS) preloadmodel(playermodels[i]);
@@ -281,12 +284,26 @@ namespace game
 
     static void renderheldscatter(int selected, float armpitch, float armroll, float bob, float actionpitch)
     {
+        const bool torch = isworldtorch(selected);
+        if(torch) renderedheldtorchemittermillis = -1;
+
         const char *model = getworldscattermodel(selected);
         if(!model[0]) return;
         vec origin = hudarmhand(1, armpitch, armroll, bob);
         origin.madd(camdir, HUD_CUBE_GRIP_FORWARD).madd(camright, HUD_CUBE_GRIP_SIDE).madd(camup, HUD_CUBE_GRIP_UP);
 
-        rendermodel(model, ANIM_MAPMODEL | ANIM_LOOP, origin, camera1->yaw, camera1->pitch - max(actionpitch, 0.0f) * 0.35f, 0, MDL_NOBATCH | MDL_NOSHADOW, player1, NULL, 0, 0, 0.45f);
+        vec emitter(FLT_MAX, FLT_MAX, FLT_MAX);
+        modelattach attachments[] =
+        {
+            modelattach("tag_emitter", &emitter),
+            modelattach()
+        };
+        rendermodel(model, ANIM_MAPMODEL | ANIM_LOOP, origin, camera1->yaw, camera1->pitch - max(actionpitch, 0.0f) * 0.35f, 0, MDL_NOBATCH | MDL_NOSHADOW, player1, torch ? attachments : NULL, 0, 0, 0.45f);
+        if(torch && emitter.x != FLT_MAX)
+        {
+            renderedheldtorchemitter = emitter;
+            renderedheldtorchemittermillis = totalmillis;
+        }
     }
 
     bool heldtorchemitterposition(vec &position)
@@ -299,6 +316,14 @@ namespace game
 
         const char *model = getworldscattermodel(selected - cubecount);
         if(!model[0]) return false;
+
+        // renderheldscatter records the tag produced by the same model render,
+        // after this frame's stride/crouch state has been updated.
+        if(renderedheldtorchemittermillis == totalmillis)
+        {
+            position = calcavatardepthpos(renderedheldtorchemitter);
+            return true;
+        }
 
         const float speed = horizontalmeterspersecond(player1),
                     movement = movementamount(player1, speed),

@@ -371,12 +371,14 @@ enum
     PART_HUD_ICON_GREY,
     PART_TEXT,
     PART_METER, PART_METER_VS,
+    PART_HUD_SMOKE, PART_HUD_FLAME,
     PART_LENS_FLARE
 };
 
 extern bool canaddparticles();
 extern void regular_particle_splash(int type, int num, int fade, const vec &p, int color = 0xFFFFFF, float size = 1.0f, int radius = 150, int gravity = 2, int delay = 0);
 extern void regular_particle_flame(int type, const vec &p, float radius, float height, int color, int density = 3, float scale = 2.0f, float speed = 200.0f, float fade = 600.0f, int gravity = -15);
+extern void regular_particle_hud_flame(int type, const vec &p, float radius, float height, int color, int density, float scale, float speed, float fade, int gravity, physent *owner);
 extern void particle_splash(int type, int num, int fade, const vec &p, int color = 0xFFFFFF, float size = 1.0f, int radius = 150, int gravity = 2);
 extern void particle_trail(int type, int fade, const vec &from, const vec &to, int color = 0xFFFFFF, float size = 1.0f, int gravity = 20);
 extern void particle_text(const vec &s, const char *t, int type, int fade = 2000, int color = 0xFFFFFF, float size = 2.0f, int gravity = 0);
