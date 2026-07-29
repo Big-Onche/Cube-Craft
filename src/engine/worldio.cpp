@@ -4389,6 +4389,27 @@ bool isworldscatterentity(int id)
     return false;
 }
 
+bool getworldscatterentitybox(int id, vec &center, vec &radius)
+{
+    if(!isworldscatterentity(id)) return false;
+    const vector<extentity *> &ents = entities::getents();
+    if(!ents.inrange(id)) return false;
+    const extentity &e = *ents[id];
+    model *m = loadmapmodel(e.attr1);
+    if(!m) return false;
+
+    m->boundbox(center, radius);
+    if(e.attr5 > 0)
+    {
+        const float scale = e.attr5 / 100.0f;
+        center.mul(scale);
+        radius.mul(scale);
+    }
+    rotatebb(center, radius, e.attr2, e.attr3, e.attr4);
+    center.add(e.o);
+    return true;
+}
+
 bool getworldscatterentityedit(int id, int &type, ivec &support, int &orient)
 {
     loopv(worldgrassentities)

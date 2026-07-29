@@ -78,6 +78,7 @@ namespace game
     extern dynent *iterdynents(int i);
     extern int numdynents();
     extern void rendergame();
+    extern void rendercreativetarget();
     extern void renderavatar();
     extern void renderplayerpreview(int model, int color, int team, int weap);
     extern int numanims();

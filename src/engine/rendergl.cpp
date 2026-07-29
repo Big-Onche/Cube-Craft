@@ -2425,6 +2425,34 @@ vec calcmodelpreviewpos(const vec &radius, float &yaw)
     return vec(0, dist, 0).rotate_around_x(camera1->pitch*RAD);
 }
 
+FVARP(selectionoutlinewidth, 1.0f, 2.0f, 8.0f);
+
+void renderboundingbox(const vec &center, const vec &radius)
+{
+    // Keep the outline just off the selected surface to avoid depth fighting.
+    const vec expanded = vec(radius).add(0.05f),
+              bbmin = vec(center).sub(expanded),
+              bbmax = vec(center).add(expanded);
+
+    ldrnotextureshader->set();
+    gle::colorub(90, 90, 90);
+    gle::defvertex();
+    glLineWidth(selectionoutlinewidth);
+    gle::begin(GL_LINES, 24);
+    loopi(8) loopj(3) if(!(i & (1 << j)))
+    {
+        vec start(i & 1 ? bbmax.x : bbmin.x,
+                  i & 2 ? bbmax.y : bbmin.y,
+                  i & 4 ? bbmax.z : bbmin.z);
+        vec end = start;
+        end[j] = bbmax[j];
+        gle::attrib(start);
+        gle::attrib(end);
+    }
+    xtraverts += gle::end();
+    glLineWidth(1.0f);
+}
+
 int xtraverts, xtravertsva;
 
 void gl_drawview()
@@ -2508,6 +2536,17 @@ void gl_drawview()
 
     rendervolumetric();
     GLERROR;
+
+    if(!editmode)
+    {
+        glDepthMask(GL_FALSE);
+        glEnable(GL_BLEND);
+        glBlendFunc(GL_ONE, GL_ONE);
+        game::rendercreativetarget();
+        glDisable(GL_BLEND);
+        glDepthMask(GL_TRUE);
+        GLERROR;
+    }
 
     if(editmode)
     {

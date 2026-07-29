@@ -632,8 +632,12 @@ void entselectionbox(const entity &e, vec &eo, vec &es)
     }
     else if(e.type == ET_MAPMODEL && (m = loadmapmodel(e.attr1)))
     {
-        mmcollisionbox(e, m, eo, es);
-        es.max(entselradius);
+        if(e.reserved == WORLD_MAPMODEL_RESERVED) mmboundbox(e, m, eo, es);
+        else
+        {
+            mmcollisionbox(e, m, eo, es);
+            es.max(entselradius);
+        }
         eo.add(e.o);
     }
     else if(e.type == ET_DECAL)

@@ -727,6 +727,45 @@ namespace game
         return hit.validate();
     }
 
+    enum
+    {
+        CREATIVE_TARGET_NONE = 0,
+        CREATIVE_TARGET_CUBE,
+        CREATIVE_TARGET_SCATTER
+    };
+
+    struct creativetarget
+    {
+        int type, entity;
+        selinfo cube;
+        vec center, radius;
+
+        creativetarget() : type(CREATIVE_TARGET_NONE), entity(-1), center(0, 0, 0), radius(0, 0, 0) {}
+    };
+
+    static bool findcreativetarget(creativetarget &target)
+    {
+        if(!creativeenabled()) return false;
+
+        const vec origin = camera1 ? camera1->o : player1->o;
+        int orient = -1, entity = -1;
+        rayent(origin, camdir, CREATIVE_REACH, RAY_CLIPMAT | RAY_ENTS | RAY_SKIPFIRST,
+               CREATIVE_GRID, orient, entity);
+        if(entity >= 0 && isworldscatterentity(entity) &&
+           getworldscatterentitybox(entity, target.center, target.radius))
+        {
+            target.type = CREATIVE_TARGET_SCATTER;
+            target.entity = entity;
+            return true;
+        }
+
+        if(!creativehit(target.cube)) return false;
+        target.type = CREATIVE_TARGET_CUBE;
+        target.center = vec(target.cube.o).add(CREATIVE_GRID * 0.5f);
+        target.radius = vec(CREATIVE_GRID * 0.5f);
+        return true;
+    }
+
     static ivec creativeplacecell(const selinfo &hit)
     {
         ivec target = hit.o;
@@ -788,23 +827,27 @@ namespace game
 
     static void creativeremove()
     {
-        if(!creativeenabled()) return;
-        const vec origin = camera1 ? camera1->o : player1->o;
-        int orient = -1, entity = -1;
-        rayent(origin, camdir, CREATIVE_REACH,
-               RAY_CLIPMAT | RAY_POLY | RAY_SKIPFIRST,
-               CREATIVE_GRID, orient, entity);
-        if(entity >= 0 && isworldscatterentity(entity))
+        creativetarget target;
+        if(!findcreativetarget(target)) return;
+        if(target.type == CREATIVE_TARGET_SCATTER)
         {
             int type, mountorient;
             ivec support;
-            if(getworldscatterentityedit(entity, type, support, mountorient))
+            if(getworldscatterentityedit(target.entity, type, support, mountorient))
                 scatteredittrigger(type, support, mountorient, false);
             return;
         }
-        selinfo hit;
-        if(!creativehit(hit)) return;
-        mpdelcube(hit, true);
+        mpdelcube(target.cube, true);
+    }
+
+    void rendercreativetarget()
+    {
+#ifndef STANDALONE
+        creativetarget target;
+        if(!findcreativetarget(target)) return;
+
+        renderboundingbox(target.center, target.radius);
+#endif
     }
 
     ICOMMAND(creativeattack, "D", (int *down),
@@ -944,7 +987,8 @@ namespace game
         loopv(players)
         {
             vec flame;
-            if(heldtorchflame(players[i], flame)) adddynlight(flame, 14.0f * CREATIVE_GRID, vec(1.0f, 0.58f, 0.24f));
+            if(heldtorchflame(players[i], flame))
+                adddynlight(flame, 14.0f * CREATIVE_GRID, vec(1.0f, 0.58f, 0.24f), 0, 0, 0, 0, vec(0, 0, 0), players[i]);
         }
     }
 

@@ -139,10 +139,12 @@ extern bool worldtorchincell(const ivec &cell);
 extern void addworldtorchlights();
 extern void addworldtorchparticles();
 extern bool isworldscatterentity(int id);
+extern bool getworldscatterentitybox(int id, vec &center, vec &radius);
 extern bool getworldscatterentityedit(int id, int &type, ivec &support, int &orient);
 extern bool editworldscatter(int type, const ivec &support, int orient, bool place);
 extern float rayent(const vec &o, const vec &ray, float radius, int mode,
                     int size, int &orient, int &ent);
+extern void renderboundingbox(const vec &center, const vec &radius);
 
 // command
 extern int variable(const char *name, int min, int cur, int max, int *storage, identfun fun, int flags);
