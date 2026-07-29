@@ -5,17 +5,24 @@
 extern bvec ambient, fogcolour, sunlight;
 extern float sunlightscale;
 extern float sunlightyaw, sunlightpitch;
+extern int worldsize;
 extern void setsunlightdir();
 
 namespace game
 {
     namespace environment
     {
+        VAR(skyexposurecasts, 1, 64, 1024);
+        VAR(skyexposurelerp, 1, 50, 60000);
+        VAR(skyexposurerefresh, 0, 100, 60000);
+
         static const int DAY_MILLIS = 10 * 60 * 1000;
         static const int NIGHT_MILLIS = 10 * 60 * 1000;
         static const int CYCLE_MILLIS = DAY_MILLIS + NIGHT_MILLIS;
         static const float START_HOUR = 8.0f;
         static const float MAX_SUN_PITCH = 70.0f;
+        static const int NO_SKY_AMBIENT_COLOR = 0x0A0A0A;
+        static const int NO_SKY_FOG_COLOR = 0x000000;
         static const int DAY_FOG_COLOR = 0x8099B3;
         static const int DAY_AMBIENT_COLOR = 0x5A5A6E;
         static const int NIGHT_FOG_COLOR = 0x0A1026;
@@ -44,6 +51,10 @@ namespace game
 
         static double cyclemillis = START_HOUR * CYCLE_MILLIS / 24.0;
         static bool initialized = false, timefrozen = false;
+        static float skyexposure = 1.0f, targetskyexposure = 1.0f;
+        static double skyexposurecastbudget = 0.0;
+        static int lastskyexposuremillis = -1, lastskyexposurecasts = 0;
+        static int skyexposurecastindex = 0, skyexposureexposedcasts = 0;
 
         static float smoothstep(float value)
         {
@@ -63,6 +74,61 @@ namespace game
             return result;
         }
 
+        static void updateskyexposure()
+        {
+            if(!camera1)
+            {
+                lastskyexposuremillis = -1;
+                return;
+            }
+
+            if(lastskyexposuremillis < 0 || lastskyexposurecasts != skyexposurecasts)
+            {
+                lastskyexposuremillis = lastmillis;
+                lastskyexposurecasts = skyexposurecasts;
+                skyexposurecastbudget = 0.0;
+                skyexposurecastindex = skyexposureexposedcasts = 0;
+                return;
+            }
+
+            const int elapsedmillis = max(lastmillis - lastskyexposuremillis, 0);
+            lastskyexposuremillis = lastmillis;
+            if(skyexposurerefresh > 0)
+                skyexposurecastbudget += double(elapsedmillis) * skyexposurecasts / skyexposurerefresh;
+            else skyexposurecastbudget = skyexposurecasts;
+            skyexposurecastbudget = min(skyexposurecastbudget, double(skyexposurecasts));
+
+            const int caststhisupdate = int(skyexposurecastbudget);
+            skyexposurecastbudget -= caststhisupdate;
+            if(!caststhisupdate) return;
+
+            static const float GOLDEN_ANGLE = float(M_PI * (3.0 - sqrt(5.0)));
+            const float maxdistance = 2.0f * worldsize;
+            loopi(caststhisupdate)
+            {
+                const float z = 1.0f - 2.0f * (skyexposurecastindex + 0.5f) / skyexposurecasts,
+                            radius = sqrtf(max(0.0f, 1.0f - z * z)),
+                            angle = skyexposurecastindex * GOLDEN_ANGLE;
+                const vec direction(cosf(angle) * radius, sinf(angle) * radius, z);
+                if(raycube(camera1->o, direction, maxdistance, RAY_CLIPMAT | RAY_POLY | RAY_SKIPFIRST | RAY_SKY) >= maxdistance)
+                    ++skyexposureexposedcasts;
+
+                if(++skyexposurecastindex >= skyexposurecasts)
+                {
+                    targetskyexposure = float(skyexposureexposedcasts) / skyexposurecasts;
+                    skyexposurecastindex = skyexposureexposedcasts = 0;
+                }
+            }
+        }
+
+        static void smoothskyexposure()
+        {
+            if(curtime <= 0 || skyexposure == targetskyexposure) return;
+            const float amount = 1.0f - expf(-float(curtime) / skyexposurelerp);
+            skyexposure = interpolate(skyexposure, targetskyexposure, amount);
+            if(fabsf(skyexposure - targetskyexposure) < 1e-4f) skyexposure = targetskyexposure;
+        }
+
         static void applylighting(bool resetengine)
         {
             const float hour = float(cyclemillis * 24.0 / CYCLE_MILLIS);
@@ -79,8 +145,11 @@ namespace game
 
             const float blend = smoothstep((hour - from->hour) / (to->hour - from->hour));
             const bvec newSunlight = interpolatecolor(from->sunlightcolor, to->sunlightcolor, blend);
-            const bvec newFog = interpolatecolor(from->fogcolor, to->fogcolor, blend);
-            const bvec newAmbient = interpolatecolor(from->ambientcolor, to->ambientcolor, blend);
+            const bvec timeFog = interpolatecolor(from->fogcolor, to->fogcolor, blend);
+            const bvec timeAmbient = interpolatecolor(from->ambientcolor, to->ambientcolor, blend);
+            bvec newAmbient, newFog;
+            newAmbient.lerp(bvec::hexcolor(NO_SKY_AMBIENT_COLOR), timeAmbient, skyexposure);
+            newFog.lerp(bvec::hexcolor(NO_SKY_FOG_COLOR), timeFog, skyexposure);
             const float newSunlightScale = interpolate(from->sunlightintensity, to->sunlightintensity, blend);
 
             const float orbit = (hour - 6.0f) * 15.0f * RAD;
@@ -113,15 +182,24 @@ namespace game
             cyclemillis = START_HOUR * CYCLE_MILLIS / 24.0;
             initialized = true;
             timefrozen = false;
+            skyexposure = targetskyexposure = 1.0f;
+            skyexposurecastbudget = 0.0;
+            lastskyexposuremillis = -1;
+            lastskyexposurecasts = 0;
+            skyexposurecastindex = skyexposureexposedcasts = 0;
             applylighting(true);
         }
 
         void update()
         {
             if(!initialized) reset();
-            if(timefrozen || curtime <= 0) return;
-            cyclemillis += curtime;
-            while(cyclemillis >= CYCLE_MILLIS) cyclemillis -= CYCLE_MILLIS;
+            updateskyexposure();
+            smoothskyexposure();
+            if(!timefrozen && curtime > 0)
+            {
+                cyclemillis += curtime;
+                while(cyclemillis >= CYCLE_MILLIS) cyclemillis -= CYCLE_MILLIS;
+            }
             applylighting(false);
         }
 

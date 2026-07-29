@@ -317,7 +317,12 @@ static bool isworldleaftexture(const cube &c)
 
 bool isworldleafcube(const cube &c)
 {
-    return leavesalpha != 0 && isworldleaftexture(c);
+    return leavesalpha != 0 && isworldleafblock(c);
+}
+
+bool isworldleafblock(const cube &c)
+{
+    return isworldleaftexture(c);
 }
 
 static worldcubedefinition *findworldcube(const char *name)

@@ -215,6 +215,7 @@ extern void resetclipplanes();
 extern void clearworldchunks();
 extern void closeproceduralworld(bool save);
 extern int getworldsectionsize();
+extern bool isworldleafblock(const cube &c);
 extern bool isworldleafcube(const cube &c);
 extern int getmippedtexture(const cube &p, int orient);
 extern void forcemip(cube &c, bool fixtex = true);
