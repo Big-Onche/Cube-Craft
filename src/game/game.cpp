@@ -949,8 +949,8 @@ namespace game
         addworldtorchparticles();
         vec flame;
         if(!heldtorchflame(flame)) return;
-        regular_particle_flame(PART_FLAME, flame, 0.3f, 0.55f, 0xFF7628, 1, 2.2f, 30.0f, 180.0f, -8);
-        regular_particle_flame(PART_SMOKE, flame, 0.22f, 0.9f, 0x4A443E, 1, 2.7f, 14.0f, 900.0f, -10);
+        regular_particle_flame(PART_FLAME, flame, 0.35f, 0.7f, 0xFF8628, 1, 2.4f, 35.0f, 220.0f, -10);
+        regular_particle_flame(PART_SMOKE, flame, 0.45f, 1.1f, 0xAA8C4E, 1, 3.0f, 16.0f, 1100.0f, -25);
     }
     void particletrack(physent *owner, vec &o, vec &d) {}
     void dynlighttrack(physent *owner, vec &o, vec &hud) {}

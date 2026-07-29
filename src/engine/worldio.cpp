@@ -225,13 +225,13 @@ struct worldcubedefinition
 
 struct worldscatterdefinition
 {
-    string name, model;
+    string name, model, icon;
     int mapmodel;
     bool torch;
 
     worldscatterdefinition() : mapmodel(-1), torch(false)
     {
-        name[0] = model[0] = '\0';
+        name[0] = model[0] = icon[0] = '\0';
     }
 };
 
@@ -296,7 +296,9 @@ const char *getworldscattericon(int index)
 {
     static string iconpath;
     if(!worldscatterdefinitions.inrange(index)) return "";
-    formatstring(iconpath, "media/model/%s/diffuse.png", worldscatterdefinitions[index]->model);
+    const worldscatterdefinition &type = *worldscatterdefinitions[index];
+    if(type.icon[0]) return type.icon;
+    formatstring(iconpath, "media/model/%s/diffuse.png", type.model);
     return iconpath;
 }
 
@@ -380,6 +382,7 @@ static void defineworldscatter(const char *name, const char *model, bool torch)
     if(!type) type = worldscatterdefinitions.add(new worldscatterdefinition);
     copystring(type->name, name);
     copystring(type->model, model);
+    type->icon[0] = '\0';
     type->torch = torch;
 }
 
@@ -405,6 +408,39 @@ static int loadworldtextureslot(const char *path, float texsize, bool alpha)
                      texture, texsize);
     execute(command);
     return slots.last()->variants->index;
+}
+
+static bool findworldscatterimage(const char *model, const char *basename, string &imagepath)
+{
+    defformatstring(directory, "media/model/%s", model);
+    vector<char *> files;
+    listfiles(directory, NULL, files);
+    files.sort();
+
+    const size_t baselen = strlen(basename);
+    loopv(files)
+    {
+        const char *filename = files[i];
+        if(cubecasecmp(filename, basename, baselen) ||
+           filename[baselen] != '.' || !filename[baselen + 1])
+            continue;
+
+        defformatstring(candidate, "%s/%s", directory, filename);
+        if(textureload(candidate, 3, true, false) == notexture) continue;
+        copystring(imagepath, candidate);
+        files.deletecontents();
+        return true;
+    }
+    files.deletecontents();
+    return false;
+}
+
+static void resolveworldscattericon(worldscatterdefinition &type)
+{
+    type.icon[0] = '\0';
+    if(findworldscatterimage(type.model, "logo", type.icon)) return;
+    if(findworldscatterimage(type.model, "diffuse", type.icon)) return;
+    formatstring(type.icon, "media/model/%s/diffuse.png", type.model);
 }
 
 static bool loadworlddefinitions()
@@ -464,6 +500,7 @@ static bool loadworlddefinitions()
     loopv(worldscatterdefinitions)
     {
         worldscatterdefinition &type = *worldscatterdefinitions[i];
+        resolveworldscattericon(type);
         type.mapmodel = registermapmodelpath(type.model);
         if(type.mapmodel < 0 || !loadmapmodel(type.mapmodel))
         {
@@ -4111,15 +4148,13 @@ void addworldtorchparticles()
         loopvj(chunk.scatter)
         {
             const worldscatterinstance &scatter = chunk.scatter[j];
-            if(!isworldtorch(scatter.type) ||
-               !worldscattermounted(chunk, scatter))
-                continue;
+            if(!isworldtorch(scatter.type) || !worldscattermounted(chunk, scatter)) continue;
 
             vec flame;
             if(!worldtorchflameposition(chunk, scatter, settings.grassmaxoffset, flame)) continue;
             if(flame.squaredist(camera1->o) > maxdistancesquared) continue;
-            regular_particle_flame(PART_FLAME, flame, 0.8f, 0.7f, 0xFF7628, 1, 2.4f, 35.0f, 220.0f, -50);
-            regular_particle_flame(PART_SMOKE, flame, 1.2f, 1.1f, 0x4A443E, 1, 3.0f, 16.0f, 1100.0f, -150);
+            regular_particle_flame(PART_FLAME, flame, 0.7f, 0.7f, 0xFF8628, 1, 2.4f, 35.0f, 220.0f, -10);
+            regular_particle_flame(PART_SMOKE, flame, 0.9f, 1.1f, 0xAA8C4E, 1, 3.0f, 16.0f, 1100.0f, -25);
         }
     }
 }
