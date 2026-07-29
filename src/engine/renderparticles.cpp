@@ -843,6 +843,175 @@ struct softquadrenderer : quadrenderer
     }
 };
 
+struct blockchip
+{
+    vec o, velocity;
+    Texture *tex;
+    vec2 uvmin, uvmax;
+    bvec color;
+    float size, groundz;
+    int millis, rotation, settledmillis;
+    bool settled;
+};
+
+struct blockchiprenderer
+{
+    enum
+    {
+        MAX_CHIPS = 512,
+        MAX_LIFETIME = 20000,
+        SETTLED_LIFETIME = 3000,
+        SETTLED_FADE = 500,
+        CHIP_GRAVITY = 120
+    };
+
+    vector<blockchip> chips;
+    int lastupdate;
+
+    blockchiprenderer() : lastupdate(-1) {}
+
+    void reset()
+    {
+        chips.setsize(0);
+        lastupdate = -1;
+    }
+
+    bool haswork() const { return !chips.empty(); }
+
+    void add(int texture, const vec &p, const vec &normal, int num)
+    {
+        VSlot &vslot = lookupvslot(texture, true);
+        if(!vslot.slot || vslot.slot->sts.empty()) return;
+        Texture *tex = vslot.slot->sts[0].t;
+        if(!tex || tex == notexture || tex->xs <= 0 || tex->ys <= 0) return;
+
+        const int maxcrop = min(min(tex->xs, tex->ys), 3);
+        if(maxcrop <= 0) return;
+        const int mincrop = min(maxcrop, 2);
+        vec tangent(normal.z, -normal.x, normal.y), bitangent;
+        tangent.project(normal).normalize();
+        bitangent.cross(tangent, normal);
+        loopi(max(num, 0))
+        {
+            blockchip &chip = chips.length() < MAX_CHIPS ? chips.add() : chips[rnd(chips.length())];
+            const int crop = mincrop + rnd(maxcrop - mincrop + 1),
+                      x = rnd(tex->xs - crop + 1),
+                      y = rnd(tex->ys - crop + 1);
+            chip.o = vec(p).madd(normal, 0.25f).madd(tangent, (rnd(701) - 350)/100.0f).madd(bitangent, (rnd(701) - 350)/100.0f);
+            chip.velocity = vec(normal).mul(6.0f + rnd(70)/10.0f).madd(tangent, (rnd(141) - 70)/10.0f).madd(bitangent, (rnd(141) - 70)/10.0f);
+            chip.velocity.z += 5.0f + rnd(150)/10.0f;
+            chip.tex = tex;
+            chip.uvmin = vec2(x/float(tex->xs), y/float(tex->ys));
+            chip.uvmax = vec2((x + crop)/float(tex->xs), (y + crop)/float(tex->ys));
+            chip.color = bvec(uchar(clamp(int(vslot.colorscale.x*255), 0, 255)),
+                              uchar(clamp(int(vslot.colorscale.y*255), 0, 255)),
+                              uchar(clamp(int(vslot.colorscale.z*255), 0, 255)));
+            chip.size = max(crop*vslot.scale/(2.0f*TEX_SCALE), 0.1f);
+            chip.groundz = 0;
+            chip.millis = lastmillis;
+            chip.rotation = rnd(32);
+            chip.settledmillis = -1;
+            chip.settled = false;
+        }
+        if(lastupdate < 0) lastupdate = lastmillis;
+    }
+
+    void update()
+    {
+        if(lastupdate < 0)
+        {
+            lastupdate = lastmillis;
+            return;
+        }
+        const int elapsed = clamp(lastmillis - lastupdate, 0, 50);
+        lastupdate = lastmillis;
+        if(elapsed <= 0) return;
+
+        const float seconds = elapsed/1000.0f;
+        loopvrev(chips)
+        {
+            blockchip &chip = chips[i];
+            if(chip.settled)
+            {
+                if(lastmillis - chip.settledmillis >= SETTLED_LIFETIME) chips.removeunordered(i);
+                continue;
+            }
+            if(lastmillis - chip.millis >= MAX_LIFETIME)
+            {
+                chips.removeunordered(i);
+                continue;
+            }
+
+            chip.velocity.z -= CHIP_GRAVITY*seconds;
+            vec next = vec(chip.o).madd(chip.velocity, seconds);
+            if(next.z < chip.o.z)
+            {
+                const float fall = chip.o.z - next.z;
+                const vec probe(next.x, next.y, chip.o.z);
+                const float maxdist = fall + 0.1f,
+                            distance = raycube(probe, vec(0, 0, -1), maxdist, RAY_CLIPMAT | RAY_SKIPFIRST);
+                if(distance < maxdist)
+                {
+                    chip.groundz = probe.z - distance;
+                    chip.o = vec(next.x, next.y, chip.groundz + 0.02f);
+                    chip.velocity = vec(0, 0, 0);
+                    chip.settledmillis = lastmillis;
+                    chip.settled = true;
+                    continue;
+                }
+            }
+            if(!insideworld(next)) chips.removeunordered(i);
+            else chip.o = next;
+        }
+    }
+
+    void render(bool step)
+    {
+        if(step) update();
+        if(chips.empty()) return;
+
+        gle::defvertex();
+        gle::deftexcoord0();
+        gle::defcolor(4, GL_UNSIGNED_BYTE);
+        int start = 0;
+        while(start < chips.length())
+        {
+            const Texture *tex = chips[start].tex;
+            int end = start + 1;
+            while(end < chips.length() && chips[end].tex == tex) ++end;
+            glBindTexture(GL_TEXTURE_2D, tex->id);
+            gle::begin(GL_QUADS, (end - start)*4);
+            for(int i = start; i < end; ++i)
+            {
+                const blockchip &chip = chips[i];
+                const vec2 *coeffs = rotcoeffs[chip.rotation];
+                const int age = chip.settled ? lastmillis - chip.settledmillis : lastmillis - chip.millis,
+                          lifetime = chip.settled ? SETTLED_LIFETIME : MAX_LIFETIME,
+                          fadetime = chip.settled ? SETTLED_FADE : 1000,
+                          alpha = age <= lifetime - fadetime ? 255 : clamp((lifetime - age)*255/fadetime, 0, 255);
+                const bvec4 color(chip.color, uchar(alpha));
+                vec renderorigin = chip.o;
+                if(chip.settled)
+                {
+                    float minz = 0;
+                    loopj(4) minz = min(minz, (camright.z*coeffs[j].x + camup.z*coeffs[j].y)*chip.size);
+                    renderorigin.z = max(renderorigin.z, chip.groundz - minz + 0.02f);
+                }
+                loopj(4)
+                {
+                    gle::attrib(vec(renderorigin).madd(camright, coeffs[j].x*chip.size).madd(camup, coeffs[j].y*chip.size));
+                    gle::attribf(j == 0 || j == 3 ? chip.uvmin.x : chip.uvmax.x, j < 2 ? chip.uvmin.y : chip.uvmax.y);
+                    gle::attrib(color);
+                }
+            }
+            gle::end();
+            start = end;
+        }
+    }
+};
+
+static blockchiprenderer blockchips;
+
 static partrenderer *parts[] =
 {
     new quadrenderer("<grey>media/particle/blood.png", PT_PART|PT_FLIP|PT_MOD|PT_RND4|PT_COLLIDE, STAIN_BLOOD), // blood spats (note: rgb is inverted)
@@ -894,6 +1063,7 @@ void initparticles()
 void clearparticles()
 {
     loopi(sizeof(parts)/sizeof(parts[0])) parts[i]->reset();
+    blockchips.reset();
     clearparticleemitters();
 }
 
@@ -918,6 +1088,43 @@ void debugparticles()
     flushhudmatrix();
     loopi(n) draw_text(parts[i]->info, FONTH, (i+n/2)*FONTH);
     pophudmatrix();
+}
+
+static void setparticlerenderstate(uint flags, uint &lastflags)
+{
+    const uint changedbits = flags ^ lastflags;
+    if(!changedbits) return;
+    if(changedbits&PT_LERP)
+    {
+        if(flags&PT_LERP) resetfogcolor();
+        else zerofogcolor();
+    }
+    if(changedbits&(PT_LERP|PT_MOD))
+    {
+        if(flags&PT_LERP) glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
+        else if(flags&PT_MOD) glBlendFunc(GL_ZERO, GL_ONE_MINUS_SRC_COLOR);
+        else glBlendFunc(GL_SRC_ALPHA, GL_ONE);
+    }
+    if(!(flags&PT_SHADER))
+    {
+        if(changedbits&(PT_LERP|PT_SOFT|PT_NOTEX|PT_SHADER))
+        {
+            if(flags&PT_SOFT && softparticles)
+            {
+                particlesoftshader->set();
+                LOCALPARAMF(softparams, -1.0f/softparticleblend, 0, 0);
+            }
+            else if(flags&PT_NOTEX) particlenotextureshader->set();
+            else particleshader->set();
+        }
+        if(changedbits&(PT_MOD|PT_BRIGHT|PT_SOFT|PT_NOTEX|PT_SHADER))
+        {
+            float colorscale = flags&PT_MOD ? 1 : ldrscale;
+            if(flags&PT_BRIGHT) colorscale *= particlebright;
+            LOCALPARAMF(colorscale, colorscale, colorscale, colorscale, 1);
+        }
+    }
+    lastflags = flags;
 }
 
 void renderparticles(int layer)
@@ -950,38 +1157,27 @@ void renderparticles(int layer)
             glActiveTexture_(GL_TEXTURE0);
         }
 
-        uint flags = p->type & flagmask, changedbits = flags ^ lastflags;
-        if(changedbits)
-        {
-            if(changedbits&PT_LERP) { if(flags&PT_LERP) resetfogcolor(); else zerofogcolor(); }
-            if(changedbits&(PT_LERP|PT_MOD))
-            {
-                if(flags&PT_LERP) glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
-                else if(flags&PT_MOD) glBlendFunc(GL_ZERO, GL_ONE_MINUS_SRC_COLOR);
-                else glBlendFunc(GL_SRC_ALPHA, GL_ONE);
-            }
-            if(!(flags&PT_SHADER))
-            {
-                if(changedbits&(PT_LERP|PT_SOFT|PT_NOTEX|PT_SHADER))
-                {
-                    if(flags&PT_SOFT && softparticles)
-                    {
-                        particlesoftshader->set();
-                        LOCALPARAMF(softparams, -1.0f/softparticleblend, 0, 0);
-                    }
-                    else if(flags&PT_NOTEX) particlenotextureshader->set();
-                    else particleshader->set();
-                }
-                if(changedbits&(PT_MOD|PT_BRIGHT|PT_SOFT|PT_NOTEX|PT_SHADER))
-                {
-                    float colorscale = flags&PT_MOD ? 1 : ldrscale;
-                    if(flags&PT_BRIGHT) colorscale *= particlebright;
-                    LOCALPARAMF(colorscale, colorscale, colorscale, colorscale, 1);
-                }
-            }
-            lastflags = flags;
-        }
+        const uint flags = p->type & flagmask;
+        setparticlerenderstate(flags, lastflags);
         p->render();
+    }
+
+    if(layer != PL_NOLAYER && blockchips.haswork())
+    {
+        if(!rendered)
+        {
+            rendered = true;
+            glDepthMask(GL_FALSE);
+            glEnable(GL_BLEND);
+            glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
+
+            glActiveTexture_(GL_TEXTURE2);
+            if(msaalight) glBindTexture(GL_TEXTURE_2D_MULTISAMPLE, msdepthtex);
+            else glBindTexture(GL_TEXTURE_RECTANGLE, gdepthtex);
+            glActiveTexture_(GL_TEXTURE0);
+        }
+        setparticlerenderstate(PT_LERP, lastflags);
+        blockchips.render(canstep);
     }
 
     if(rendered)
@@ -1041,6 +1237,12 @@ static void regularsplash(int type, int color, int radius, int num, int fade, co
 bool canaddparticles()
 {
     return !minimized;
+}
+
+void particle_blockchips(int texture, const vec &p, const vec &normal, int num)
+{
+    if(!canaddparticles() || !camera1 || camera1->o.dist(p) > maxparticledistance) return;
+    blockchips.add(texture, p, normal, num);
 }
 
 void regular_particle_splash(int type, int num, int fade, const vec &p, int color, float size, int radius, int gravity, int delay)

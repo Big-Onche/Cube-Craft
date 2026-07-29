@@ -130,6 +130,7 @@ extern int numworldcubes();
 extern int getworldcubeslot(int index);
 extern int getworldcubeindex(int slot);
 extern int getworldcubeindexat(const ivec &position, int orient);
+extern int getworldcubetextureslotat(const ivec &position, int orient);
 extern const char *getworldcubename(int index);
 extern const char *getworldcubetexture(int index, int face = WORLD_CUBE_TOP);
 extern int numworldscatters();
@@ -387,6 +388,7 @@ enum
 };
 
 extern bool canaddparticles();
+extern void particle_blockchips(int texture, const vec &p, const vec &normal, int num = 1);
 extern void regular_particle_splash(int type, int num, int fade, const vec &p, int color = 0xFFFFFF, float size = 1.0f, int radius = 150, int gravity = 2, int delay = 0);
 extern void regular_particle_flame(int type, const vec &p, float radius, float height, int color, int density = 3, float scale = 2.0f, float speed = 200.0f, float fade = 600.0f, int gravity = -15);
 extern void regular_particle_hud_flame(int type, const vec &p, float radius, float height, int color, int density, float scale, float speed, float fade, int gravity, physent *owner);

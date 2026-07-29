@@ -284,6 +284,14 @@ int getworldcubeindexat(const ivec &position, int orient)
     return getworldcubeindex(c.texture[clamp(orient, 0, 5)]);
 }
 
+int getworldcubetextureslotat(const ivec &position, int orient)
+{
+    ivec origin;
+    int size;
+    const cube &c = lookupcube(position, 0, origin, size);
+    return c.texture[clamp(orient, 0, 5)];
+}
+
 const char *getworldcubename(int index)
 {
     return worldcubedefinitions.inrange(index) ? worldcubedefinitions[index]->name : "";

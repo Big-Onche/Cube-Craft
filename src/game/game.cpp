@@ -687,6 +687,7 @@ namespace game
         SURVIVAL_BREAK_MILLIS = 5000,
         SURVIVAL_SCATTER_BREAK_MILLIS = 250,
         SURVIVAL_BREAK_STAGES = 8,
+        SURVIVAL_BREAK_PARTICLE_MILLIS = 125,
         SURVIVAL_STACK_SIZE = 64
     };
 
@@ -804,7 +805,7 @@ namespace game
         return elapsed >= 0 && elapsed < CREATIVE_ARM_CYCLE ? creativearmwave(elapsed) : -1.0f;
     }
 
-    static bool creativehit(selinfo &hit)
+    static bool creativehit(selinfo &hit, vec *hitpoint = NULL)
     {
         if(!buildenabled()) return false;
 
@@ -813,6 +814,7 @@ namespace game
         float dist = raycubepos(origin, camdir, hitpos, CREATIVE_REACH,
                                 RAY_CLIPMAT | RAY_SKIPFIRST, CREATIVE_GRID);
         if(dist >= CREATIVE_REACH) return false;
+        if(hitpoint) *hitpoint = hitpos;
 
         // Step just through the hit surface so flooring selects the occupied cell.
         vec inside = vec(camdir).mul(dist + 0.05f).add(origin);
@@ -841,9 +843,9 @@ namespace game
     {
         int type, entity;
         selinfo cube;
-        vec center, radius;
+        vec center, radius, hitpoint;
 
-        creativetarget() : type(CREATIVE_TARGET_NONE), entity(-1), center(0, 0, 0), radius(0, 0, 0) {}
+        creativetarget() : type(CREATIVE_TARGET_NONE), entity(-1), center(0, 0, 0), radius(0, 0, 0), hitpoint(0, 0, 0) {}
     };
 
     static bool findcreativetarget(creativetarget &target)
@@ -862,7 +864,7 @@ namespace game
             return true;
         }
 
-        if(!creativehit(target.cube)) return false;
+        if(!creativehit(target.cube, &target.hitpoint)) return false;
         target.type = CREATIVE_TARGET_CUBE;
         target.center = vec(target.cube.o).add(CREATIVE_GRID * 0.5f);
         target.radius = vec(CREATIVE_GRID * 0.5f);
@@ -949,7 +951,7 @@ namespace game
 #ifndef STANDALONE
     static bool survivalbreakactive = false;
     static creativetarget survivalbreaktarget;
-    static int survivalbreakstart = 0;
+    static int survivalbreakstart = 0, survivalbreakparticlemillis = -1;
 
     static bool samesurvivaltarget(const creativetarget &a,
                                    const creativetarget &b)
@@ -967,11 +969,21 @@ namespace game
             target.cube.orient);
     }
 
+    static void emitsurvivalblockchips(const creativetarget &target, int num)
+    {
+        if(target.type != CREATIVE_TARGET_CUBE) return;
+        vec normal(0, 0, 0);
+        normal[target.cube.orient>>1] = target.cube.orient&1 ? 1 : -1;
+        const ivec position = ivec(target.cube.o).add(target.cube.grid / 2);
+        particle_blockchips(getworldcubetextureslotat(position, target.cube.orient), target.hitpoint, normal, num);
+    }
+
     static void updatesurvivalbreaking()
     {
         if(!survivalenabled() || !player1->renderattacking)
         {
             survivalbreakactive = false;
+            survivalbreakparticlemillis = -1;
             clearbreakstain();
             return;
         }
@@ -980,6 +992,7 @@ namespace game
         if(!findcreativetarget(target))
         {
             survivalbreakactive = false;
+            survivalbreakparticlemillis = -1;
             clearbreakstain();
             return;
         }
@@ -988,8 +1001,17 @@ namespace game
             survivalbreaktarget = target;
             survivalbreakstart = lastmillis;
             survivalbreakactive = true;
-            if(target.type == CREATIVE_TARGET_CUBE) setbreakstain(target.cube.o, target.cube.grid, 0);
-            else clearbreakstain();
+            if(target.type == CREATIVE_TARGET_CUBE)
+            {
+                setbreakstain(target.cube.o, target.cube.grid, 0);
+                emitsurvivalblockchips(target, 2);
+                survivalbreakparticlemillis = lastmillis;
+            }
+            else
+            {
+                clearbreakstain();
+                survivalbreakparticlemillis = -1;
+            }
             return;
         }
         const int breakmillis = target.type == CREATIVE_TARGET_SCATTER
@@ -1000,8 +1022,18 @@ namespace game
         {
             const int stage = clamp(elapsed, 0, SURVIVAL_BREAK_MILLIS - 1) * SURVIVAL_BREAK_STAGES / SURVIVAL_BREAK_MILLIS;
             setbreakstain(target.cube.o, target.cube.grid, stage);
+            if(survivalbreakparticlemillis < 0 || lastmillis - survivalbreakparticlemillis >= SURVIVAL_BREAK_PARTICLE_MILLIS)
+            {
+                const int num = survivalbreakparticlemillis < 0 ? 1 : min((lastmillis - survivalbreakparticlemillis) / SURVIVAL_BREAK_PARTICLE_MILLIS, 3);
+                emitsurvivalblockchips(target, num);
+                survivalbreakparticlemillis = lastmillis;
+            }
         }
-        else clearbreakstain();
+        else
+        {
+            clearbreakstain();
+            survivalbreakparticlemillis = -1;
+        }
         if(elapsed < breakmillis) return;
 
         int item = -1;
@@ -1021,11 +1053,13 @@ namespace game
         else
         {
             item = survivalblockitem(survivalbreaktarget);
+            emitsurvivalblockchips(target, 8);
             mpdelcube(survivalbreaktarget.cube, true);
             broken = true;
         }
         if(broken && !addsurvivalitem(item)) conoutf(CON_WARN, "inventory is full; the broken block was not collected");
         survivalbreakactive = false;
+        survivalbreakparticlemillis = -1;
     }
 #endif
 
@@ -1070,6 +1104,7 @@ namespace game
             player1->renderattacking = false;
 #ifndef STANDALONE
             survivalbreakactive = false;
+            survivalbreakparticlemillis = -1;
             clearbreakstain();
 #endif
         }
