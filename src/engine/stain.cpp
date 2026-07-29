@@ -22,7 +22,9 @@ enum
     SF_INVMOD     = 1<<2,
     SF_OVERBRIGHT = 1<<3,
     SF_GLOW       = 1<<4,
-    SF_SATURATE   = 1<<5
+    SF_SATURATE   = 1<<5,
+    SF_RND8       = 1<<6,
+    SF_GEOMETRY   = 1<<7
 };
 
 VARFP(maxstaintris, 1, 2048, 16384, initstains());
@@ -187,7 +189,7 @@ struct stainrenderer
           fadeintime(fadeintime), fadeouttime(fadeouttime), timetolive(timetolive),
           tex(NULL),
           stains(NULL), maxstains(0), startstain(0), endstain(0),
-          stainu(0), stainv(0)
+          stainu(0), stainv(0), stainw(1), stainh(1)
     {
     }
 
@@ -212,7 +214,9 @@ struct stainrenderer
 
     void preload()
     {
-        tex = textureload(texname, 3);
+        tex = flags&SF_GEOMETRY
+            ? textureload(texname, 3, false, true, true)
+            : textureload(texname, 3);
     }
 
     int totalstains()
@@ -416,7 +420,7 @@ struct stainrenderer
 
     ivec bbmin, bbmax;
     vec staincenter, stainnormal, staintangent, stainbitangent;
-    float stainradius, stainu, stainv;
+    float stainradius, stainu, stainv, stainw, stainh;
     bvec4 staincolor;
 
     void addstain(const vec &center, const vec &dir, float radius, const bvec &color, int info)
@@ -430,6 +434,8 @@ struct stainrenderer
         staincenter = center;
         stainradius = radius;
         stainnormal = dir;
+        stainu = stainv = 0;
+        stainw = stainh = 1;
 #if 0
         staintangent.orthogonal(dir);
 #else
@@ -441,8 +447,19 @@ struct stainrenderer
         stainbitangent.cross(staintangent, dir);
         if(flags&SF_RND4)
         {
+            stainw = stainh = 0.5f;
             stainu = 0.5f*(info&1);
             stainv = 0.5f*((info>>1)&1);
+        }
+        else if(flags&SF_RND8)
+        {
+            info = clamp(info, 0, 7);
+            // Preserve the exact 16x16 frame extent. Cropping to texel
+            // centers subtly magnifies the projected crack pattern.
+            stainu = 0.25f*(info%4);
+            stainv = 0.5f*(info/4);
+            stainw = 0.25f;
+            stainh = 0.5f;
         }
 
         loopi(NUMSTAINBUFS) verts[i].lastvert = verts[i].endvert;
@@ -560,9 +577,12 @@ struct stainrenderer
             }
             numv = polyclip(v1, numv, pb, pbc - stainradius, pbc + stainradius, v2);
             if(numv<3) continue;
-            float tsz = flags&SF_RND4 ? 0.5f : 1.0f, scale = tsz*0.5f/stainradius,
-                  tu = stainu + tsz*0.5f - ptc*scale, tv = stainv + tsz*0.5f - pbc*scale;
-            pt.mul(scale); pb.mul(scale);
+            const float scaleu = stainw*0.5f/stainradius,
+                        scalev = stainh*0.5f/stainradius,
+                        tu = stainu + stainw*0.5f - ptc*scaleu,
+                        tv = stainv + stainh*0.5f - pbc*scalev;
+            pt.mul(scaleu);
+            pb.mul(scalev);
             stainvert dv1 = { v2[0], staincolor, vec2(pt.dot(v2[0]) + tu, pb.dot(v2[0]) + tv) },
                       dv2 = { v2[1], staincolor, vec2(pt.dot(v2[1]) + tu, pb.dot(v2[1]) + tv) };
             int totalverts = 3*(numv-2);
@@ -660,9 +680,12 @@ struct stainrenderer
         if(numv<3) return;
         numv = polyclip(v1, numv, pb, pbc - stainradius, pbc + stainradius, v2);
         if(numv<3) return;
-        float tsz = flags&SF_RND4 ? 0.5f : 1.0f, scale = tsz*0.5f/stainradius,
-              tu = stainu + tsz*0.5f - ptc*scale, tv = stainv + tsz*0.5f - pbc*scale;
-        pt.mul(scale); pb.mul(scale);
+        const float scaleu = stainw*0.5f/stainradius,
+                    scalev = stainh*0.5f/stainradius,
+                    tu = stainu + stainw*0.5f - ptc*scaleu,
+                    tv = stainv + stainh*0.5f - pbc*scalev;
+        pt.mul(scaleu);
+        pb.mul(scalev);
         stainvert dv1 = { v2[0], staincolor, vec2(pt.dot(v2[0]) + tu, pb.dot(v2[0]) + tv) },
                   dv2 = { v2[1], staincolor, vec2(pt.dot(v2[1]) + tu, pb.dot(v2[1]) + tv) };
         int totalverts = 3*(numv-2);
@@ -744,14 +767,21 @@ struct stainrenderer
     }
 };
 
+enum { BREAK_STAIN = 5 };
+
 stainrenderer stains[] =
 {
     stainrenderer("<grey>media/particle/blood.png", SF_RND4|SF_ROTATE|SF_INVMOD),
     stainrenderer("<grey>media/particle/pulse_scorch.png", SF_ROTATE, 500),
     stainrenderer("<grey>media/particle/rail_hole.png", SF_ROTATE|SF_OVERBRIGHT),
     stainrenderer("<grey>media/particle/pulse_glow.png", SF_ROTATE|SF_GLOW|SF_SATURATE, 250, 1500, 250),
-    stainrenderer("<grey>media/particle/rail_glow.png",  SF_ROTATE|SF_GLOW|SF_SATURATE, 100, 1100, 100)
+    stainrenderer("<grey>media/particle/rail_glow.png",  SF_ROTATE|SF_GLOW|SF_SATURATE, 100, 1100, 100),
+    stainrenderer("media/texture/terrain/destroy.png", SF_RND8|SF_GEOMETRY)
 };
+
+static bool breakstainactive = false;
+static ivec breakstainorigin(0, 0, 0);
+static int breakstainsize = 0, breakstainstage = -1;
 
 void initstains()
 {
@@ -768,6 +798,49 @@ void initstains()
 void clearstains()
 {
     loopi(sizeof(stains)/sizeof(stains[0])) stains[i].clearstains();
+    breakstainactive = false;
+    breakstainsize = 0;
+    breakstainstage = -1;
+}
+
+void clearbreakstain()
+{
+    if(!breakstainactive) return;
+    stains[BREAK_STAIN].clearstains();
+    breakstainactive = false;
+    breakstainsize = 0;
+    breakstainstage = -1;
+}
+
+void setbreakstain(const ivec &origin, int size, int stage)
+{
+    stage = clamp(stage, 0, 7);
+    if(size <= 0)
+    {
+        clearbreakstain();
+        return;
+    }
+    if(breakstainactive && breakstainorigin == origin &&
+       breakstainsize == size && breakstainstage == stage)
+        return;
+
+    stainrenderer &renderer = stains[BREAK_STAIN];
+    renderer.clearstains();
+    const float half = size*0.5f;
+    const vec middle = vec(origin).add(half);
+    loopi(6)
+    {
+        const int dimension = i>>1;
+        const bool positive = (i&1) != 0;
+        vec center = middle, normal(0, 0, 0);
+        center[dimension] = origin[dimension] + (positive ? size : 0);
+        normal[dimension] = positive ? 1 : -1;
+        renderer.addstain(center, normal, half, bvec(0xFF, 0xFF, 0xFF), stage);
+    }
+    breakstainorigin = origin;
+    breakstainsize = size;
+    breakstainstage = stage;
+    breakstainactive = true;
 }
 
 VARNP(stains, showstains, 0, 1, 1);
@@ -785,7 +858,7 @@ bool renderstains(int sbuf, bool gbuf, int layer)
             d.fadeinstains();
             d.fadeoutstains();
         }
-        if(!showstains || !d.hasstains(sbuf)) continue;
+        if((!showstains && i != BREAK_STAIN) || !d.hasstains(sbuf)) continue;
         if(!rendered)
         {
             rendered = true;
@@ -816,4 +889,3 @@ void genstainmmtri(stainrenderer *s, const vec v[3])
 {
     s->genmmtri(v);
 }
-

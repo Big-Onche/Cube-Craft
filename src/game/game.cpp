@@ -972,6 +972,7 @@ namespace game
         if(!survivalenabled() || !player1->renderattacking)
         {
             survivalbreakactive = false;
+            clearbreakstain();
             return;
         }
 
@@ -979,6 +980,7 @@ namespace game
         if(!findcreativetarget(target))
         {
             survivalbreakactive = false;
+            clearbreakstain();
             return;
         }
         if(!survivalbreakactive || !samesurvivaltarget(target, survivalbreaktarget))
@@ -986,21 +988,30 @@ namespace game
             survivalbreaktarget = target;
             survivalbreakstart = lastmillis;
             survivalbreakactive = true;
+            if(target.type == CREATIVE_TARGET_CUBE) setbreakstain(target.cube.o, target.cube.grid, 0);
+            else clearbreakstain();
             return;
         }
         const int breakmillis = target.type == CREATIVE_TARGET_SCATTER
                               ? SURVIVAL_SCATTER_BREAK_MILLIS
                               : SURVIVAL_BREAK_MILLIS;
-        if(lastmillis - survivalbreakstart < breakmillis) return;
+        const int elapsed = max(lastmillis - survivalbreakstart, 0);
+        if(target.type == CREATIVE_TARGET_CUBE)
+        {
+            const int stage = clamp(elapsed, 0, SURVIVAL_BREAK_MILLIS - 1) * SURVIVAL_BREAK_STAGES / SURVIVAL_BREAK_MILLIS;
+            setbreakstain(target.cube.o, target.cube.grid, stage);
+        }
+        else clearbreakstain();
+        if(elapsed < breakmillis) return;
 
         int item = -1;
         bool broken = false;
+        clearbreakstain();
         if(survivalbreaktarget.type == CREATIVE_TARGET_SCATTER)
         {
             int type, mountorient;
             ivec support;
-            if(getworldscatterentityedit(survivalbreaktarget.entity, type,
-                                         support, mountorient))
+            if(getworldscatterentityedit(survivalbreaktarget.entity, type, support, mountorient))
             {
                 item = numworldcubes() + type;
                 scatteredittrigger(type, support, mountorient, false);
@@ -1013,8 +1024,7 @@ namespace game
             mpdelcube(survivalbreaktarget.cube, true);
             broken = true;
         }
-        if(broken && !addsurvivalitem(item))
-            conoutf(CON_WARN, "inventory is full; the broken block was not collected");
+        if(broken && !addsurvivalitem(item)) conoutf(CON_WARN, "inventory is full; the broken block was not collected");
         survivalbreakactive = false;
     }
 #endif
@@ -1027,15 +1037,6 @@ namespace game
             creativetarget target;
             if(!findcreativetarget(target)) return;
             renderboundingbox(target.center, target.radius);
-            if(target.type == CREATIVE_TARGET_CUBE &&
-               survivalbreakactive &&
-               samesurvivaltarget(target, survivalbreaktarget))
-            {
-                const int elapsed = clamp(lastmillis - survivalbreakstart, 0,
-                                          SURVIVAL_BREAK_MILLIS - 1),
-                          stage = elapsed * SURVIVAL_BREAK_STAGES / SURVIVAL_BREAK_MILLIS;
-                renderbreakoverlay(target.cube.o, target.cube.grid, stage);
-            }
             return;
         }
 
@@ -1069,6 +1070,7 @@ namespace game
             player1->renderattacking = false;
 #ifndef STANDALONE
             survivalbreakactive = false;
+            clearbreakstain();
 #endif
         }
     });
