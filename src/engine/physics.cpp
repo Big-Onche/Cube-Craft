@@ -282,9 +282,7 @@ float raycube(const vec &o, const vec &ray, float radius, int mode, int size, ex
         int lsize = 1<<lshift;
 
         cube &c = *lc;
-        const bool passsky = (mode&RAY_SKY) &&
-                             ((c.material&MATF_VOLUME) == MAT_GLASS || isworldleafblock(c));
-        if(!passsky && (dist>0 || !(mode&RAY_SKIPFIRST)) &&
+        if((dist>0 || !(mode&RAY_SKIPFIRST)) &&
            (((mode&RAY_CLIPMAT) && isclipped(c.material&MATF_VOLUME)) ||
             ((mode&RAY_EDITMAT) && c.material != MAT_AIR) ||
             (!(mode&RAY_PASS) && lsize==size && !isempty(c)) ||
@@ -310,7 +308,7 @@ float raycube(const vec &o, const vec &ray, float radius, int mode, int size, ex
 
         ivec lo(x&(~0U<<lshift), y&(~0U<<lshift), z&(~0U<<lshift));
 
-        if(!passsky && !isempty(c))
+        if(!isempty(c))
         {
             const clipplanes &p = getclipplanes(c, lo, lsize);
             float f = 0;

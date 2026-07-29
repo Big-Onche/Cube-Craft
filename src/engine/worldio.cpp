@@ -317,12 +317,7 @@ static bool isworldleaftexture(const cube &c)
 
 bool isworldleafcube(const cube &c)
 {
-    return leavesalpha != 0 && isworldleafblock(c);
-}
-
-bool isworldleafblock(const cube &c)
-{
-    return isworldleaftexture(c);
+    return leavesalpha != 0 && isworldleaftexture(c);
 }
 
 static worldcubedefinition *findworldcube(const char *name)
@@ -748,6 +743,188 @@ int getworldsectionsize()
     return worldchunks.empty() ? 0 : WORLD_SECTION_SIZE;
 }
 
+static vector<uchar> worldskytransparent, worldskylight;
+static vector<int> worldskyqueue;
+static ivec worldskyorigin(0, 0, 0);
+static int worldskydiameter = 0;
+
+static void clearworldskyexposure()
+{
+    worldskytransparent.setsize(0);
+    worldskylight.setsize(0);
+    worldskyqueue.setsize(0);
+    worldskydiameter = 0;
+}
+
+VARFP(skyexposureradius, 4, 16, 64, clearworldskyexposure());
+VARFP(skyexposureattenuation, 1, 16, 255, clearworldskyexposure());
+
+static bool worldskylighttransparent(const cube &c)
+{
+    return isempty(c) || (c.material&MATF_VOLUME) == MAT_GLASS || isworldleaftexture(c);
+}
+
+static bool worldskyfieldcontains(int blockx, int blocky)
+{
+    if(!worldskydiameter) return false;
+    const int margin = max((worldskydiameter - 1) / 4, 1),
+              worldblocks = worldsize / WORLD_BLOCK_SIZE;
+    const bool insideleft = worldskyorigin.x == 0 ? blockx >= 0 : blockx >= worldskyorigin.x + margin,
+               insideright = worldskyorigin.x + worldskydiameter >= worldblocks ? blockx < worldblocks : blockx < worldskyorigin.x + worldskydiameter - margin,
+               insidefront = worldskyorigin.y == 0 ? blocky >= 0 : blocky >= worldskyorigin.y + margin,
+               insideback = worldskyorigin.y + worldskydiameter >= worldblocks ? blocky < worldblocks : blocky < worldskyorigin.y + worldskydiameter - margin;
+    return insideleft && insideright && insidefront && insideback;
+}
+
+static void invalidateworldskyexposure(const ivec &bbmin, const ivec &bbmax)
+{
+    if(!worldskydiameter) return;
+    const ivec fieldmin(worldskyorigin.x * WORLD_BLOCK_SIZE, worldskyorigin.y * WORLD_BLOCK_SIZE, 0);
+    const ivec fieldmax((worldskyorigin.x + worldskydiameter) * WORLD_BLOCK_SIZE, (worldskyorigin.y + worldskydiameter) * WORLD_BLOCK_SIZE, WORLD_MAP_SIZE);
+    if(bbmax.x > fieldmin.x && bbmin.x < fieldmax.x && bbmax.y > fieldmin.y && bbmin.y < fieldmax.y && bbmax.z > fieldmin.z && bbmin.z < fieldmax.z)
+        clearworldskyexposure();
+}
+
+static void buildworldskyexposure(int blockx, int blocky)
+{
+    ZoneScopedN("World/Six-direction skylight");
+    const int worldblocks = worldsize / WORLD_BLOCK_SIZE,
+              radius = min(skyexposureradius, max((worldblocks - 1) / 2, 0)),
+              diameter = 2 * radius + 1,
+              plane = diameter * diameter,
+              cellcount = plane * WORLD_HEIGHT_BLOCKS;
+    if(diameter <= 0 || cellcount <= 0)
+    {
+        clearworldskyexposure();
+        return;
+    }
+
+    worldskyorigin.x = clamp(blockx - radius, 0, max(worldblocks - diameter, 0));
+    worldskyorigin.y = clamp(blocky - radius, 0, max(worldblocks - diameter, 0));
+    worldskyorigin.z = 0;
+    worldskydiameter = diameter;
+    worldskytransparent.setsize(0);
+    worldskylight.setsize(0);
+    worldskytransparent.pad(cellcount);
+    worldskylight.pad(cellcount);
+    worldskyqueue.setsize(0);
+    worldskyqueue.reserve(cellcount);
+    memset(worldskytransparent.getbuf(), 0, cellcount);
+    memset(worldskylight.getbuf(), 0, cellcount);
+
+    loop(y, diameter) loop(x, diameter)
+    {
+        bool directsky = true;
+        for(int z = WORLD_HEIGHT_BLOCKS - 1; z >= 0;)
+        {
+            const ivec center((worldskyorigin.x + x) * WORLD_BLOCK_SIZE + WORLD_BLOCK_SIZE / 2,
+                              (worldskyorigin.y + y) * WORLD_BLOCK_SIZE + WORLD_BLOCK_SIZE / 2,
+                              z * WORLD_BLOCK_SIZE + WORLD_BLOCK_SIZE / 2);
+            ivec cubeorigin;
+            int cubesize;
+            const cube &c = lookupcube(center, 0, cubeorigin, cubesize);
+            const bool transparent = worldskylighttransparent(c);
+            int bottom = cubesize >= WORLD_BLOCK_SIZE ? cubeorigin.z / WORLD_BLOCK_SIZE : z;
+            bottom = clamp(bottom, 0, z);
+            if(!transparent) directsky = false;
+
+            for(; z >= bottom; --z)
+            {
+                if(!transparent) continue;
+                const int index = (z * diameter + y) * diameter + x;
+
+                worldskytransparent[index] = 1;
+                if(directsky)
+                {
+                    worldskylight[index] = 255;
+                    worldskyqueue.add(index);
+                }
+            }
+        }
+    }
+
+    for(int cursor = 0; cursor < worldskyqueue.length(); ++cursor)
+    {
+        const int index = worldskyqueue[cursor],
+                  light = worldskylight[index];
+        if(light <= skyexposureattenuation) continue;
+        const int propagated = light - skyexposureattenuation,
+                  z = index / plane,
+                  offset = index - z * plane,
+                  y = offset / diameter,
+                  x = offset - y * diameter;
+
+        #define PROPAGATESKYLIGHT(neighbor) do { \
+            const int next = (neighbor); \
+            if(worldskytransparent[next] && worldskylight[next] < propagated) \
+            { \
+                worldskylight[next] = propagated; \
+                worldskyqueue.add(next); \
+            } \
+        } while(0)
+
+        if(x > 0) PROPAGATESKYLIGHT(index - 1);
+        if(x + 1 < diameter) PROPAGATESKYLIGHT(index + 1);
+        if(y > 0) PROPAGATESKYLIGHT(index - diameter);
+        if(y + 1 < diameter) PROPAGATESKYLIGHT(index + diameter);
+        if(z > 0) PROPAGATESKYLIGHT(index - plane);
+        if(z + 1 < WORLD_HEIGHT_BLOCKS) PROPAGATESKYLIGHT(index + plane);
+
+        #undef PROPAGATESKYLIGHT
+    }
+    worldskyqueue.setsize(0);
+}
+
+static float sampleworldskylight(float x, float y, float z)
+{
+    const int diameter = worldskydiameter, plane = diameter * diameter;
+    float positions[3] =
+    {
+        x / WORLD_BLOCK_SIZE - worldskyorigin.x - 0.5f,
+        y / WORLD_BLOCK_SIZE - worldskyorigin.y - 0.5f,
+        z / WORLD_BLOCK_SIZE - 0.5f
+    };
+    int lower[3], upper[3];
+    float blend[3];
+    const int limits[3] = { diameter, diameter, WORLD_HEIGHT_BLOCKS };
+    loopi(3)
+    {
+        positions[i] = clamp(positions[i], 0.0f, float(limits[i] - 1));
+        lower[i] = int(floorf(positions[i]));
+        upper[i] = min(lower[i] + 1, limits[i] - 1);
+        blend[i] = positions[i] - lower[i];
+    }
+
+    float samples[2][2][2];
+    loop(zindex, 2) loop(yindex, 2) loop(xindex, 2)
+    {
+        const int sx = xindex ? upper[0] : lower[0],
+                  sy = yindex ? upper[1] : lower[1],
+                  sz = zindex ? upper[2] : lower[2];
+        samples[zindex][yindex][xindex] = worldskylight[sz * plane + sy * diameter + sx] / 255.0f;
+    }
+
+    float layers[2];
+    loop(zindex, 2)
+    {
+        const float low = samples[zindex][0][0] + (samples[zindex][0][1] - samples[zindex][0][0]) * blend[0],
+                    high = samples[zindex][1][0] + (samples[zindex][1][1] - samples[zindex][1][0]) * blend[0];
+        layers[zindex] = low + (high - low) * blend[1];
+    }
+    return layers[0] + (layers[1] - layers[0]) * blend[2];
+}
+
+float getworldskyexposure(const vec &position)
+{
+    if(worldchunks.empty() || !worldroot || !insideworld(position) || position.z < 0 || position.z >= WORLD_MAP_SIZE)
+        return 1.0f;
+
+    const int blockx = int(floorf(position.x / WORLD_BLOCK_SIZE)),
+              blocky = int(floorf(position.y / WORLD_BLOCK_SIZE));
+    if(!worldskyfieldcontains(blockx, blocky)) buildworldskyexposure(blockx, blocky);
+    return worldskydiameter ? sampleworldskylight(position.x, position.y, position.z) : 1.0f;
+}
+
 struct worlddebugstats
 {
     int chunkx, chunky;
@@ -761,8 +938,7 @@ static void getworlddebugstats(const vec &position, worlddebugstats &stats)
 {
     stats.rendered = 0;
     stats.loadingqueue = stats.generationqueue = 0;
-    stats.tectonicactivity = stats.tectonicuplift = stats.tectonictrench =
-        stats.tectoniccaveexpansion = 0;
+    stats.tectonicactivity = stats.tectonicuplift = stats.tectonictrench = stats.tectoniccaveexpansion = 0;
 
     if(!worldchunks.empty())
     {
@@ -776,10 +952,7 @@ static void getworlddebugstats(const vec &position, worlddebugstats &stats)
         loopv(worldchunks)
         {
             const worldchunk &chunk = worldchunks[i];
-            if(worldchunkmounted(chunk))
-            {
-                stats.rendered++;
-            }
+            if(worldchunkmounted(chunk)) stats.rendered++;
             if(chunk.loading)
             {
                 if(chunk.generating) stats.generationqueue++;
@@ -802,8 +975,7 @@ static void getworlddebugstats(const vec &position, worlddebugstats &stats)
                   logicalz = int(floor(position.z / WORLD_BLOCK_SIZE)) + WORLD_MIN_HEIGHT;
         game::worldgenerator generator(game::getworldseed());
         const int surfaceheight = generator.height(blockx, blocky);
-        const game::worldtectonicsample tectonics =
-            generator.tectonics(blockx, blocky, max(surfaceheight - logicalz, 0));
+        const game::worldtectonicsample tectonics = generator.tectonics(blockx, blocky, max(surfaceheight - logicalz, 0));
         stats.tectonicactivity = tectonics.activity;
         stats.tectonicuplift = tectonics.landuplift;
         stats.tectonictrench = tectonics.oceantrench;
@@ -861,6 +1033,7 @@ void clearworldchunks()
     worldchunkvaupdates.setsize(0);
     worldchunkvaupdateset.clear();
     worldsectionowners.clear();
+    clearworldskyexposure();
     loopv(worldchunks) if(worldchunks[i].root && worldchunks[i].root != worldroot)
     {
         ZoneScopedN("Chunks/Free chunk during clear");
@@ -1551,6 +1724,7 @@ static bool worldchunkfullymounted(const worldchunk &chunk)
 void markworldchunksdirty(const ivec &bbmin, const ivec &bbmax)
 {
     if(suppressworldchunkdirty || worldchunks.empty()) return;
+    invalidateworldskyexposure(bbmin, bbmax);
     loopv(worldchunks)
     {
         worldchunk &chunk = worldchunks[i];
@@ -1617,6 +1791,7 @@ static bool mountworldchunktile(worldchunk &chunk, int section, int tile)
     }
     moveworldcube(lookupworldchunkcube(chunk, pos, WORLD_SECTION_SIZE),
                   lookupcube(runtimepos, WORLD_SECTION_SIZE));
+    invalidateworldskyexposure(runtimepos, ivec(runtimepos).add(WORLD_SECTION_SIZE));
     worldsectionowners[key] = worldsectionowner(chunk.x, chunk.y, section, tile);
     chunk.mountedtiles[section] |= tilebit;
     return true;
@@ -1643,6 +1818,7 @@ static bool unmountworldchunktile(worldchunk &chunk, int section, int tile)
     setworldchunksectioncontent(chunk, tile, section, worldcubehascontent(c));
     chunk.surfacesections[tile] = -2;
     if(chunk.dirty) loopv(worldchunks) memclear(worldchunks[i].exposureknown);
+    invalidateworldskyexposure(runtimepos, ivec(runtimepos).add(WORLD_SECTION_SIZE));
     detachworldcubegeometry(c);
     moveworldcube(c, lookupworldchunkcube(chunk, pos, WORLD_SECTION_SIZE));
     worldsectionowners.remove(key);

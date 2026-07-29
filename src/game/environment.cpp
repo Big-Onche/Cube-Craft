@@ -5,16 +5,13 @@
 extern bvec ambient, fogcolour, sunlight;
 extern float sunlightscale;
 extern float sunlightyaw, sunlightpitch;
-extern int worldsize;
 extern void setsunlightdir();
 
 namespace game
 {
     namespace environment
     {
-        VAR(skyexposurecasts, 1, 64, 1024);
         VAR(skyexposurelerp, 1, 50, 60000);
-        VAR(skyexposurerefresh, 0, 100, 60000);
 
         static const int DAY_MILLIS = 10 * 60 * 1000;
         static const int NIGHT_MILLIS = 10 * 60 * 1000;
@@ -52,9 +49,6 @@ namespace game
         static double cyclemillis = START_HOUR * CYCLE_MILLIS / 24.0;
         static bool initialized = false, timefrozen = false;
         static float skyexposure = 1.0f, targetskyexposure = 1.0f;
-        static double skyexposurecastbudget = 0.0;
-        static int lastskyexposuremillis = -1, lastskyexposurecasts = 0;
-        static int skyexposurecastindex = 0, skyexposureexposedcasts = 0;
 
         static float smoothstep(float value)
         {
@@ -76,49 +70,7 @@ namespace game
 
         static void updateskyexposure()
         {
-            if(!camera1)
-            {
-                lastskyexposuremillis = -1;
-                return;
-            }
-
-            if(lastskyexposuremillis < 0 || lastskyexposurecasts != skyexposurecasts)
-            {
-                lastskyexposuremillis = lastmillis;
-                lastskyexposurecasts = skyexposurecasts;
-                skyexposurecastbudget = 0.0;
-                skyexposurecastindex = skyexposureexposedcasts = 0;
-                return;
-            }
-
-            const int elapsedmillis = max(lastmillis - lastskyexposuremillis, 0);
-            lastskyexposuremillis = lastmillis;
-            if(skyexposurerefresh > 0)
-                skyexposurecastbudget += double(elapsedmillis) * skyexposurecasts / skyexposurerefresh;
-            else skyexposurecastbudget = skyexposurecasts;
-            skyexposurecastbudget = min(skyexposurecastbudget, double(skyexposurecasts));
-
-            const int caststhisupdate = int(skyexposurecastbudget);
-            skyexposurecastbudget -= caststhisupdate;
-            if(!caststhisupdate) return;
-
-            static const float GOLDEN_ANGLE = float(M_PI * (3.0 - sqrt(5.0)));
-            const float maxdistance = 2.0f * worldsize;
-            loopi(caststhisupdate)
-            {
-                const float z = 1.0f - 2.0f * (skyexposurecastindex + 0.5f) / skyexposurecasts,
-                            radius = sqrtf(max(0.0f, 1.0f - z * z)),
-                            angle = skyexposurecastindex * GOLDEN_ANGLE;
-                const vec direction(cosf(angle) * radius, sinf(angle) * radius, z);
-                if(raycube(camera1->o, direction, maxdistance, RAY_CLIPMAT | RAY_POLY | RAY_SKIPFIRST | RAY_SKY) >= maxdistance)
-                    ++skyexposureexposedcasts;
-
-                if(++skyexposurecastindex >= skyexposurecasts)
-                {
-                    targetskyexposure = float(skyexposureexposedcasts) / skyexposurecasts;
-                    skyexposurecastindex = skyexposureexposedcasts = 0;
-                }
-            }
+            if(camera1) targetskyexposure = getworldskyexposure(camera1->o);
         }
 
         static void smoothskyexposure()
@@ -183,10 +135,6 @@ namespace game
             initialized = true;
             timefrozen = false;
             skyexposure = targetskyexposure = 1.0f;
-            skyexposurecastbudget = 0.0;
-            lastskyexposuremillis = -1;
-            lastskyexposurecasts = 0;
-            skyexposurecastindex = skyexposureexposedcasts = 0;
             applylighting(true);
         }
 

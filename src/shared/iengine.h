@@ -45,7 +45,7 @@ extern void lightent(extentity &e, float height = 8.0f);
 enum
 {
     RAY_BB = 1, RAY_POLY = 3, RAY_ALPHAPOLY = 7, RAY_ENTS = 9,
-    RAY_CLIPMAT = 16, RAY_SKIPFIRST = 32, RAY_EDITMAT = 64, RAY_PASS = 128, RAY_SKY = 256
+    RAY_CLIPMAT = 16, RAY_SKIPFIRST = 32, RAY_EDITMAT = 64, RAY_PASS = 128
 };
 
 extern float raycube   (const vec &o, const vec &ray,     float radius = 0, int mode = RAY_CLIPMAT, int size = 0, extentity *t = 0);
@@ -262,6 +262,7 @@ extern void findents(int low, int high, bool notspawned, const vec &pos, const v
 extern void mpeditent(int i, const vec &o, int type, int attr1, int attr2, int attr3, int attr4, int attr5, bool local);
 extern vec getselpos();
 extern int getworldsize();
+extern float getworldskyexposure(const vec &position);
 extern void updateworldchunks(bool force = false);
 extern int getmapversion();
 extern void renderentcone(const extentity &e, const vec &dir, float radius, float angle);
