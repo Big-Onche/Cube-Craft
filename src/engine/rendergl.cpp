@@ -1545,6 +1545,19 @@ vec calcavatarpos(const vec &pos, float dist)
     return dir.add(camera1->o);
 }
 
+vec calcavatardepthpos(const vec &pos)
+{
+    vec eyepos;
+    cammatrix.transform(pos, eyepos);
+    const GLdouble ydist = nearplane * tan(curavatarfov/2*RAD), xdist = ydist * aspect;
+    vec4 scrpos;
+    scrpos.x = eyepos.x*nearplane/xdist;
+    scrpos.y = eyepos.y*nearplane/ydist;
+    scrpos.z = avatardepth * (eyepos.z*(farplane + nearplane) - 2*nearplane*farplane) / (farplane - nearplane);
+    scrpos.w = -eyepos.z;
+    return invcamprojmatrix.perspectivetransform(scrpos);
+}
+
 void renderavatar()
 {
     if(isthirdperson()) return;

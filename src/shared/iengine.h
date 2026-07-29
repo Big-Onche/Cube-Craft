@@ -333,6 +333,7 @@ extern float curfov, fovy, aspect;
 extern void disablezoom();
 
 extern vec calcavatarpos(const vec &pos, float dist);
+extern vec calcavatardepthpos(const vec &pos);
 extern vec calcmodelpreviewpos(const vec &radius, float &yaw);
 
 extern void damageblend(int n);

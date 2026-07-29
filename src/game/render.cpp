@@ -318,7 +318,14 @@ namespace game
 
         vec origin = hudarmhand(1, armpitch, armroll, bob);
         origin.madd(camdir, HUD_CUBE_GRIP_FORWARD).madd(camright, HUD_CUBE_GRIP_SIDE).madd(camup, HUD_CUBE_GRIP_UP);
-        return modeltagposition(model, "tag_emitter", position, origin, camera1->yaw, camera1->pitch - max(actionpitch, 0.0f) * 0.35f, 0, 0.45f);
+        if(!modeltagposition(model, "tag_emitter", position, origin, camera1->yaw, camera1->pitch - max(actionpitch, 0.0f) * 0.35f, 0, 0.45f))
+            return false;
+
+        // The held model uses avatarfov and avatardepth, while particles and
+        // dynamic lights use the world projection. Preserve the complete
+        // avatar clip position so the effects align and depth-test against it.
+        position = calcavatardepthpos(position);
+        return true;
     }
 
     void renderavatar()
