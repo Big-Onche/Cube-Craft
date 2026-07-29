@@ -1,7 +1,7 @@
 #include "engine.h"
 
 CVAR1R(ambient, 0x0A0A0A);
-FVARR(ambientscale, 0, 2, 16);
+FVARR(ambientscale, 0, 1.5f, 16);
 
 extern void setupsunlight();
 
