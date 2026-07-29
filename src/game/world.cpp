@@ -8,12 +8,20 @@ VARP(worldseed, 0, 1337, INT_MAX);
 FVAR(worldgeologyfrequency, 0.00001f, 0.0012f, 0.1f);
 FVAR(worldmaxcontinentheight, 1.0f, 96.0f, 255.0f);
 FVAR(worldmaxoceandepth, 1.0f, 32.0f, 255.0f);
+FVAR(worldcoastdetailfrequency, 0.0001f, 0.014f, 0.25f);
+FVAR(worldcoastdetailstrength, 0.0f, 0.020f, 0.25f);
 FVAR(worldoceancoverage, 0.0f, 55.0f, 100.0f);
 FVAR(worldterraincoverage, 0.0f, 45.0f, 100.0f);
 FVAR(worldplainscoverage, 0.0f, 45.0f, 100.0f);
 FVAR(worldhillscoverage, 0.0f, 32.0f, 100.0f);
 FVAR(worldmountainscoverage, 0.0f, 18.0f, 100.0f);
 FVAR(worldhighsummitscoverage, 0.0f, 5.0f, 100.0f);
+FVAR(worldterrainmicrofrequency, 0.0001f, 0.035f, 0.5f);
+FVAR(worldplainsmicrovariation, 0.0f, 1.0f, 8.0f);
+FVAR(worldreliefmicrovariation, 0.0f, 6.0f, 32.0f);
+FVAR(worldsecondarysummitheight, 0.0f, 14.0f, 64.0f);
+FVAR(worldrockyledgeheight, 0.0f, 5.0f, 24.0f);
+FVAR(worldclusedepth, 0.0f, 9.0f, 48.0f);
 
 FVAR(worldtectonicfrequency, 0.0001f, 0.0014f, 0.01f);
 FVAR(worldtectonicwarpamplitude, 0.0f, 64.0f, 512.0f);
@@ -34,6 +42,7 @@ FVAR(worldbiomevariationstrength, 0.0f, 0.15f, 1.0f);
 FVAR(worldrockfrequency, 0.000001f, 0.08f, 1.0f);
 
 VAR(worldsealevel, -255, 0, 255);
+VAR(worldsoildepth, 2, 5, 6);
 VAR(worldsnowheight, -255, 160, 255);
 VAR(worldstonelow, -255, 75, 255);
 VAR(worldstonehigh, -255, 125, 255);
@@ -115,10 +124,18 @@ namespace game
     worldsettings::worldsettings()
         : geologyfrequency(worldgeologyfrequency),
           maxcontinentheight(worldmaxcontinentheight), maxoceandepth(worldmaxoceandepth),
+          coastdetailfrequency(worldcoastdetailfrequency),
+          coastdetailstrength(worldcoastdetailstrength),
           oceancoverage(worldoceancoverage), terraincoverage(worldterraincoverage),
           plainscoverage(worldplainscoverage), hillscoverage(worldhillscoverage),
           mountainscoverage(worldmountainscoverage),
           highsummitscoverage(worldhighsummitscoverage),
+          terrainmicrofrequency(worldterrainmicrofrequency),
+          plainsmicrovariation(worldplainsmicrovariation),
+          reliefmicrovariation(worldreliefmicrovariation),
+          secondarysummitheight(worldsecondarysummitheight),
+          rockyledgeheight(worldrockyledgeheight),
+          clusedepth(worldclusedepth),
           tectonicfrequency(worldtectonicfrequency),
           tectonicwarpamplitude(worldtectonicwarpamplitude),
           tectonicridgepower(worldtectonicridgepower),
@@ -150,7 +167,8 @@ namespace game
           lavalakedeepchance(worldlavalakedeepchance),
           lavalakeshapefrequency(worldlavalakeshapefrequency),
           lavalakeshapevariation(worldlavalakeshapevariation),
-          sealevel(worldsealevel), snowheight(worldsnowheight),
+          sealevel(worldsealevel), soildepth(worldsoildepth),
+          snowheight(worldsnowheight),
           stonelow(worldstonelow), stonehigh(worldstonehigh),
           biomeblend(worldbiomeblend), coastwidth(worldcoastwidth),
           coastvariation(worldcoastvariation),
@@ -173,6 +191,7 @@ namespace game
         setupnoise(geology, seed, settings.geologyfrequency, 2, 0.35f);
         setupnoise(hills, seed ^ 0x4A39B70D, settings.geologyfrequency * 3.5f, 2, 0.30f);
         setupnoise(coastshape, seed ^ 0x57C8E219, settings.geologyfrequency * 8.0f, 1);
+        setupnoise(coastdetail, seed ^ 0x1F6D38A5, settings.coastdetailfrequency, 3, 0.48f);
         setupnoise(covenoise, seed ^ 0x2B61D4A7, settings.geologyfrequency * 2.0f, 1);
         setupnoise(beachnoise, seed ^ 0x73A9C52D, settings.geologyfrequency * 4.0f, 1);
         setupnoise(cliffnoise, seed ^ 0x4E91A73B, settings.geologyfrequency * 3.0f, 1);
@@ -181,6 +200,15 @@ namespace game
         setupnoise(mountainrange, seed ^ 0x18F47C53, settings.geologyfrequency * 1.5f, 1);
         setupnoise(mountainnoise, seed ^ 0x3D72A95B, settings.geologyfrequency * 2.5f, 2, 0.25f);
         setupnoise(mountainpeaks, seed ^ 0x25B46D81, settings.geologyfrequency * 4.5f, 1);
+        setupnoise(secondarysummita, seed ^ 0x41D7A2C9, settings.geologyfrequency * 8.0f, 2, 0.40f);
+        setupnoise(secondarysummitb, seed ^ 0x6B2E935D, settings.geologyfrequency * 10.5f, 2, 0.40f);
+        setupnoise(hollowshape, seed ^ 0x2C85F1B7, settings.geologyfrequency * 5.0f, 2, 0.35f);
+        setupnoise(foldnoise, seed ^ 0x59A34E21, settings.geologyfrequency * 4.0f, 2, 0.35f);
+        setupnoise(clusenoise, seed ^ 0x17C6B8F3, settings.geologyfrequency * 3.0f, 2, 0.35f);
+        foldnoise.SetNoiseType(FastNoiseLite::NoiseType_Perlin);
+        clusenoise.SetNoiseType(FastNoiseLite::NoiseType_Perlin);
+        setupnoise(terrainmicro, seed ^ 0x34A72C91, settings.terrainmicrofrequency, 4, 0.48f);
+        setupnoise(terrainmicromask, seed ^ 0x62E9B4D7, settings.terrainmicrofrequency * 0.25f, 2, 0.45f);
         setupnoise(tectonicnoise, seed ^ 0x68E31DA4, settings.tectonicfrequency, 1);
         setupwarp(tectonicwarp, seed ^ 0x6C8E9CF5, settings.tectonicfrequency * 0.5f, settings.tectonicwarpamplitude);
         setupnoise(temperature, seed ^ 0x51D7348B, settings.temperaturefrequency, 3);
@@ -195,6 +223,11 @@ namespace game
         setupnoise(lakeshape, seed ^ 0x43E7B5D9, settings.lavalakeshapefrequency, 2);
         setupnoise(fracturecorridors, seed ^ 0x278D4A6B,settings.tunnelfrequency * 0.35f, 1);
         setupnoise(fracturevertical, seed ^ 0x71B5C3D9, settings.tunnelfrequency, 1);
+
+        const unsigned int anglehash = unsigned(seed) * 0x9E3779B9U + 0x7F4A7C15U;
+        const float foldangle = float(anglehash & 0xFFFFU) * (6.28318530718f / 65536.0f);
+        foldcos = cosf(foldangle);
+        foldsin = sinf(foldangle);
     }
 
     static float landthreshold(const worldsettings &settings)
@@ -211,9 +244,24 @@ namespace game
                     threshold = landthreshold(generator.settings),
                     amplitude = generator.settings.geologyfrequency * 48.0f,
                     coastband = max(amplitude * 3.0f, 0.08f),
-                    coastweight = 1.0f - smoothstep(amplitude, coastband, fabs(base - threshold));
+                    coastweight = 1.0f - smoothstep(amplitude, coastband, fabs(base - threshold)),
+                    broad = base + generator.covenoise.GetNoise(noisex, noisey) * amplitude * coastweight,
+                    detailstrength = generator.settings.coastdetailstrength,
+                    detailband = max(detailstrength * 4.0f, 0.04f),
+                    detailweight = 1.0f - smoothstep(detailstrength, detailband, fabs(broad - threshold));
 
-        return base + generator.covenoise.GetNoise(noisex, noisey) * amplitude * coastweight;
+        if(detailstrength <= 0.0f || detailweight <= 0.0f) return broad;
+        return broad + generator.coastdetail.GetNoise(noisex, noisey) * detailstrength * detailweight;
+    }
+
+    static float sampleterrainmicrovariation(const worldgenerator &generator, float noisex, float noisey)
+    {
+        const float detail = generator.terrainmicro.GetNoise(noisex, noisey),
+                    masknoise = clamp(generator.terrainmicromask.GetNoise(noisex, noisey) * 0.5f + 0.5f,
+                                      0.0f, 1.0f),
+                    mask = 0.45f + 0.55f * smoothstep(0.25f, 0.75f, masknoise);
+
+        return detail * mask;
     }
 
     static void samplecoastprofile(const worldgenerator &generator, float noisex, float noisey, float &beachspan, float &plainrun, float &plainlevel)
@@ -311,7 +359,46 @@ namespace game
                     localsummits = 0.21f * summitzone * powf(primaryridge, 1.4f) * powf(secondaryridge, 1.2f),
                     trenchpotential = sample.activity * deepoceanmask;
 
-        sample.landuplift = clamp(landmask * (backgroundrelief + highplateau+ mainridges + surroundingpeaks + localsummits), 0.0f, 1.0f);
+        sample.landuplift = clamp(landmask * (backgroundrelief + highplateau + mainridges + surroundingpeaks + localsummits), 0.0f, 1.0f);
+        sample.terrainroughness = clamp(landmask * (0.35f * hillregion + 0.45f * mountainregion + 0.20f * summitregion), 0.0f, 1.0f);
+
+        const float structuralzone = landmask * hillregion * (0.35f + 0.65f * mountainregion);
+        if(structuralzone > 0.001f)
+        {
+            const float noisex = x + 10000.5f, noisey = y - 10000.5f,
+                        secondarya = smoothstep(0.76f, 0.96f,1.0f - fabs(generator.secondarysummita.GetNoise(noisex, noisey))),
+                        secondaryb = smoothstep(0.76f, 0.96f,1.0f - fabs(generator.secondarysummitb.GetNoise(noisex, noisey))),
+                        secondarysummit = landmask * rangezone * (0.40f + 0.60f * primaryridge) * secondarya * secondaryb,
+                        hollowvalue = -generator.hollowshape.GetNoise(noisex, noisey),
+                        hollowcore = smoothstep(0.25f, 0.65f, hollowvalue),
+                        hollowedge = smoothstep(0.20f, 0.27f, hollowvalue) * (1.0f - smoothstep(0.30f, 0.36f, hollowvalue)),
+                        primaryflank = 4.0f * primaryridge * (1.0f - primaryridge),
+                        secondaryflank = 4.0f * secondaryridge * (1.0f - secondaryridge),
+                        steepregion = smoothstep(0.60f, 0.84f, sample.terrainroughness),
+                        steepflank = smoothstep(0.60f, 0.88f, max(primaryflank, secondaryflank)),
+                        ledgeselector = clamp(generator.terrainmicromask.GetNoise(noisex + 7300.0f, noisey - 7300.0f) * 0.5f + 0.5f, 0.0f, 1.0f),
+                        ledgepresence = smoothstep(0.56f, 0.76f, ledgeselector),
+                        ledgebump = 0.65f + 0.55f * clamp(generator.terrainmicro.GetNoise(noisex - 4100.0f, noisey + 4100.0f) * 0.5f + 0.5f, 0.0f, 1.0f);
+
+            // Stretched fields share the tectonically warped frame. Fold ridges
+            // run along local Y; the sparse zero contours sampled along local X
+            // form transverse cluses that notch through those anticlines.
+            const float foldx = tectonicx * generator.foldcos - tectonicy * generator.foldsin,
+                        foldy = tectonicx * generator.foldsin + tectonicy * generator.foldcos,
+                        foldridge = powf(clamp(1.0f - fabs(generator.foldnoise.GetNoise(foldx, foldy * 0.22f)), 0.0f, 1.0f), 3.0f),
+                        foldshoulder = smoothstep(0.38f, 0.72f, foldridge),
+                        foldcrest = smoothstep(0.75f, 0.92f, foldridge),
+                        crossridge = powf(clamp(1.0f - fabs(generator.clusenoise.GetNoise(foldx * 0.18f, foldy)), 0.0f, 1.0f), 5.0f),
+                        crosscut = smoothstep(0.72f, 0.93f, crossridge),
+                        cluse = structuralzone * crosscut * (0.35f + 0.65f * foldshoulder),
+                        ledge = structuralzone * max(hollowedge, 0.70f * foldcrest) * steepregion * steepflank * ledgepresence * (1.0f - 0.85f * crosscut);
+
+            sample.terrainstructure = settings.secondarysummitheight * secondarysummit
+                                    + settings.rockyledgeheight * ledge * ledgebump
+                                    - settings.rockyledgeheight * 0.35f * structuralzone * hollowcore
+                                    - settings.clusedepth * cluse;
+            sample.rockyledge = clamp(ledge, 0.0f, 1.0f);
+        }
         sample.oceantrench = clamp(trenchpotential * powf(sample.activity, 0.35f), 0.0f, 1.0f);
 
         const float protecteddepth = max(float(settings.cavemindepth), 12.0f),
@@ -355,7 +442,7 @@ namespace game
         const float threshold = landthreshold(settings);
         const worldtectonicsample tectonicsample = sampletectonics(*this, x, y, continental, 0);
         if(tectonics) *tectonics = tectonicsample;
-        float elevation;
+        float elevation, plaindetailmask = 1.0f, cliffdetailmask = 0.0f;
         if(continental >= threshold)
         {
             const float distance = clamp((continental - threshold) / max(1.0f - threshold, 0.001f), 0.0f, 1.0f);
@@ -426,9 +513,18 @@ namespace game
                             cliffplateau = cliffheight + (inlandtarget - cliffheight) * cliffblend,
                             cliffelevation = max(inlandtarget, cliffplateau * cliffrise);
 
-                elevation = normalelevation+ (cliffelevation - normalelevation) * cliffstrength;
+                elevation = normalelevation + (cliffelevation - normalelevation) * cliffstrength;
+                plaindetailmask = smoothstep(plainend, blendend, shoredistance);
+                cliffdetailmask = cliffstrength * (1.0f - smoothstep(cliffplateauend, cliffblendend, shoredistance));
             }
-            elevation = clamp(elevation, 0.0f, settings.maxcontinentheight)+ settings.maxlanduplift * tectonicsample.landuplift;
+            elevation = clamp(elevation, 0.0f, settings.maxcontinentheight)
+                      + settings.maxlanduplift * tectonicsample.landuplift
+                      + tectonicsample.terrainstructure;
+            elevation = max(elevation, 0.0f);
+
+            const float roughness = max(tectonicsample.terrainroughness, cliffdetailmask),
+                        detailstrength = settings.plainsmicrovariation * plaindetailmask + settings.reliefmicrovariation * roughness;
+            if(detailstrength > 0.0f) elevation = max(elevation + sampleterrainmicrovariation(*this, noisex, noisey) * detailstrength, 0.0f);
         }
         else
         {
@@ -537,12 +633,20 @@ namespace game
             "worldgeologyfrequency %.9g\n"
             "worldmaxcontinentheight %.9g\n"
             "worldmaxoceandepth %.9g\n"
+            "worldcoastdetailfrequency %.9g\n"
+            "worldcoastdetailstrength %.9g\n"
             "worldoceancoverage %.9g\n"
             "worldterraincoverage %.9g\n"
             "worldplainscoverage %.9g\n"
             "worldhillscoverage %.9g\n"
             "worldmountainscoverage %.9g\n"
             "worldhighsummitscoverage %.9g\n"
+            "worldterrainmicrofrequency %.9g\n"
+            "worldplainsmicrovariation %.9g\n"
+            "worldreliefmicrovariation %.9g\n"
+            "worldsecondarysummitheight %.9g\n"
+            "worldrockyledgeheight %.9g\n"
+            "worldclusedepth %.9g\n"
             "worldtectonicfrequency %.9g\n"
             "worldtectonicwarpamplitude %.9g\n"
             "worldtectonicridgepower %.9g\n"
@@ -560,6 +664,7 @@ namespace game
             "worldbiomevariationstrength %.9g\n"
             "worldrockfrequency %.9g\n"
             "worldsealevel %d\n"
+            "worldsoildepth %d\n"
             "worldsnowheight %d\n"
             "worldstonelow %d\n"
             "worldstonehigh %d\n"
@@ -604,16 +709,20 @@ namespace game
             "worldlavalakeshapefrequency %.9g\n"
             "worldlavalakeshapevariation %.9g\n",
             activeworldseed, worldgeologyfrequency, worldmaxcontinentheight, worldmaxoceandepth,
+            worldcoastdetailfrequency, worldcoastdetailstrength,
             worldoceancoverage, worldterraincoverage,
             worldplainscoverage, worldhillscoverage,
             worldmountainscoverage, worldhighsummitscoverage,
+            worldterrainmicrofrequency, worldplainsmicrovariation,
+            worldreliefmicrovariation,
+            worldsecondarysummitheight, worldrockyledgeheight, worldclusedepth,
             worldtectonicfrequency, worldtectonicwarpamplitude, worldtectonicridgepower,
             worldtectonicactivitythreshold, worldmaxlanduplift, worldmaxoceansubsidence,
             worldtectoniccavestrength, worldtectonicfracturestrength, worldcoastprotectionwidth,
             worldcliffchance, worldcliffmaxheight,
             worldtemperaturefrequency, worldmoisturefrequency,
             worldbiomevariationfrequency, worldbiomevariationstrength, worldrockfrequency,
-            worldsealevel, worldsnowheight, worldstonelow, worldstonehigh,
+            worldsealevel, worldsoildepth, worldsnowheight, worldstonelow, worldstonehigh,
             worldbiomeblend, worldcoastwidth, worldcoastvariation,
             worldbeachminheight, worldbeachmaxheight,
             worlddeserttemperature, worlddesertmoisture, worldforestmoisture,

@@ -92,7 +92,6 @@ enum
     WORLD_CHUNK_ROOT_SIZE = WORLD_CHUNK_MAP_SIZE >> 1,
     WORLD_SECTION_LAYERS = WORLD_MAP_SIZE / WORLD_SECTION_SIZE,
     WORLD_GROUND_HEIGHT = -WORLD_MIN_HEIGHT * WORLD_BLOCK_SIZE,
-    WORLD_DIRT_DEPTH = 4 * WORLD_BLOCK_SIZE,
     WORLD_RUNTIME_SCALE = 16,
     WORLD_RUNTIME_SIZE = 1 << WORLD_RUNTIME_SCALE,
     WORLD_RUNTIME_CHUNKS = WORLD_RUNTIME_SIZE / WORLD_CHUNK_SIZE,
@@ -109,7 +108,7 @@ enum
 enum
 {
     WORLD_SAVE_FORMAT_VERSION = 1,
-    WORLDGEN_VERSION = 1,
+    WORLDGEN_VERSION = 2,
     WORLD_DIFF_Z = 0,
     WORLD_DIFF_FRAME_MAX = 64 << 20,
     WORLD_DIFF_FLUSH_MILLIS = 10000
@@ -3190,6 +3189,7 @@ struct worldgencontext
     uchar biomemap[WORLD_CHUNK_BLOCKS * WORLD_CHUNK_BLOCKS];
     uchar coastmap[WORLD_CHUNK_BLOCKS * WORLD_CHUNK_BLOCKS];
     uchar cliffmap[WORLD_CHUNK_BLOCKS * WORLD_CHUNK_BLOCKS];
+    uchar reliefcliffmap[WORLD_CHUNK_BLOCKS * WORLD_CHUNK_BLOCKS];
     uchar rockmap[WORLD_CHUNK_BLOCKS * WORLD_CHUNK_BLOCKS];
     uchar tectonicactivitymap[WORLD_CHUNK_BLOCKS * WORLD_CHUNK_BLOCKS];
     uchar tectonicupliftmap[WORLD_CHUNK_BLOCKS * WORLD_CHUNK_BLOCKS];
@@ -3607,7 +3607,8 @@ static bool generateworldheightmap(worldgencontext &ctx, int chunkx, int chunky)
                 ctx.tectonicactivitymap[index] = uchar(clamp(int(floor(tectonics.activity
                                                                * 255.0f + 0.5f)), 0, 255));
                 ctx.tectonicupliftmap[index] = uchar(clamp(int(floor(tectonics.landuplift
-                                                             * 255.0f + 0.5f)), 0, 255));
+                                                              * 255.0f + 0.5f)), 0, 255));
+                ctx.reliefcliffmap[index] = tectonics.rockyledge > 0.22f;
                 const int worldx = chunkx * WORLD_CHUNK_BLOCKS + x,
                           worldy = chunky * WORLD_CHUNK_BLOCKS + y;
                 ctx.fracturecorridormap[index] = uchar(clamp(int(floor(
@@ -3629,7 +3630,8 @@ static bool generateworldheightmap(worldgencontext &ctx, int chunkx, int chunky)
                 const int index = y * WORLD_CHUNK_BLOCKS + x;
                 ctx.biomemap[index] = generateworldbiome(ctx, chunkx, chunky, x, y,
                                                          ctx.heightmap[index]);
-                ctx.cliffmap[index] = generateworldcliff(ctx, chunkx, chunky, x, y,
+                ctx.cliffmap[index] = ctx.reliefcliffmap[index]
+                                   || generateworldcliff(ctx, chunkx, chunky, x, y,
                                                          ctx.heightmap[index]);
                 ctx.rockmap[index] = generateworldrock(ctx, chunkx, chunky, x, y, ctx.heightmap[index]);
             }
@@ -3668,7 +3670,7 @@ static int worldcolumncubetype(const worldgencontext &ctx, int z, int size, int 
 {
     const int surface = WORLD_GROUND_HEIGHT + height,
               watertop = WORLD_GROUND_HEIGHT + ctx.settings.sealevel * WORLD_BLOCK_SIZE,
-              dirtbottom = surface - WORLD_BLOCK_SIZE - WORLD_DIRT_DEPTH,
+              dirtbottom = surface - ctx.settings.soildepth * WORLD_BLOCK_SIZE,
               grassbottom = surface - WORLD_BLOCK_SIZE,
               beachmin = (ctx.settings.sealevel
                         + min(ctx.settings.beachminheight, ctx.settings.beachmaxheight)) * WORLD_BLOCK_SIZE,
@@ -3707,6 +3709,19 @@ static int worldcolumncubetype(const worldgencontext &ctx, int z, int size, int 
     if(biome == game::WORLD_BIOME_SNOW && z >= grassbottom && z + size <= surface) return WORLD_SNOW;
     if(z >= grassbottom && z + size <= surface) return WORLD_GRASS;
     return WORLD_MIXED;
+}
+
+static bool worldtreegrowablesurface(const worldgencontext &ctx, int blockx, int blocky,
+                                     int height, int biome)
+{
+    const int localx = blockx * WORLD_BLOCK_SIZE,
+              localy = blocky * WORLD_BLOCK_SIZE,
+              surfacez = WORLD_GROUND_HEIGHT + height - WORLD_BLOCK_SIZE,
+              type = worldcolumncubetype(ctx, surfacez, WORLD_BLOCK_SIZE, height, biome,
+                                         worldcoast(ctx, localx, localy),
+                                         worldcliff(ctx, localx, localy),
+                                         worldrock(ctx, localx, localy));
+    return type == WORLD_GRASS || type == WORLD_DIRT;
 }
 
 static int worldcubetype(const worldgencontext &ctx, const ivec &o, int size)
@@ -4914,15 +4929,21 @@ static bool placeworldtrees(worldgencontext &ctx, cube *root, int chunkx, int ch
             const bool inside = x >= 0 && x < WORLD_CHUNK_BLOCKS &&
                                 y >= 0 && y < WORLD_CHUNK_BLOCKS;
             const int index = inside ? y * WORLD_CHUNK_BLOCKS + x : 0;
+            game::worldtectonicsample terrain;
             const int height = inside ? ctx.heightmap[index]
-                                      : generateworldheight(ctx, chunkx, chunky, x, y),
+                                      : generateworldheight(ctx, chunkx, chunky, x, y, &terrain),
                       biome = inside ? ctx.biomemap[index]
                                      : generateworldbiome(ctx, chunkx, chunky, x, y, height);
             if(biome != game::WORLD_BIOME_FOREST && biome != game::WORLD_BIOME_PLAINS) continue;
-            if(inside ? ctx.rockmap[index] != 0
-                      : generateworldrock(ctx, chunkx, chunky, x, y, height)) continue;
             if(ctx.settings.coastwidth > 0 && height >= beachmin
             && height <= max(beachmax, coasttreemax)) continue;
+            if(inside)
+            {
+                if(!worldtreegrowablesurface(ctx, x, y, height, biome)) continue;
+            }
+            else if(terrain.rockyledge > 0.22f
+                 || generateworldcliff(ctx, chunkx, chunky, x, y, height)
+                 || generateworldrock(ctx, chunkx, chunky, x, y, height)) continue;
             if(generateworldcaveentrance(ctx, chunkx, chunky, x, y, height)) continue;
 
             const float density = biome == game::WORLD_BIOME_FOREST

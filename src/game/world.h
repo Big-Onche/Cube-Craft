@@ -28,9 +28,11 @@ namespace game
     struct worldtectonicsample
     {
         float activity, landuplift, oceantrench, caveexpansion;
+        float terrainroughness, terrainstructure, rockyledge;
 
         worldtectonicsample()
-            : activity(0), landuplift(0), oceantrench(0), caveexpansion(0)
+            : activity(0), landuplift(0), oceantrench(0), caveexpansion(0),
+              terrainroughness(0), terrainstructure(0), rockyledge(0)
         {
         }
     };
@@ -38,8 +40,11 @@ namespace game
     struct worldsettings
     {
         float geologyfrequency, maxcontinentheight, maxoceandepth;
+        float coastdetailfrequency, coastdetailstrength;
         float oceancoverage, terraincoverage;
         float plainscoverage, hillscoverage, mountainscoverage, highsummitscoverage;
+        float terrainmicrofrequency, plainsmicrovariation, reliefmicrovariation;
+        float secondarysummitheight, rockyledgeheight, clusedepth;
         float tectonicfrequency, tectonicwarpamplitude, tectonicridgepower;
         float tectonicactivitythreshold, maxlanduplift, maxoceansubsidence;
         float tectoniccavestrength, tectonicfracturestrength, coastprotectionwidth;
@@ -55,7 +60,7 @@ namespace game
         float tunnelfrequency, tunnelwidth, caveentrancewidth;
         float lavalakeshallowchance, lavalakedeepchance;
         float lavalakeshapefrequency, lavalakeshapevariation;
-        int sealevel, snowheight, stonelow, stonehigh;
+        int sealevel, soildepth, snowheight, stonelow, stonehigh;
         int biomeblend, coastwidth, coastvariation;
         int beachminheight, beachmaxheight;
         int pinestartheight, pinefullheight;
@@ -68,14 +73,17 @@ namespace game
 
     struct worldgenerator
     {
-        FastNoiseLite geology, hills, coastshape, covenoise, beachnoise, cliffnoise;
+        FastNoiseLite geology, hills, coastshape, coastdetail, covenoise, beachnoise, cliffnoise;
         FastNoiseLite mountainrange, mountainnoise, mountainpeaks;
+        FastNoiseLite secondarysummita, secondarysummitb, hollowshape, foldnoise, clusenoise;
+        FastNoiseLite terrainmicro, terrainmicromask;
         FastNoiseLite tectonicnoise, tectonicwarp;
         FastNoiseLite temperature, moisture, biomevariation, biomeblend, rockiness;
         FastNoiseLite caves, largecaves, tunnela, tunnelb, lakeshape;
         FastNoiseLite fracturecorridors, fracturevertical;
         worldsettings settings;
         int seed;
+        float foldcos, foldsin;
 
         worldgenerator(int seed, const worldsettings &settings = worldsettings());
 
