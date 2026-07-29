@@ -375,13 +375,15 @@ namespace game
     {
         if(!hudgun || editmode || !player1 || player1->state != CS_ALIVE) return;
 
+        const int selected = heldcreativeitem(player1);
+        if(selected < 0) return;
+
         helditempose arm, item;
         const bool tagged = hudrightarmpose(player1, arm, item);
         const int flags = MDL_NOBATCH | MDL_NOSHADOW;
         rendermodel(playermodels[PART_RIGHT_ARM], ANIM_MAPMODEL | ANIM_LOOP, arm.origin, arm.yaw, arm.pitch, arm.roll, flags, player1);
 
-        const int selected = heldcreativeitem(player1);
-        if(tagged && selected >= 0) renderhelditem(player1, selected, item.origin, item.yaw, item.pitch, item.roll, flags, true);
+        if(tagged) renderhelditem(player1, selected, item.origin, item.yaw, item.pitch, item.roll, flags, true);
     }
 
     void renderplayerpreview(int model, int color, int team, int weap) {}

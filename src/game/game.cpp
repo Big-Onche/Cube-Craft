@@ -165,6 +165,17 @@ namespace game
     void loadconfigs()
     {
         execute("if (|| (=s (getbind F2) []) (=s (getbind F2) [togglevar debughud])) [bind F2 [toggleui debughud]]");
+        loopi(7)
+        {
+            defformatstring(command,
+                "if (|| (=s (getbind %d) []) (=s (getbind %d) [creativeselect %d])) [bind %d [creativehotbarselect %d]]",
+                i + 1, i + 1, i, i + 1, i);
+            execute(command);
+        }
+        execute("if (=s (getbind 8) []) [bind 8 [creativehotbarselect 7]]");
+        execute("if (|| (=s (getbind 9) []) (=s (getbind 9) [if (allowthirdperson) [togglevar thirdperson]])) "
+                "[bind 9 [creativehotbarselect 8]]");
+        execute("if (=s (getbind F5) []) [bindvar F5 [thirdperson] [allowthirdperson]]");
     }
 
     void initclient()
@@ -650,7 +661,13 @@ namespace game
         CREATIVE_REACH = CREATIVE_GRID * 8
     };
 
-    static int creativeblock = 0;
+    enum
+    {
+        CREATIVE_HOTBAR_SLOTS = 9
+    };
+
+    static int creativehotbar[CREATIVE_HOTBAR_SLOTS] = { -1, -1, -1, -1, -1, -1, -1, -1, -1 };
+    static int creativehotbarslot = 0;
 
     enum
     {
@@ -660,16 +677,17 @@ namespace game
 
     static const float CREATIVE_ARM_PITCH = 70.0f;
 
-    static int clampcreativeblock()
+    static int clampcreativehotbarslot()
     {
-        int count = numworldcubes() + numworldscatters();
-        creativeblock = count > 0 ? clamp(creativeblock, 0, count - 1) : 0;
-        return creativeblock;
+        creativehotbarslot = clamp(creativehotbarslot, 0, CREATIVE_HOTBAR_SLOTS - 1);
+        return creativehotbarslot;
     }
 
     int selectedcreativeblock()
     {
-        return clampcreativeblock();
+        const int item = creativehotbar[clampcreativehotbarslot()],
+                  count = numworldcubes() + numworldscatters();
+        return item >= 0 && item < count ? item : -1;
     }
 
     static bool creativeenabled()
@@ -794,8 +812,9 @@ namespace game
         selinfo hit;
         if(!creativehit(hit)) return;
 
-        const int selected = clampcreativeblock(),
+        const int selected = selectedcreativeblock(),
                   cubecount = numworldcubes();
+        if(selected < 0) return;
         if(selected >= cubecount)
         {
             const int type = selected - cubecount;
@@ -874,18 +893,35 @@ namespace game
     ICOMMAND(creativeselect, "i", (int *index),
     {
         int count = numworldcubes() + numworldscatters();
-        if(count > 0) creativeblock = clamp(*index, 0, count - 1);
+        creativehotbar[clampcreativehotbarslot()] = *index >= 0 && *index < count ? *index : -1;
     });
     ICOMMAND(creativecycle, "i", (int *dir),
     {
-        int count = numworldcubes() + numworldscatters();
-        if(count > 0)
-        {
-            creativeblock = (clampcreativeblock() - *dir) % count;
-            if(creativeblock < 0) creativeblock += count;
-        }
+        creativehotbarslot = (clampcreativehotbarslot() - *dir) % CREATIVE_HOTBAR_SLOTS;
+        if(creativehotbarslot < 0) creativehotbarslot += CREATIVE_HOTBAR_SLOTS;
     });
-    ICOMMAND(getcreativeblock, "", (), intret(clampcreativeblock()));
+    ICOMMAND(creativehotbarselect, "i", (int *slot),
+    {
+        creativehotbarslot = clamp(*slot, 0, CREATIVE_HOTBAR_SLOTS - 1);
+    });
+    ICOMMAND(creativehotbarassign, "ii", (int *slot, int *item),
+    {
+        const int count = numworldcubes() + numworldscatters();
+        if(*slot >= 0 && *slot < CREATIVE_HOTBAR_SLOTS)
+            creativehotbar[*slot] = *item >= 0 && *item < count ? *item : -1;
+    });
+    ICOMMAND(creativehotbarswap, "ii", (int *from, int *to),
+    {
+        if(*from >= 0 && *from < CREATIVE_HOTBAR_SLOTS && *to >= 0 && *to < CREATIVE_HOTBAR_SLOTS)
+            swap(creativehotbar[*from], creativehotbar[*to]);
+    });
+    ICOMMAND(getcreativeblock, "", (), intret(selectedcreativeblock()));
+    ICOMMAND(getcreativehotbarslot, "i", (int *slot),
+    {
+        intret(*slot >= 0 && *slot < CREATIVE_HOTBAR_SLOTS ? creativehotbar[*slot] : -1);
+    });
+    ICOMMAND(getcreativehotbarselected, "", (), intret(clampcreativehotbarslot()));
+    ICOMMAND(creativeactive, "", (), intret(creativeenabled() ? 1 : 0));
     ICOMMAND(creativeblockcount, "", (), intret(numworldcubes() + numworldscatters()));
     ICOMMAND(creativecubecount, "", (), intret(numworldcubes()));
     ICOMMAND(creativeblockslot, "i", (int *index), intret(*index < numworldcubes() ? getworldcubeslot(*index) : getworldcubeslot(0)));
@@ -897,61 +933,7 @@ namespace game
     ICOMMAND(creativeblockmodel, "i", (int *index), result(getworldscattermodel(*index - numworldcubes())));
     ICOMMAND(creativeblockicon, "i", (int *index), result(*index < numworldcubes() ? getworldcubetexture(*index) : getworldscattericon(*index - numworldcubes())));
 
-    static void hudtexquad(float x1, float y1, float x2, float y2, float x3, float y3, float x4, float y4)
-    {
-        gle::begin(GL_QUADS);
-        gle::attribf(x1, y1); gle::attribf(0, 0);
-        gle::attribf(x2, y2); gle::attribf(1, 0);
-        gle::attribf(x3, y3); gle::attribf(1, 1);
-        gle::attribf(x4, y4); gle::attribf(0, 1);
-        gle::end();
-    }
-
-    static void hudrect(float x, float y, float w, float h)
-    {
-        hudtexquad(x, y, x + w, y, x + w, y + h, x, y + h);
-    }
-
-    static void drawcreativehotbar(int w, int h)
-    {
-        int count = numworldcubes() + numworldscatters();
-        if(count <= 0) return;
-
-        int selected = clampcreativeblock();
-        float cell = min(w, h) / 13.5f, gap = cell * 0.08f,
-              total = count * cell + (count - 1) * gap,
-              x = (w - total) * 0.5f, y = h - cell - 18;
-
-        gle::defvertex(2);
-        gle::deftexcoord0();
-        resethudshader();
-        loopi(count)
-        {
-            settexture("media/texture/base/white.png", 3);
-            if(i == selected) gle::colorf(0.92f, 0.78f, 0.28f, 0.96f);
-            else gle::colorf(0.08f, 0.08f, 0.08f, 0.72f);
-            hudrect(x - 4, y - 4, cell + 8, cell + 8);
-
-            settexture(i < numworldcubes() ? getworldcubetexture(i)
-                                          : getworldscattericon(i - numworldcubes()), 3);
-            gle::colorf(1, 1, 1, 1);
-            hudrect(x, y, cell, cell);
-            x += cell + gap;
-        }
-
-        const char *name = selected < numworldcubes() ? getworldcubename(selected) : getworldscattername(selected - numworldcubes());
-        float textscale = 0.55f, textx = (w - text_width(name) * textscale) * 0.5f;
-        pushhudtranslate(textx, y - 42, textscale);
-        draw_text(name, 0, 0);
-        pophudmatrix();
-        gle::colorf(1, 1, 1, 1);
-    }
-
-    void gameplayhud(int w, int h)
-    {
-        if(!creativeenabled()) return;
-        drawcreativehotbar(w, h);
-    }
+    void gameplayhud(int w, int h) {}
     bool canjump() { return true; }
     bool cancrouch() { return true; }
     bool allowmove(physent *d) { return true; }
@@ -1094,7 +1076,8 @@ namespace game
         if(d->crouching) flags |= 1<<0;
         if(d->renderattacking) flags |= 1<<1;
         if(d->renderplacetoggle) flags |= 1<<2;
-        if(creativeenabled() && numworldcubes() + numworldscatters() > 0) flags |= uint(clampcreativeblock() + 1)<<8;
+        const int selected = selectedcreativeblock();
+        if(creativeenabled() && selected >= 0) flags |= uint(selected + 1)<<8;
         if(vel > 0xFF) flags |= 1<<3;
         if(fall > 0)
         {

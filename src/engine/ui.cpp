@@ -4,6 +4,9 @@
 namespace UI
 {
     float cursorx = 0.499f, cursory = 0.499f;
+    static bool dragreleased = false;
+    static float dragsourcex = 0.0f, dragsourcey = 0.0f, dragreleasex = 0.0f, dragreleasey = 0.0f;
+    static int dragreleasemillis = 0;
 
     static void quads(float x, float y, float w, float h, float tx = 0, float ty = 0, float tw = 1, float th = 1)
     {
@@ -127,6 +130,7 @@ namespace UI
         STATE_SCROLL_UP   = 1<<10,
         STATE_SCROLL_DOWN = 1<<11,
         STATE_HIDDEN      = 1<<12,
+        STATE_DROP        = 1<<13,
 
         STATE_HOLD_MASK = STATE_HOLD | STATE_ALT_HOLD | STATE_ESC_HOLD
     };
@@ -426,7 +430,8 @@ namespace UI
             DOSTATE(STATE_ESC_PRESS, escpress) \
             DOSTATE(STATE_ESC_RELEASE, escrelease) \
             DOSTATE(STATE_SCROLL_UP, scrollup) \
-            DOSTATE(STATE_SCROLL_DOWN, scrolldown)
+            DOSTATE(STATE_SCROLL_DOWN, scrolldown) \
+            DOSTATE(STATE_DROP, drop)
 
         bool setstate(int state, float cx, float cy, int mask = 0, bool inside = true, int setflags = 0)
         {
@@ -1275,6 +1280,37 @@ namespace UI
         bool target(float cx, float cy)
         {
             return true;
+        }
+    };
+
+    struct DragSource : Target
+    {
+        static const char *typestr() { return "#DragSource"; }
+        const char *gettype() const { return typestr(); }
+
+        void press(float cx, float cy)
+        {
+            Window *owner = NULL;
+            for(Object *o = parent; o; o = o->parent) if(o->istype<Window>())
+            {
+                owner = (Window *)o;
+                break;
+            }
+
+            const float aspect = hudw / float(hudh);
+            if(owner && owner->pw > 0 && owner->ph > 0)
+            {
+                dragsourcex = cursorx * aspect + (w * 0.5f - cx) * aspect / owner->pw;
+                dragsourcey = cursory + (h * 0.5f - cy) / owner->ph;
+            }
+            else
+            {
+                dragsourcex = cursorx * aspect;
+                dragsourcey = cursory;
+            }
+            dragsourcex = clamp(dragsourcex, 0.0f, aspect);
+            dragsourcey = clamp(dragsourcey, 0.0f, 1.0f);
+            dragreleased = false;
         }
     };
 
@@ -3239,6 +3275,9 @@ namespace UI
     ICOMMAND(uitarget, "ffe", (float *minw, float *minh, uint *children),
         BUILD(Target, o, o->setup(*minw, *minh), children));
 
+    ICOMMAND(uidragsource, "ffe", (float *minw, float *minh, uint *children),
+        BUILD(DragSource, o, o->setup(*minw, *minh), children));
+
     ICOMMAND(uiclip, "ffe", (float *clipw, float *cliph, uint *children),
         BUILD(Clipper, o, o->setup(*clipw, *cliph), children));
 
@@ -3406,6 +3445,9 @@ namespace UI
     ICOMMAND(uiimage, "sffe", (char *texname, float *minw, float *minh, uint *children),
         BUILD(Image, o, o->setup(textureload(texname, 3, true, false), *minw, *minh), children));
 
+    ICOMMAND(uiworldimage, "sffe", (char *texname, float *minw, float *minh, uint *children),
+        BUILD(Image, o, o->setup(textureload(texname, 3, true, false, true), *minw, *minh), children));
+
     ICOMMAND(uistretchedimage, "sffe", (char *texname, float *minw, float *minh, uint *children),
         BUILD(StretchedImage, o, o->setup(textureload(texname, 3, true, false), *minw, *minh), children));
 
@@ -3480,6 +3522,36 @@ namespace UI
         else x = y = 0.5f;
     }
 
+    ICOMMAND(uicursorx, "f", (float *margin),
+    {
+        const float aspect = hudw / float(hudh);
+        const float safe = clamp(*margin, 0.0f, aspect * 0.5f);
+        floatret(clamp(cursorx * aspect, safe, aspect - safe));
+    });
+    ICOMMAND(uicursory, "f", (float *margin),
+    {
+        const float safe = clamp(*margin, 0.0f, 0.5f);
+        floatret(clamp(cursory, safe, 1.0f - safe));
+    });
+    ICOMMAND(uidragreleased, "", (), intret(dragreleased ? 1 : 0));
+    ICOMMAND(uidragreturnprogress, "i", (int *duration),
+    {
+        floatret(clamp((totalmillis - dragreleasemillis) / float(max(*duration, 1)), 0.0f, 1.0f));
+    });
+    ICOMMAND(uidragreturnx, "i", (int *duration),
+    {
+        float progress = clamp((totalmillis - dragreleasemillis) / float(max(*duration, 1)), 0.0f, 1.0f);
+        progress = progress * progress * (3.0f - 2.0f * progress);
+        floatret(dragreleasex + (dragsourcex - dragreleasex) * progress);
+    });
+    ICOMMAND(uidragreturny, "i", (int *duration),
+    {
+        float progress = clamp((totalmillis - dragreleasemillis) / float(max(*duration, 1)), 0.0f, 1.0f);
+        progress = progress * progress * (3.0f - 2.0f * progress);
+        floatret(dragreleasey + (dragsourcey - dragreleasey) * progress);
+    });
+    ICOMMAND(uidragfinish, "", (), { dragreleased = false; });
+
     void resetcursor()
     {
         cursorx = cursory = 0.5f;
@@ -3514,6 +3586,14 @@ namespace UI
             }
             else if(hold)
             {
+                if(action == STATE_RELEASE)
+                {
+                    dragreleased = true;
+                    dragreleasex = cursorx * hudw / float(hudh);
+                    dragreleasey = cursory;
+                    dragreleasemillis = totalmillis;
+                    world->setstate(STATE_DROP, cursorx, cursory, 0, true, STATE_DROP);
+                }
                 if(world->setstate(action, cursorx, cursory, hold, true, action))
                 {
                     world->clearstate(hold);
@@ -3582,4 +3662,3 @@ namespace UI
         return world->abovehud();
     }
 }
-
