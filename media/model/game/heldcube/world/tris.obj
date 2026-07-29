@@ -1,0 +1,35 @@
+# Third-person 8x8x8 held-block mesh. The OBJ loader maps Y to engine Z.
+v 4 0 -4
+v 4 0 4
+v 4 8 -4
+v 4 8 4
+v -4 0 -4
+v -4 0 4
+v -4 8 -4
+v -4 8 4
+
+vt 0 0
+vt 1 0
+vt 1 1
+vt 0 1
+
+vn 1 0 0
+vn -1 0 0
+vn 0 -1 0
+vn 0 0 1
+vn 0 1 0
+vn 0 0 -1
+
+g side
+# The world-held pose is flipped 180 degrees relative to the HUD pose, so
+# normalize each face's V coordinate toward the geometric top of the cube.
+f 4/4/1 2/1/1 1/2/1 3/3/1
+f 6/1/2 8/4/2 7/3/2 5/2/2
+f 8/4/4 6/1/4 2/2/4 4/3/4
+f 5/1/6 7/4/6 3/3/6 1/2/6
+
+g bottom
+f 6/1/3 5/2/3 1/3/3 2/4/3
+
+g top
+f 7/1/5 8/2/5 4/3/5 3/4/5

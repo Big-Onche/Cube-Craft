@@ -7,11 +7,11 @@ model *loadingmodel = NULL;
 
 struct activemodelskinoverride
 {
-    const char *mesh;
+    string mesh;
     Texture *texture;
 };
 
-static vector<activemodelskinoverride> activemodelskins;
+static vector<activemodelskinoverride> activemodelskins, batchedmodelskins;
 
 static Texture *lookupmodelskinoverride(const char *mesh)
 {
@@ -19,6 +19,16 @@ static Texture *lookupmodelskinoverride(const char *mesh)
     loopv(activemodelskins)
         if(!strcmp(mesh, activemodelskins[i].mesh)) return activemodelskins[i].texture;
     return NULL;
+}
+
+static void addmodelskinoverrides(vector<activemodelskinoverride> &dest, const modelskinoverride *skins,int numskins)
+{
+    loopi(numskins) if(skins[i].mesh && skins[i].texture)
+    {
+        activemodelskinoverride &active = dest.add();
+        copystring(active.mesh, skins[i].mesh);
+        active.texture = textureload(skins[i].texture, 0, true, true, true);
+    }
 }
 
 #include "ragdoll.h"
@@ -524,7 +534,7 @@ struct batchedmodel
     vec pos, center;
     float radius, yaw, pitch, roll, sizescale;
     vec4 colorscale;
-    int anim, basetime, basetime2, flags, attached;
+    int anim, basetime, basetime2, flags, attached, skins, numskins;
     union
     {
         int visible;
@@ -547,6 +557,7 @@ void resetmodelbatches()
     batchedmodels.setsize(0);
     batches.setsize(0);
     modelattached.setsize(0);
+    batchedmodelskins.setsize(0);
 }
 
 void addbatchedmodel(model *m, batchedmodel &bm, int idx)
@@ -575,6 +586,9 @@ static inline void renderbatchedmodel(model *m, const batchedmodel &b)
 {
     modelattach *a = NULL;
     if(b.attached>=0) a = &modelattached[b.attached];
+    activemodelskins.setsize(0);
+    if(b.skins >= 0)
+        loopi(b.numskins) activemodelskins.add(batchedmodelskins[b.skins + i]);
 
     int anim = b.anim;
     if(shadowmapping > SM_REFLECT)
@@ -587,6 +601,7 @@ static inline void renderbatchedmodel(model *m, const batchedmodel &b)
     }
 
     m->render(anim, b.basetime, b.basetime2, b.pos, b.yaw, b.pitch, b.roll, b.d, a, b.sizescale, b.colorscale);
+    activemodelskins.setsize(0);
 }
 
 VAR(maxmodelradiusdistance, 10, 200, 1000);
@@ -875,7 +890,7 @@ void rendertransparentmodelbatches(int stencil)
 }
 
 static occludequery *modelquery = NULL;
-static int modelquerybatches = -1, modelquerymodels = -1, modelqueryattached = -1;
+static int modelquerybatches = -1, modelquerymodels = -1, modelqueryattached = -1, modelqueryskins = -1;
 
 void startmodelquery(occludequery *query)
 {
@@ -883,6 +898,7 @@ void startmodelquery(occludequery *query)
     modelquerybatches = batches.length();
     modelquerymodels = batchedmodels.length();
     modelqueryattached = modelattached.length();
+    modelqueryskins = batchedmodelskins.length();
 }
 
 void endmodelquery()
@@ -917,6 +933,7 @@ void endmodelquery()
     batches.setsize(modelquerybatches);
     batchedmodels.setsize(modelquerymodels);
     modelattached.setsize(modelqueryattached);
+    batchedmodelskins.setsize(modelqueryskins);
     disableaamask();
 }
 
@@ -977,6 +994,8 @@ void rendermapmodel(int idx, int anim, const vec &o, float yaw, float pitch, flo
     b.visible = visible;
     b.d = NULL;
     b.attached = -1;
+    b.skins = -1;
+    b.numskins = 0;
     addbatchedmodel(m, b, batchedmodels.length()-1);
 }
 
@@ -1067,6 +1086,8 @@ hasboundbox:
     b.visible = 0;
     b.d = d;
     b.attached = a ? modelattached.length() : -1;
+    b.skins = -1;
+    b.numskins = 0;
     if(a) for(int i = 0;; i++) { modelattached.add(a[i]); if(!a[i].tag) break; }
     addbatchedmodel(m, b, batchedmodels.length()-1);
 }
@@ -1090,15 +1111,23 @@ bool modeltagposition(const char *mdl, const char *tag, vec &position, const vec
 
 void rendermodelwithskins(const char *mdl, int anim, const vec &o, float yaw, float pitch, float roll, int flags, dynent *d, const modelskinoverride *skins, int numskins, float size, const vec4 &color)
 {
-    activemodelskins.setsize(0);
-    loopi(numskins) if(skins[i].mesh && skins[i].texture)
+    if(flags&MDL_NOBATCH)
     {
-        activemodelskinoverride &active = activemodelskins.add();
-        active.mesh = skins[i].mesh;
-        active.texture = textureload(skins[i].texture, 0, true, true, true);
+        activemodelskins.setsize(0);
+        addmodelskinoverrides(activemodelskins, skins, numskins);
+        rendermodel(mdl, anim, o, yaw, pitch, roll, flags, d, NULL, 0, 0, size, color);
+        activemodelskins.setsize(0);
+        return;
     }
-    rendermodel(mdl, anim, o, yaw, pitch, roll, flags | MDL_NOBATCH, d, NULL, 0, 0, size, color);
-    activemodelskins.setsize(0);
+
+    const int firstmodel = batchedmodels.length();
+    rendermodel(mdl, anim, o, yaw, pitch, roll, flags, d, NULL, 0, 0, size, color);
+    if(batchedmodels.length() <= firstmodel) return;
+
+    batchedmodel &b = batchedmodels.last();
+    b.skins = batchedmodelskins.length();
+    addmodelskinoverrides(batchedmodelskins, skins, numskins);
+    b.numskins = batchedmodelskins.length() - b.skins;
 }
 
 int intersectmodel(const char *mdl, int anim, const vec &pos, float yaw, float pitch, float roll, const vec &o, const vec &ray, float &dist, int mode, dynent *d, modelattach *a, int basetime, int basetime2, float size)

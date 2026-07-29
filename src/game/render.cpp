@@ -24,6 +24,7 @@ namespace game
     };
 
     static const char * const heldcubemodel = "game/heldcube";
+    static const char * const worldheldcubemodel = "game/heldcube/world";
 
     // The split meshes retain the coordinates of the original 30-unit model.
     // Their configs recenter articulated pieces on these joint heights.
@@ -39,19 +40,17 @@ namespace game
     static const float HUD_ARM_FORWARD = 6.0f, HUD_ARM_SIDE = 12.0f, HUD_ARM_DOWN = 8.0f;
     static const float HUD_ARM_IDLE_PITCH = -90.0f, HUD_ARM_ROLL = -3.0f;
     static const float HUD_ARM_GAIT_SCALE = 0.45f, HUD_ARM_BOB = 0.35f;
-    static const float HUD_ARM_LENGTH = 11.25f;
-    static const float HUD_CUBE_GRIP_FORWARD = 1.2f, HUD_CUBE_GRIP_SIDE = -0.5f,
-                       HUD_CUBE_GRIP_UP = 1.25f, HUD_CUBE_SIZE = 0.8f;
+    static const float HELD_ARM_PITCH = 50.0f;
+    static const float HUD_HELD_CUBE_SIZE = 0.7f, HUD_HELD_SCATTER_SIZE = 0.5f;
+    static const float WORLD_HELD_CUBE_SIZE = 0.75f, WORLD_HELD_SCATTER_SIZE = 0.55f;
 
     VARP(hudgun, 0, 1, 1);
-
-    static vec renderedheldtorchemitter;
-    static int renderedheldtorchemittermillis = -1;
 
     void preloadplayermodels()
     {
         loopi(NUM_PLAYER_PARTS) preloadmodel(playermodels[i]);
         preloadmodel(heldcubemodel);
+        preloadmodel(worldheldcubemodel);
     }
 
     static void renderpart(gameent *d, int part, const vec &origin, float yaw, float pitch, float roll, int flags)
@@ -174,6 +173,16 @@ namespace game
         return d->renderbodyyaw;
     }
 
+    static int heldcreativeitem(const gameent *d)
+    {
+        if(!d || !m_creative || d->state != CS_ALIVE) return -1;
+        const int selected = d == player1 ? (editmode ? -1 : selectedcreativeblock()) : d->selectedcreative,
+                  count = numworldcubes() + numworldscatters();
+        return selected >= 0 && selected < count ? selected : -1;
+    }
+
+    static void renderhelditem(gameent *d, int selected, const vec &origin, float yaw, float pitch, float roll, int flags, bool hud);
+
     static void renderplayer(gameent *d, bool local)
     {
         if(!d || d->state == CS_SPECTATOR || (!local && d->smoothmillis < 0)) return;
@@ -217,10 +226,19 @@ namespace game
 
         renderpart(d, PART_TORSO, hips, bodyyaw, torsopitch, 0, flags);
         renderpart(d, PART_HEAD, neck, headyaw, clamp(d->pitch, -80.0f, 80.0f) + sinf(phase * 2.0f) * 1.5f * movement, 0, flags);
-        renderpart(d, PART_LEFT_ARM, leftshoulder, bodyyaw, armpitch + (actionactive ? actionpitch : -forwardstride * ARM_SWING), actionactive ? 0 : -strafestride * ARM_STRAFE_SWING, flags);
-        renderpart(d, PART_RIGHT_ARM, rightshoulder, bodyyaw, armpitch + forwardstride * ARM_SWING, strafestride * ARM_STRAFE_SWING, flags);
+        const int selected = heldcreativeitem(d);
+        const float rightarmpitch = armpitch + (selected >= 0 ? HELD_ARM_PITCH : 0) + (actionactive ? actionpitch : forwardstride * ARM_SWING), rightarmroll = actionactive ? 0 : strafestride * ARM_STRAFE_SWING;
+        renderpart(d, PART_LEFT_ARM, leftshoulder, bodyyaw, armpitch - forwardstride * ARM_SWING, -strafestride * ARM_STRAFE_SWING, flags);
+        renderpart(d, PART_RIGHT_ARM, rightshoulder, bodyyaw, rightarmpitch, rightarmroll, flags);
         renderpart(d, PART_LEFT_LEG, lefthip, bodyyaw, legpitch + forwardstride * LEG_SWING, strafestride * LEG_STRAFE_SWING, flags);
         renderpart(d, PART_RIGHT_LEG, righthip, bodyyaw, legpitch - forwardstride * LEG_SWING, -strafestride * LEG_STRAFE_SWING, flags);
+
+        if(selected >= 0)
+        {
+            vec hand;
+            if(modeltagposition(playermodels[PART_RIGHT_ARM], "tag_hand", hand, rightshoulder, bodyyaw, rightarmpitch, rightarmroll))
+                renderhelditem(d, selected, hand, bodyyaw, rightarmpitch + 270.0f, rightarmroll, flags, false);
+        }
     }
 
     void rendergame()
@@ -229,38 +247,78 @@ namespace game
         loopv(players) renderplayer(players[i], players[i] == player1);
     }
 
-    static void renderhudarm(int part, float side, float pitch, float roll, float bob)
+    struct helditempose
     {
-        vec origin(camera1->o);
-        origin.madd(camdir, HUD_ARM_FORWARD)
-              .madd(camright, side * HUD_ARM_SIDE)
-              .madd(camup, -HUD_ARM_DOWN + bob);
+        vec origin;
+        float yaw, pitch, roll;
+    };
 
-        rendermodel(playermodels[part], ANIM_MAPMODEL | ANIM_LOOP, origin, camera1->yaw, camera1->pitch + pitch, roll, MDL_NOBATCH | MDL_NOSHADOW, player1);
+    static bool hudrightarmpose(gameent *d, helditempose &arm, helditempose &item)
+    {
+        const float speed = horizontalmeterspersecond(d),
+                    movement = movementamount(d, speed),
+                    crouch = updatecrouch(d, true),
+                    phase = updatestridephase(d, speed),
+                    stride = sinf(phase) * movement * (1.0f - 0.55f * crouch),
+                    inputmagnitude = sqrtf(float(d->move*d->move + d->strafe*d->strafe)),
+                    forwardgait = inputmagnitude > 0 ? fabsf(d->move) / inputmagnitude : 1.0f,
+                    strafegait = inputmagnitude > 0 ? fabsf(d->strafe) / inputmagnitude : 0.0f,
+                    strafedirection = d->strafe < 0 ? -1.0f : 1.0f,
+                    forwardstride = stride * forwardgait,
+                    strafestride = stride * strafegait * strafedirection,
+                    actionpitch = playerarmactionpitch(d),
+                    basepitch = HUD_ARM_IDLE_PITCH + CROUCH_ARM_PITCH * crouch,
+                    bob = (0.5f - fabsf(cosf(phase))) * HUD_ARM_BOB * movement * (1.0f - 0.65f * crouch),
+                    relativepitch = basepitch + (actionpitch >= 0 ? actionpitch : -forwardstride * ARM_SWING * HUD_ARM_GAIT_SCALE);
+
+        arm.origin = camera1->o;
+        arm.origin.madd(camdir, HUD_ARM_FORWARD).madd(camright, HUD_ARM_SIDE).madd(camup, -HUD_ARM_DOWN + bob);
+        arm.yaw = camera1->yaw;
+        arm.pitch = camera1->pitch + relativepitch;
+        arm.roll = 180.0f + HUD_ARM_ROLL + (actionpitch >= 0 ? 0 : -strafestride * ARM_STRAFE_SWING * HUD_ARM_GAIT_SCALE);
+
+        item.yaw = camera1->yaw;
+        item.pitch = camera1->pitch - max(actionpitch, 0.0f) * 0.35f;
+        item.roll = 0;
+        return modeltagposition(playermodels[PART_RIGHT_ARM], "tag_hand", item.origin, arm.origin, arm.yaw, arm.pitch, arm.roll);
     }
 
-    static vec hudarmhand(float side, float pitch, float roll, float bob)
+    static bool worldhelditempose(gameent *d, helditempose &item)
     {
-        vec hand(camera1->o);
-        hand.madd(camdir, HUD_ARM_FORWARD)
-            .madd(camright, side * HUD_ARM_SIDE)
-            .madd(camup, -HUD_ARM_DOWN + bob);
+        const bool local = d == player1;
+        const float speed = horizontalmeterspersecond(d),
+                    movement = movementamount(d, speed),
+                    crouch = updatecrouch(d, local),
+                    phase = updatestridephase(d, speed),
+                    stride = sinf(phase) * movement * (1.0f - 0.55f * crouch),
+                    inputmagnitude = sqrtf(float(d->move*d->move + d->strafe*d->strafe)),
+                    forwardgait = inputmagnitude > 0 ? fabsf(d->move) / inputmagnitude : 1.0f,
+                    strafegait = inputmagnitude > 0 ? fabsf(d->strafe) / inputmagnitude : 0.0f,
+                    strafedirection = d->strafe < 0 ? -1.0f : 1.0f,
+                    forwardstride = stride * forwardgait,
+                    strafestride = stride * strafegait * strafedirection,
+                    bob = fabsf(cosf(phase)) * 0.45f * movement * (1.0f - 0.65f * crouch),
+                    bodyyaw = updatebodyyaw(d, movement),
+                    torsopitch = CROUCH_TORSO_PITCH * crouch,
+                    actionpitch = playerarmactionpitch(d);
 
-        vec reach(0, 0, -HUD_ARM_LENGTH);
-        reach.rotate_around_y(-roll * RAD)
-             .rotate_around_x((camera1->pitch + pitch) * RAD)
-             .rotate_around_z(camera1->yaw * RAD);
+        vec hips = d->feetpos(bob).addz(HIP_HEIGHT - CROUCH_HIP_DROP * crouch);
+        vec shoulderoffset(0, 0, SHOULDER_HEIGHT - HIP_HEIGHT);
+        shoulderoffset.rotate_around_x(torsopitch * RAD).rotate_around_z(bodyyaw * RAD);
+        vec lateral(1, 0, 0);
+        lateral.rotate_around_z(bodyyaw * RAD);
+        const vec shoulder = vec(hips).add(shoulderoffset).madd(lateral, ARM_OFFSET);
 
-        return hand.add(reach);
+        const float armpitch = CROUCH_ARM_PITCH * crouch + HELD_ARM_PITCH + (actionpitch >= 0 ? actionpitch : forwardstride * ARM_SWING),
+                    armroll = actionpitch >= 0 ? 0 : strafestride * ARM_STRAFE_SWING;
+        const bool tagged = modeltagposition(playermodels[PART_RIGHT_ARM], "tag_hand", item.origin, shoulder, bodyyaw, armpitch, armroll);
+        item.yaw = bodyyaw;
+        item.pitch = armpitch + 270.0f;
+        item.roll = armroll;
+        return tagged;
     }
 
-    static bool holdinglefthand(const gameent *)
-    {
-        // Keep the off-hand model path ready for a future left-hand item slot.
-        return false;
-    }
-
-    static void renderheldcube(int selected, float armpitch, float armroll, float bob, float actionpitch)
+    static void renderheldcube(gameent *d, int selected, const helditempose &pose, int flags, float size, bool hud)
     {
         string toptexture, sidetexture, bottomtexture;
         copystring(toptexture, getworldcubetexture(selected, WORLD_CUBE_TOP));
@@ -273,83 +331,43 @@ namespace game
             modelskinoverride("bottom", bottomtexture)
         };
 
-        float swingpitch = max(actionpitch, 0.0f);
-        vec origin = hudarmhand(1, armpitch, armroll, bob);
-        origin.madd(camdir, HUD_CUBE_GRIP_FORWARD)
-              .madd(camright, HUD_CUBE_GRIP_SIDE)
-              .madd(camup, HUD_CUBE_GRIP_UP);
-
-        rendermodelwithskins(heldcubemodel, ANIM_MAPMODEL | ANIM_LOOP, origin, camera1->yaw, camera1->pitch - swingpitch * 0.35f, 0, MDL_NOSHADOW, player1, skins, 3, HUD_CUBE_SIZE);
+        rendermodelwithskins(hud ? heldcubemodel : worldheldcubemodel, ANIM_MAPMODEL | ANIM_LOOP, pose.origin, pose.yaw, pose.pitch, pose.roll, flags, d, skins, 3, size);
     }
 
-    static void renderheldscatter(int selected, float armpitch, float armroll, float bob, float actionpitch)
+    static void renderheldscatter(gameent *d, int selected, const helditempose &pose, int flags, float size)
     {
-        const bool torch = isworldtorch(selected);
-        if(torch) renderedheldtorchemittermillis = -1;
-
         const char *model = getworldscattermodel(selected);
         if(!model[0]) return;
-        vec origin = hudarmhand(1, armpitch, armroll, bob);
-        origin.madd(camdir, HUD_CUBE_GRIP_FORWARD).madd(camright, HUD_CUBE_GRIP_SIDE).madd(camup, HUD_CUBE_GRIP_UP);
-
-        vec emitter(FLT_MAX, FLT_MAX, FLT_MAX);
-        modelattach attachments[] =
-        {
-            modelattach("tag_emitter", &emitter),
-            modelattach()
-        };
-        rendermodel(model, ANIM_MAPMODEL | ANIM_LOOP, origin, camera1->yaw, camera1->pitch - max(actionpitch, 0.0f) * 0.35f, 0, MDL_NOBATCH | MDL_NOSHADOW, player1, torch ? attachments : NULL, 0, 0, 0.45f);
-        if(torch && emitter.x != FLT_MAX)
-        {
-            renderedheldtorchemitter = emitter;
-            renderedheldtorchemittermillis = totalmillis;
-        }
+        rendermodel(model, ANIM_MAPMODEL | ANIM_LOOP, pose.origin, pose.yaw, pose.pitch, pose.roll, flags, d, NULL, 0, 0, size);
     }
 
-    bool heldtorchemitterposition(vec &position)
+    static void renderhelditem(gameent *d, int selected, const vec &origin, float yaw, float pitch, float roll, int flags, bool hud)
     {
-        if(!hudgun || editmode || !m_creative || !player1 || player1->state != CS_ALIVE || isthirdperson())
-            return false;
+        helditempose pose;
+        pose.origin = origin;
+        pose.yaw = yaw;
+        pose.pitch = pitch;
+        pose.roll = roll;
+        const int cubecount = numworldcubes();
+        if(selected < cubecount) renderheldcube(d, selected, pose, flags, hud ? HUD_HELD_CUBE_SIZE : WORLD_HELD_CUBE_SIZE, hud);
+        else renderheldscatter(d, selected - cubecount, pose, flags, hud ? HUD_HELD_SCATTER_SIZE : WORLD_HELD_SCATTER_SIZE);
+    }
 
-        const int selected = selectedcreativeblock(), cubecount = numworldcubes();
+    bool heldtorchemitterposition(gameent *d, vec &position)
+    {
+        const int selected = heldcreativeitem(d), cubecount = numworldcubes();
         if(selected < cubecount || !isworldtorch(selected - cubecount)) return false;
+        const bool hud = d == player1 && !isthirdperson();
+        if(hud && !hudgun) return false;
 
         const char *model = getworldscattermodel(selected - cubecount);
         if(!model[0]) return false;
 
-        // renderheldscatter records the tag produced by the same model render,
-        // after this frame's stride/crouch state has been updated.
-        if(renderedheldtorchemittermillis == totalmillis)
-        {
-            position = calcavatardepthpos(renderedheldtorchemitter);
-            return true;
-        }
-
-        const float speed = horizontalmeterspersecond(player1),
-                    movement = movementamount(player1, speed),
-                    crouch = player1->rendercrouch,
-                    stride = sinf(player1->renderstridephase) * movement * (1.0f - 0.55f * crouch),
-                    inputmagnitude = sqrtf(float(player1->move*player1->move + player1->strafe*player1->strafe)),
-                    forwardgait = inputmagnitude > 0 ? fabsf(player1->move) / inputmagnitude : 1.0f,
-                    strafegait = inputmagnitude > 0 ? fabsf(player1->strafe) / inputmagnitude : 0.0f,
-                    strafedirection = player1->strafe < 0 ? -1.0f : 1.0f,
-                    forwardstride = stride * forwardgait,
-                    strafestride = stride * strafegait * strafedirection,
-                    actionpitch = playerarmactionpitch(player1),
-                    basepitch = HUD_ARM_IDLE_PITCH + CROUCH_ARM_PITCH * crouch,
-                    bob = (0.5f - fabsf(cosf(player1->renderstridephase))) * HUD_ARM_BOB * movement * (1.0f - 0.65f * crouch),
-                    armpitch = basepitch + (actionpitch >= 0 ? actionpitch : -forwardstride * ARM_SWING * HUD_ARM_GAIT_SCALE),
-                    armroll = 180.0f + HUD_ARM_ROLL + (actionpitch >= 0 ? 0 : -strafestride * ARM_STRAFE_SWING * HUD_ARM_GAIT_SCALE);
-
-        vec origin = hudarmhand(1, armpitch, armroll, bob);
-        origin.madd(camdir, HUD_CUBE_GRIP_FORWARD).madd(camright, HUD_CUBE_GRIP_SIDE).madd(camup, HUD_CUBE_GRIP_UP);
-        if(!modeltagposition(model, "tag_emitter", position, origin, camera1->yaw, camera1->pitch - max(actionpitch, 0.0f) * 0.35f, 0, 0.45f))
+        helditempose item, arm;
+        if(!(hud ? hudrightarmpose(d, arm, item) : worldhelditempose(d, item)) || !modeltagposition(model, "tag_emitter", position, item.origin, item.yaw, item.pitch, item.roll, hud ? HUD_HELD_SCATTER_SIZE : WORLD_HELD_SCATTER_SIZE))
             return false;
 
-        // The held model uses avatarfov and avatardepth, while particles and
-        // dynamic lights use the world projection. Preserve the complete
-        // avatar clip position so the effects align and depth-test against it.
-        position = calcavatardepthpos(position);
+        if(hud) position = calcavatardepthpos(position);
         return true;
     }
 
@@ -357,36 +375,13 @@ namespace game
     {
         if(!hudgun || editmode || !player1 || player1->state != CS_ALIVE) return;
 
-        float speed = horizontalmeterspersecond(player1);
-        float movement = movementamount(player1, speed);
-        float crouch = player1->rendercrouch;
-        float stride = sinf(player1->renderstridephase) * movement * (1.0f - 0.55f * crouch);
-        float inputmagnitude = sqrtf(float(player1->move*player1->move + player1->strafe*player1->strafe));
-        float forwardgait = inputmagnitude > 0 ? fabsf(player1->move) / inputmagnitude : 1.0f;
-        float strafegait = inputmagnitude > 0 ? fabsf(player1->strafe) / inputmagnitude : 0.0f;
-        float strafedirection = player1->strafe < 0 ? -1.0f : 1.0f;
-        float forwardstride = stride * forwardgait;
-        float strafestride = stride * strafegait * strafedirection;
-        float actionpitch = playerarmactionpitch(player1);
-        bool actionactive = actionpitch >= 0;
-        float basepitch = HUD_ARM_IDLE_PITCH + CROUCH_ARM_PITCH * crouch;
-        float bob = (0.5f - fabsf(cosf(player1->renderstridephase))) * HUD_ARM_BOB * movement * (1.0f - 0.65f * crouch);
-        float rightarmpitch = basepitch + (actionactive ? actionpitch : -forwardstride * ARM_SWING * HUD_ARM_GAIT_SCALE);
-        float rightarmroll = 180.0f + HUD_ARM_ROLL + (actionactive ? 0 : -strafestride * ARM_STRAFE_SWING * HUD_ARM_GAIT_SCALE);
+        helditempose arm, item;
+        const bool tagged = hudrightarmpose(player1, arm, item);
+        const int flags = MDL_NOBATCH | MDL_NOSHADOW;
+        rendermodel(playermodels[PART_RIGHT_ARM], ANIM_MAPMODEL | ANIM_LOOP, arm.origin, arm.yaw, arm.pitch, arm.roll, flags, player1);
 
-        if(holdinglefthand(player1))
-            renderhudarm(PART_RIGHT_ARM, -1, basepitch + forwardstride * ARM_SWING * HUD_ARM_GAIT_SCALE, 180.0f - HUD_ARM_ROLL + strafestride * ARM_STRAFE_SWING * HUD_ARM_GAIT_SCALE, bob);
-
-        // The exported left-arm mesh is the visually correct right action hand.
-        renderhudarm(PART_LEFT_ARM, 1, rightarmpitch, rightarmroll, bob);
-
-        if(m_creative && numworldcubes() + numworldscatters() > 0)
-        {
-            const int selected = selectedcreativeblock(), cubecount = numworldcubes();
-
-            if(selected < cubecount) renderheldcube(selected, rightarmpitch, rightarmroll, bob, actionpitch);
-            else renderheldscatter(selected - cubecount, rightarmpitch, rightarmroll, bob, actionpitch);
-        }
+        const int selected = heldcreativeitem(player1);
+        if(tagged && selected >= 0) renderhelditem(player1, selected, item.origin, item.yaw, item.pitch, item.roll, flags, true);
     }
 
     void renderplayerpreview(int model, int color, int team, int weap) {}

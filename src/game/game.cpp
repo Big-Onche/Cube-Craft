@@ -927,13 +927,9 @@ namespace game
     bool detachcamera() { return false; }
     bool collidecamera() { return false; }
 
-    static bool heldtorchflame(vec &flame)
+    static bool heldtorchflame(gameent *d, vec &flame)
     {
-        if(!creativeenabled() || !player1) return false;
-        const int selected = clampcreativeblock(), cubecount = numworldcubes();
-        if(selected < cubecount || !isworldtorch(selected - cubecount)) return false;
-
-        return heldtorchemitterposition(flame);
+        return heldtorchemitterposition(d, flame);
     }
 
     static vec heldtorchparticleorigin;
@@ -945,27 +941,43 @@ namespace game
     void adddynlights()
     {
         addworldtorchlights();
-        vec flame;
-        if(!heldtorchflame(flame)) return;
-        adddynlight(flame, 14.0f * CREATIVE_GRID, vec(1.0f, 0.58f, 0.24f));
+        loopv(players)
+        {
+            vec flame;
+            if(heldtorchflame(players[i], flame)) adddynlight(flame, 14.0f * CREATIVE_GRID, vec(1.0f, 0.58f, 0.24f));
+        }
     }
 
     void addparticles()
     {
         addworldtorchparticles();
         heldtorchparticlemillis = -1;
-        vec flame;
-        if(!heldtorchflame(flame))
+        bool hudtorch = false;
+        loopv(players)
+        {
+            gameent *d = players[i];
+            vec flame;
+            if(!heldtorchflame(d, flame)) continue;
+            if(d == player1 && !isthirdperson())
+            {
+                hudtorch = true;
+                heldtorchparticleorigin = flame;
+                heldtorchparticlemillis = lastmillis;
+                regular_particle_hud_flame(PART_HUD_FLAME, flame, 0.07f, 0.7f, 0xFF8628, 1, 2.4f, 9.2f, 220.0f, -100, player1);
+                regular_particle_hud_flame(PART_HUD_SMOKE, flame, 0.09f, 1.1f, 0xAA8C4E, 1, 3.0f, 4.0f, 1100.0f, -250, player1);
+            }
+            else
+            {
+                regular_particle_flame(PART_FLAME, flame, 0.35f, 0.7f, 0xFF8628, 1, 2.4f, 35.0f, 220.0f, -10);
+                regular_particle_flame(PART_SMOKE, flame, 0.45f, 1.1f, 0xAA8C4E, 1, 3.0f, 16.0f, 1100.0f, -25);
+            }
+        }
+        if(!hudtorch)
         {
             if(player1) removetrackedparticles(player1);
             previoushudparticlemillis = hudparticlemovementmillis = -1;
             hudparticlemovement = vec(0, 0, 0);
-            return;
         }
-        heldtorchparticleorigin = flame;
-        heldtorchparticlemillis = lastmillis;
-        regular_particle_hud_flame(PART_HUD_FLAME, flame, 0.07f, 0.7f, 0xFF8628, 1, 2.4f, 9.2f, 220.0f, -100, player1);
-        regular_particle_hud_flame(PART_HUD_SMOKE, flame, 0.09f, 1.1f, 0xAA8C4E, 1, 3.0f, 4.0f, 1100.0f, -250, player1);
     }
 
     static void updatehudparticlemovement(physent *owner, const vec &emitter)
@@ -999,7 +1011,7 @@ namespace game
     {
         if(!owner || owner != player1 || heldtorchparticlemillis != lastmillis) return;
         vec emitter;
-        if(heldtorchemitterposition(emitter)) heldtorchparticleorigin = emitter;
+        if(heldtorchemitterposition(player1, emitter)) heldtorchparticleorigin = emitter;
         updatehudparticlemovement(owner, heldtorchparticleorigin);
         o.madd(hudparticlemovement, age/500.0f);
         const vec localorigin(o), localvelocity(d);
@@ -1032,11 +1044,13 @@ namespace game
         uint vel = min(int(d->vel.magnitude()*DVELF), 0xFFFF),
              fall = min(int(d->falling.magnitude()*DVELF), 0xFFFF);
 
-        // Extended velocity, falling data, and gameclip.
+        // Extended movement data in the low byte; the high bits carry the
+        // selected creative item plus one, leaving zero to mean no held item.
         uint flags = 0;
         if(d->crouching) flags |= 1<<0;
         if(d->renderattacking) flags |= 1<<1;
         if(d->renderplacetoggle) flags |= 1<<2;
+        if(creativeenabled() && numworldcubes() + numworldscatters() > 0) flags |= uint(clampcreativeblock() + 1)<<8;
         if(vel > 0xFF) flags |= 1<<3;
         if(fall > 0)
         {
@@ -1186,6 +1200,8 @@ namespace game
                 d->crouching = flags&(1<<0) ? -1 : 0;
                 bool attacking = (flags&(1<<1)) != 0;
                 bool placetoggle = (flags&(1<<2)) != 0;
+                const uint helditem = flags>>8;
+                d->selectedcreative = helditem ? int(helditem - 1) : -1;
                 if(!d->renderactioninitialized)
                 {
                     d->renderattacking = attacking;

@@ -87,7 +87,7 @@ struct gameent : dynent
     editinfo *edit;
     float deltayaw, deltapitch, deltaroll, newyaw, newpitch, newroll;
     float renderbodyyaw, rendercrouch, renderstridephase, renderattackreleasepitch;
-    int smoothmillis, renderbodyyawmillis, rendercrouchmillis, renderstridemillis,
+    int smoothmillis, renderbodyyawmillis, rendercrouchmillis, renderstridemillis, selectedcreative,
         renderattackmillis, renderattackreleasemillis, renderplacemillis;
     bool renderattacking, renderplacetoggle, renderactioninitialized;
     string name;
@@ -96,7 +96,8 @@ struct gameent : dynent
                 deltayaw(0), deltapitch(0), deltaroll(0), newyaw(0), newpitch(0), newroll(0),
                 renderbodyyaw(0), rendercrouch(0), renderstridephase(0), renderattackreleasepitch(0),
                 smoothmillis(-1), renderbodyyawmillis(-1), rendercrouchmillis(-1),
-                renderstridemillis(-1), renderattackmillis(0), renderattackreleasemillis(-1000),
+                renderstridemillis(-1), selectedcreative(-1), renderattackmillis(0),
+                renderattackreleasemillis(-1000),
                 renderplacemillis(-1000), renderattacking(false), renderplacetoggle(false),
                 renderactioninitialized(false)
     {
@@ -140,7 +141,7 @@ namespace game
 
 #ifndef STANDALONE
     extern void preloadplayermodels();
-    extern bool heldtorchemitterposition(vec &position);
+    extern bool heldtorchemitterposition(gameent *d, vec &position);
 
     namespace environment
     {
