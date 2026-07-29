@@ -24,6 +24,16 @@ namespace entities
 
 namespace game
 {
+    enum
+    {
+        SURVIVAL_HOTBAR_SLOTS = 9,
+        SURVIVAL_INVENTORY_SLOTS = 9,
+        SURVIVAL_USABLE_SLOTS = SURVIVAL_HOTBAR_SLOTS + SURVIVAL_INVENTORY_SLOTS,
+        SURVIVAL_LOCKED_SLOTS = 18,
+        SURVIVAL_TOTAL_SLOTS = SURVIVAL_USABLE_SLOTS + SURVIVAL_LOCKED_SLOTS
+    };
+
+    extern int gamemode;
     extern void parseoptions(vector<const char *> &args);
 
     extern void gamedisconnect(bool cleanup);
@@ -38,6 +48,11 @@ namespace game
     extern void writeclientinfo(stream *f);
     extern void toserver(char *text);
     extern void changemap(const char *name);
+    extern void changemap(const char *name, int mode);
+    extern bool validgamemode(int mode);
+    extern void resetsurvivalinventory();
+    extern void loadsurvivalinventory(const int *items, const int *counts, int slots);
+    extern void savesurvivalinventory(stream *f);
     extern void forceedit(const char *name);
     extern bool ispaused();
     extern int scaletime(int t);

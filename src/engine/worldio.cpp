@@ -188,13 +188,21 @@ struct worldchunkdiffstate
 
 struct worlddiffmetadata
 {
-    int seed, worldgenversion, saveformatversion;
+    int seed, worldgenversion, saveformatversion, gamemode;
+    int inventoryitems[game::SURVIVAL_USABLE_SLOTS],
+        inventorycounts[game::SURVIVAL_USABLE_SLOTS];
     ullong parameterhash;
     bool valid;
 
     worlddiffmetadata()
-        : seed(0), worldgenversion(0), saveformatversion(0), parameterhash(0), valid(false)
+        : seed(0), worldgenversion(0), saveformatversion(0), gamemode(0),
+          parameterhash(0), valid(false)
     {
+        loopi(game::SURVIVAL_USABLE_SLOTS)
+        {
+            inventoryitems[i] = -1;
+            inventorycounts[i] = 0;
+        }
     }
 };
 
@@ -256,6 +264,24 @@ int numworldcubes()
 int getworldcubeslot(int index)
 {
     return worldcubedefinitions.inrange(index) ? worldcubedefinitions[index]->slot : DEFAULT_GEOM;
+}
+
+int getworldcubeindex(int slot)
+{
+    loopv(worldcubedefinitions)
+    {
+        const worldcubedefinition &type = *worldcubedefinitions[i];
+        if(type.slot == slot || type.sideslot == slot || type.bottomslot == slot) return i;
+    }
+    return -1;
+}
+
+int getworldcubeindexat(const ivec &position, int orient)
+{
+    ivec origin;
+    int size;
+    const cube &c = lookupcube(position, 0, origin, size);
+    return getworldcubeindex(c.texture[clamp(orient, 0, 5)]);
 }
 
 const char *getworldcubename(int index)
@@ -6047,6 +6073,7 @@ static bool saveworldmetadata(int chunkx, int chunky)
     activeworldmetadata.worldgenversion = WORLDGEN_VERSION;
     activeworldmetadata.parameterhash = currentworldparameterhash();
     activeworldmetadata.saveformatversion = WORLD_SAVE_FORMAT_VERSION;
+    activeworldmetadata.gamemode = game::gamemode;
     activeworldmetadata.valid = true;
     f->printf("CUBECRAFT_WORLD 3\n");
     f->printf("world_seed %d\n", activeworldmetadata.seed);
@@ -6054,6 +6081,7 @@ static bool saveworldmetadata(int chunkx, int chunky)
     f->printf("worldgen_parameter_hash " WORLD_ULL_FORMAT "\n",
               activeworldmetadata.parameterhash);
     f->printf("save_format_version %d\n", activeworldmetadata.saveformatversion);
+    game::savesurvivalinventory(f);
     f->printf("entry %d %d\n", chunkx, chunky);
     if(player)
     {
@@ -6082,6 +6110,19 @@ static bool loadworldmetadata(const char *folder, int &chunkx, int &chunky,
         if(sscanf(line, "CUBECRAFT_WORLD %d", &metarevision) == 1) continue;
         if(sscanf(line, "world_seed %d", &metadata.seed) == 1) continue;
         if(sscanf(line, "worldgen_version %d", &metadata.worldgenversion) == 1) continue;
+        if(sscanf(line, "game_mode %d", &metadata.gamemode) == 1) continue;
+        int inventoryslot, inventoryitem, inventorycount;
+        if(sscanf(line, "inventory %d %d %d",
+                  &inventoryslot, &inventoryitem, &inventorycount) == 3)
+        {
+            if(inventoryslot >= 0 && inventoryslot < game::SURVIVAL_USABLE_SLOTS &&
+               inventoryitem >= 0 && inventorycount > 0)
+            {
+                metadata.inventoryitems[inventoryslot] = inventoryitem;
+                metadata.inventorycounts[inventoryslot] = inventorycount;
+            }
+            continue;
+        }
         static const char hashprefix[] = "worldgen_parameter_hash ";
         if(!strncmp(line, hashprefix, sizeof(hashprefix) - 1))
         {
@@ -6133,6 +6174,7 @@ static bool loadworldmetadata(const char *folder, int &chunkx, int &chunky,
                 folder, metadata.saveformatversion);
         return false;
     }
+    if(!game::validgamemode(metadata.gamemode)) metadata.gamemode = 0;
     return true;
 }
 
@@ -6362,6 +6404,7 @@ static void createworld(const char *requestedname)
     // The active seed belongs to the currently loaded world and must not be
     // reused implicitly when creating a differently named world.
     const int chosenworldseed = game::getconfiguredworldseed();
+    game::resetsurvivalinventory();
     game::beginlocalworld();
     if(!emptymap(WORLD_RUNTIME_SCALE, true, activechunkname)) return;
     copystring(worldfolder, chosenfolder);
@@ -6444,13 +6487,15 @@ static void loadworldcommand(const char *requested)
 
     game::beginlocalworld();
     game::loadworldseed(metadata.seed);
+    game::loadsurvivalinventory(metadata.inventoryitems, metadata.inventorycounts,
+                                game::SURVIVAL_USABLE_SLOTS);
     activeworldmetadata = metadata;
     conoutf("loading saved world %s with pinned seed %d", folder, metadata.seed);
     defformatstring(entry, "%s/%d_%d", folder, chunkx, chunky);
     requestedworldspawn = spawn;
     hasrequestedworldspawn = true;
     applyloadworlddefaults = true;
-    game::changemap(entry);
+    game::changemap(entry, metadata.gamemode);
     applyloadworlddefaults = false;
     hasrequestedworldspawn = false;
 }

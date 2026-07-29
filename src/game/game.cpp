@@ -33,6 +33,7 @@ namespace game
                 pendingnetworkfrozen = false, pendingnetworkrestoreposition = false;
     static int pendingnetworkseed = 0, pendingnetworktime = 0;
     static vec pendingnetworkposition;
+    static void updatesurvivalbreaking();
 #endif
 
     struct networkedit
@@ -322,6 +323,7 @@ namespace game
     }
 
     void changemap(const char *name) { changemap(name, STARTGAMEMODE); }
+    bool validgamemode(int mode) { return m_valid(mode); }
     void forceedit(const char *name) { if(name && name[0]) copystring(clientmap, name); }
     bool ispaused() { return gamepaused; }
     int scaletime(int t) { return t*100; }
@@ -468,6 +470,9 @@ namespace game
             moveplayer(player1, 10, true);
             updateworldchunks();
         }
+#ifndef STANDALONE
+        updatesurvivalbreaking();
+#endif
         gets2c();
         c2sinfo();
     }
@@ -668,11 +673,21 @@ namespace game
 
     static int creativehotbar[CREATIVE_HOTBAR_SLOTS] = { -1, -1, -1, -1, -1, -1, -1, -1, -1 };
     static int creativehotbarslot = 0;
+    static int survivalitems[SURVIVAL_USABLE_SLOTS] =
+    {
+        -1, -1, -1, -1, -1, -1, -1, -1, -1,
+        -1, -1, -1, -1, -1, -1, -1, -1, -1
+    };
+    static int survivalcounts[SURVIVAL_USABLE_SLOTS] = { 0 };
 
     enum
     {
         CREATIVE_ARM_CYCLE = 300,
-        CREATIVE_ARM_RELEASE = 120
+        CREATIVE_ARM_RELEASE = 120,
+        SURVIVAL_BREAK_MILLIS = 5000,
+        SURVIVAL_SCATTER_BREAK_MILLIS = 250,
+        SURVIVAL_BREAK_STAGES = 8,
+        SURVIVAL_STACK_SIZE = 64
     };
 
     static const float CREATIVE_ARM_PITCH = 70.0f;
@@ -685,14 +700,84 @@ namespace game
 
     int selectedcreativeblock()
     {
-        const int item = creativehotbar[clampcreativehotbarslot()],
+        const int slot = clampcreativehotbarslot(),
+                  item = m_survival ? survivalitems[slot] : creativehotbar[slot],
                   count = numworldcubes() + numworldscatters();
+        if(m_survival && survivalcounts[slot] <= 0) return -1;
         return item >= 0 && item < count ? item : -1;
+    }
+
+    void resetsurvivalinventory()
+    {
+        loopi(SURVIVAL_USABLE_SLOTS)
+        {
+            survivalitems[i] = -1;
+            survivalcounts[i] = 0;
+        }
+        creativehotbarslot = 0;
+    }
+
+    void loadsurvivalinventory(const int *items, const int *counts, int slots)
+    {
+        resetsurvivalinventory();
+        loopi(min(slots, int(SURVIVAL_USABLE_SLOTS)))
+        {
+            if(items[i] < 0 || counts[i] <= 0) continue;
+            survivalitems[i] = items[i];
+            survivalcounts[i] = clamp(counts[i], 1, int(SURVIVAL_STACK_SIZE));
+        }
+    }
+
+    void savesurvivalinventory(stream *f)
+    {
+        if(!f) return;
+        f->printf("game_mode %d\n", gamemode);
+        loopi(SURVIVAL_USABLE_SLOTS) if(survivalitems[i] >= 0 && survivalcounts[i] > 0)
+            f->printf("inventory %d %d %d\n", i, survivalitems[i], survivalcounts[i]);
+    }
+
+    static bool addsurvivalitem(int item)
+    {
+        if(item < 0 || item >= numworldcubes() + numworldscatters()) return false;
+        loopi(SURVIVAL_USABLE_SLOTS)
+        {
+            if(survivalitems[i] != item || survivalcounts[i] >= SURVIVAL_STACK_SIZE) continue;
+            ++survivalcounts[i];
+            return true;
+        }
+        loopi(SURVIVAL_USABLE_SLOTS) if(survivalitems[i] < 0 || survivalcounts[i] <= 0)
+        {
+            survivalitems[i] = item;
+            survivalcounts[i] = 1;
+            return true;
+        }
+        return false;
+    }
+
+    static void consumesurvivalitem()
+    {
+        const int slot = clampcreativehotbarslot();
+        if(survivalcounts[slot] <= 0) return;
+        if(--survivalcounts[slot] <= 0)
+        {
+            survivalitems[slot] = -1;
+            survivalcounts[slot] = 0;
+        }
     }
 
     static bool creativeenabled()
     {
         return m_creative && !editmode && player1 && player1->state == CS_ALIVE;
+    }
+
+    static bool survivalenabled()
+    {
+        return m_survival && !editmode && player1 && player1->state == CS_ALIVE;
+    }
+
+    static bool buildenabled()
+    {
+        return (m_creative || m_survival) && !editmode && player1 && player1->state == CS_ALIVE;
     }
 
     static float creativearmwave(int elapsed)
@@ -703,7 +788,7 @@ namespace game
 
     float playerarmactionpitch(const gameent *d)
     {
-        if(!d || (d == player1 && !creativeenabled())) return -1.0f;
+        if(!d || (d == player1 && !buildenabled())) return -1.0f;
 
         if(d->renderattacking)
         {
@@ -721,7 +806,7 @@ namespace game
 
     static bool creativehit(selinfo &hit)
     {
-        if(!creativeenabled()) return false;
+        if(!buildenabled()) return false;
 
         const vec origin = camera1 ? camera1->o : player1->o;
         vec hitpos;
@@ -763,7 +848,7 @@ namespace game
 
     static bool findcreativetarget(creativetarget &target)
     {
-        if(!creativeenabled()) return false;
+        if(!buildenabled()) return false;
 
         const vec origin = camera1 ? camera1->o : player1->o;
         int orient = -1, entity = -1;
@@ -824,6 +909,7 @@ namespace game
             }
             else if(hit.orient != WORLD_ORIENT_TOP) return;
             scatteredittrigger(type, hit.o, hit.orient, true);
+            if(m_survival) consumesurvivalitem();
             player1->renderplacemillis = lastmillis;
             player1->renderplacetoggle = !player1->renderplacetoggle;
             return;
@@ -840,6 +926,7 @@ namespace game
         placed.o = target;
         mpeditface(-1, 1, hit, true);
         mpedittex(getworldcubeslot(selected), 1, placed, true);
+        if(m_survival) consumesurvivalitem();
         player1->renderplacemillis = lastmillis;
         player1->renderplacetoggle = !player1->renderplacetoggle;
     }
@@ -859,9 +946,99 @@ namespace game
         mpdelcube(target.cube, true);
     }
 
+#ifndef STANDALONE
+    static bool survivalbreakactive = false;
+    static creativetarget survivalbreaktarget;
+    static int survivalbreakstart = 0;
+
+    static bool samesurvivaltarget(const creativetarget &a,
+                                   const creativetarget &b)
+    {
+        if(a.type != b.type) return false;
+        if(a.type == CREATIVE_TARGET_SCATTER) return a.entity == b.entity;
+        return a.type == CREATIVE_TARGET_CUBE &&
+               a.cube.o == b.cube.o && a.cube.grid == b.cube.grid;
+    }
+
+    static int survivalblockitem(const creativetarget &target)
+    {
+        return getworldcubeindexat(
+            ivec(target.cube.o).add(target.cube.grid / 2),
+            target.cube.orient);
+    }
+
+    static void updatesurvivalbreaking()
+    {
+        if(!survivalenabled() || !player1->renderattacking)
+        {
+            survivalbreakactive = false;
+            return;
+        }
+
+        creativetarget target;
+        if(!findcreativetarget(target))
+        {
+            survivalbreakactive = false;
+            return;
+        }
+        if(!survivalbreakactive || !samesurvivaltarget(target, survivalbreaktarget))
+        {
+            survivalbreaktarget = target;
+            survivalbreakstart = lastmillis;
+            survivalbreakactive = true;
+            return;
+        }
+        const int breakmillis = target.type == CREATIVE_TARGET_SCATTER
+                              ? SURVIVAL_SCATTER_BREAK_MILLIS
+                              : SURVIVAL_BREAK_MILLIS;
+        if(lastmillis - survivalbreakstart < breakmillis) return;
+
+        int item = -1;
+        bool broken = false;
+        if(survivalbreaktarget.type == CREATIVE_TARGET_SCATTER)
+        {
+            int type, mountorient;
+            ivec support;
+            if(getworldscatterentityedit(survivalbreaktarget.entity, type,
+                                         support, mountorient))
+            {
+                item = numworldcubes() + type;
+                scatteredittrigger(type, support, mountorient, false);
+                broken = true;
+            }
+        }
+        else
+        {
+            item = survivalblockitem(survivalbreaktarget);
+            mpdelcube(survivalbreaktarget.cube, true);
+            broken = true;
+        }
+        if(broken && !addsurvivalitem(item))
+            conoutf(CON_WARN, "inventory is full; the broken block was not collected");
+        survivalbreakactive = false;
+    }
+#endif
+
     void rendercreativetarget()
     {
 #ifndef STANDALONE
+        if(survivalenabled())
+        {
+            creativetarget target;
+            if(!findcreativetarget(target)) return;
+            renderboundingbox(target.center, target.radius);
+            if(target.type == CREATIVE_TARGET_CUBE &&
+               survivalbreakactive &&
+               samesurvivaltarget(target, survivalbreaktarget))
+            {
+                const int elapsed = clamp(lastmillis - survivalbreakstart, 0,
+                                          SURVIVAL_BREAK_MILLIS - 1),
+                          stage = elapsed * SURVIVAL_BREAK_STAGES / SURVIVAL_BREAK_MILLIS;
+                renderbreakoverlay(target.cube.o, target.cube.grid, stage);
+            }
+            return;
+        }
+
         creativetarget target;
         if(!findcreativetarget(target)) return;
 
@@ -875,10 +1052,13 @@ namespace game
         {
             if(player1 && !player1->renderattacking)
             {
-                player1->renderattacking = creativeenabled();
+                player1->renderattacking = buildenabled();
                 player1->renderattackmillis = lastmillis;
                 player1->renderattackreleasemillis = -1000;
-                if(player1->renderattacking) creativeremove();
+                if(creativeenabled()) creativeremove();
+#ifndef STANDALONE
+                else if(survivalenabled()) updatesurvivalbreaking();
+#endif
             }
         }
         else if(player1 && player1->renderattacking)
@@ -887,6 +1067,9 @@ namespace game
             player1->renderattackreleasepitch = creativearmwave(elapsed);
             player1->renderattackreleasemillis = lastmillis;
             player1->renderattacking = false;
+#ifndef STANDALONE
+            survivalbreakactive = false;
+#endif
         }
     });
     ICOMMAND(creativeplaceblock, "D", (int *down), { if(*down) creativeplace(); });
@@ -922,6 +1105,25 @@ namespace game
     });
     ICOMMAND(getcreativehotbarselected, "", (), intret(clampcreativehotbarslot()));
     ICOMMAND(creativeactive, "", (), intret(creativeenabled() ? 1 : 0));
+    ICOMMAND(survivalactive, "", (), intret(survivalenabled() ? 1 : 0));
+    ICOMMAND(getsurvivalinventoryitem, "i", (int *slot),
+    {
+        intret(*slot >= 0 && *slot < SURVIVAL_USABLE_SLOTS && survivalcounts[*slot] > 0
+             ? survivalitems[*slot] : -1);
+    });
+    ICOMMAND(getsurvivalinventorycount, "i", (int *slot),
+    {
+        intret(*slot >= 0 && *slot < SURVIVAL_USABLE_SLOTS ? survivalcounts[*slot] : 0);
+    });
+    ICOMMAND(survivalinventoryswap, "ii", (int *from, int *to),
+    {
+        if(*from >= 0 && *from < SURVIVAL_USABLE_SLOTS &&
+           *to >= 0 && *to < SURVIVAL_USABLE_SLOTS)
+        {
+            swap(survivalitems[*from], survivalitems[*to]);
+            swap(survivalcounts[*from], survivalcounts[*to]);
+        }
+    });
     ICOMMAND(creativeblockcount, "", (), intret(numworldcubes() + numworldscatters()));
     ICOMMAND(creativecubecount, "", (), intret(numworldcubes()));
     ICOMMAND(creativeblockslot, "i", (int *index), intret(*index < numworldcubes() ? getworldcubeslot(*index) : getworldcubeslot(0)));
@@ -1077,7 +1279,7 @@ namespace game
         if(d->renderattacking) flags |= 1<<1;
         if(d->renderplacetoggle) flags |= 1<<2;
         const int selected = selectedcreativeblock();
-        if(creativeenabled() && selected >= 0) flags |= uint(selected + 1)<<8;
+        if(buildenabled() && selected >= 0) flags |= uint(selected + 1)<<8;
         if(vel > 0xFF) flags |= 1<<3;
         if(fall > 0)
         {
@@ -1625,6 +1827,8 @@ namespace game
               intret(m_valid(*mode) && (gamemodes[*mode - STARTGAMEMODE].flags&M_EDIT) ? 1 : 0));
     ICOMMANDN(m_creative, _icmd_m_creative_cmd, "i", (int *mode),
               intret(m_valid(*mode) && (gamemodes[*mode - STARTGAMEMODE].flags&M_CREATIVE) ? 1 : 0));
+    ICOMMANDN(m_survival, _icmd_m_survival_cmd, "i", (int *mode),
+              intret(m_valid(*mode) && (gamemodes[*mode - STARTGAMEMODE].flags&M_SURVIVAL) ? 1 : 0));
     ICOMMANDN(m_ctf, _icmd_m_ctf_cmd, "i", (int *mode), intret(0));
     ICOMMANDN(m_teammode, _icmd_m_teammode_cmd, "i", (int *mode), intret(0));
     ICOMMAND(getfollow, "", (), intret(-1));

@@ -175,7 +175,7 @@ namespace game
 
     static int heldcreativeitem(const gameent *d)
     {
-        if(!d || !m_creative || d->state != CS_ALIVE) return -1;
+        if(!d || (!m_creative && !m_survival) || d->state != CS_ALIVE) return -1;
         const int selected = d == player1 ? (editmode ? -1 : selectedcreativeblock()) : d->selectedcreative,
                   count = numworldcubes() + numworldscatters();
         return selected >= 0 && selected < count ? selected : -1;
@@ -219,10 +219,10 @@ namespace game
         vec neck = vec(shoulders).addz(-CROUCH_HEAD_DROP * crouch);
         vec lateral(1, 0, 0);
         lateral.rotate_around_z(bodyyaw * RAD);
-        vec leftshoulder = vec(shoulders).madd(lateral, -ARM_OFFSET);
-        vec rightshoulder = vec(shoulders).madd(lateral, ARM_OFFSET);
-        vec lefthip = vec(hips).madd(lateral, -LEG_OFFSET);
-        vec righthip = vec(hips).madd(lateral, LEG_OFFSET);
+        vec leftshoulder = vec(shoulders).madd(lateral, ARM_OFFSET);
+        vec rightshoulder = vec(shoulders).madd(lateral, -ARM_OFFSET);
+        vec lefthip = vec(hips).madd(lateral, LEG_OFFSET);
+        vec righthip = vec(hips).madd(lateral, -LEG_OFFSET);
 
         renderpart(d, PART_TORSO, hips, bodyyaw, torsopitch, 0, flags);
         renderpart(d, PART_HEAD, neck, headyaw, clamp(d->pitch, -80.0f, 80.0f) + sinf(phase * 2.0f) * 1.5f * movement, 0, flags);
@@ -307,7 +307,7 @@ namespace game
         shoulderoffset.rotate_around_x(torsopitch * RAD).rotate_around_z(bodyyaw * RAD);
         vec lateral(1, 0, 0);
         lateral.rotate_around_z(bodyyaw * RAD);
-        const vec shoulder = vec(hips).add(shoulderoffset).madd(lateral, ARM_OFFSET);
+        const vec shoulder = vec(hips).add(shoulderoffset).madd(lateral, -ARM_OFFSET);
 
         const float armpitch = CROUCH_ARM_PITCH * crouch + HELD_ARM_PITCH + (actionpitch >= 0 ? actionpitch : forwardstride * ARM_SWING),
                     armroll = actionpitch >= 0 ? 0 : strafestride * ARM_STRAFE_SWING;
@@ -373,17 +373,17 @@ namespace game
 
     void renderavatar()
     {
-        if(!hudgun || editmode || !player1 || player1->state != CS_ALIVE) return;
+        if(!hudgun || editmode || (!m_creative && !m_survival) ||
+           !player1 || player1->state != CS_ALIVE)
+            return;
 
         const int selected = heldcreativeitem(player1);
-        if(selected < 0) return;
-
         helditempose arm, item;
         const bool tagged = hudrightarmpose(player1, arm, item);
         const int flags = MDL_NOBATCH | MDL_NOSHADOW;
         rendermodel(playermodels[PART_RIGHT_ARM], ANIM_MAPMODEL | ANIM_LOOP, arm.origin, arm.yaw, arm.pitch, arm.roll, flags, player1);
 
-        if(tagged) renderhelditem(player1, selected, item.origin, item.yaw, item.pitch, item.roll, flags, true);
+        if(tagged && selected >= 0) renderhelditem(player1, selected, item.origin, item.yaw, item.pitch, item.roll, flags, true);
     }
 
     void renderplayerpreview(int model, int color, int team, int weap) {}

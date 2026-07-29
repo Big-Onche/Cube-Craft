@@ -128,6 +128,8 @@ enum
 };
 extern int numworldcubes();
 extern int getworldcubeslot(int index);
+extern int getworldcubeindex(int slot);
+extern int getworldcubeindexat(const ivec &position, int orient);
 extern const char *getworldcubename(int index);
 extern const char *getworldcubetexture(int index, int face = WORLD_CUBE_TOP);
 extern int numworldscatters();
@@ -145,6 +147,7 @@ extern bool editworldscatter(int type, const ivec &support, int orient, bool pla
 extern float rayent(const vec &o, const vec &ray, float radius, int mode,
                     int size, int &orient, int &ent);
 extern void renderboundingbox(const vec &center, const vec &radius);
+extern void renderbreakoverlay(const ivec &origin, int size, int stage);
 
 // command
 extern int variable(const char *name, int min, int cur, int max, int *storage, identfun fun, int flags);

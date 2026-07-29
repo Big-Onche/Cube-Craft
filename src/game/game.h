@@ -31,7 +31,8 @@ enum
 {
     M_EDIT = 1<<0,
     M_LOCAL = 1<<1,
-    M_CREATIVE = 1<<2
+    M_CREATIVE = 1<<2,
+    M_SURVIVAL = 1<<3
 };
 
 static struct gamemodeinfo
@@ -42,7 +43,8 @@ static struct gamemodeinfo
 } gamemodes[] =
 {
     { "creative", "Creative", M_CREATIVE, "Build freely with fixed-size voxel blocks." },
-    { "edit", "Edit", M_EDIT, "Cooperative map editing." }
+    { "edit", "Edit", M_EDIT, "Cooperative map editing." },
+    { "survival", "Survival", M_SURVIVAL, "Gather resources and break blocks by hand." }
 };
 
 #define STARTGAMEMODE 0
@@ -50,6 +52,7 @@ static struct gamemodeinfo
 #define m_valid(mode) ((mode) >= STARTGAMEMODE && (mode) < STARTGAMEMODE + NUMGAMEMODES)
 #define m_edit (m_valid(game::gamemode) && (gamemodes[game::gamemode - STARTGAMEMODE].flags&M_EDIT))
 #define m_creative (m_valid(game::gamemode) && (gamemodes[game::gamemode - STARTGAMEMODE].flags&M_CREATIVE))
+#define m_survival (m_valid(game::gamemode) && (gamemodes[game::gamemode - STARTGAMEMODE].flags&M_SURVIVAL))
 #define m_mp(mode) (m_valid(mode) && !(gamemodes[(mode) - STARTGAMEMODE].flags&M_LOCAL))
 
 enum { MM_OPEN = 0, MM_PRIVATE, MM_PASSWORD, MM_INVALID = -1 };
