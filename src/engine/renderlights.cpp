@@ -1586,6 +1586,7 @@ struct lightinfo
 {
     int ent, shadowmap;
     ushort flags, batched;
+    physent *owner;
     vec o, color;
     float radius, dist;
     vec dir, spotx, spoty;
@@ -1596,6 +1597,7 @@ struct lightinfo
     lightinfo() {}
     lightinfo(const vec &o, const vec &color, float radius, ushort flags = 0, const vec &dir = vec(0, 0, 0), int spot = 0)
       : ent(-1), shadowmap(-1), flags(flags), batched(~0),
+        owner(NULL),
         o(o), color(color), radius(radius), dist(camera1->o.dist(o)),
         dir(dir), spot(spot), query(NULL)
     {
@@ -1604,6 +1606,7 @@ struct lightinfo
     }
     lightinfo(int i, const extentity &e)
       : ent(i), shadowmap(-1), flags(e.attr5), batched(~0),
+        owner(NULL),
         o(e.o), color(vec(e.attr2, e.attr3, e.attr4).max(0)), radius(e.attr1), dist(camera1->o.dist(e.o)),
         dir(0, 0, 0), spot(0), query(NULL)
     {
@@ -3624,9 +3627,11 @@ void collectlights()
         vec o, color, dir;
         float radius;
         int spot, flags;
-        if(!getdynlight(i, o, radius, color, dir, spot, flags)) continue;
+        physent *owner;
+        if(!getdynlight(i, o, radius, color, dir, spot, flags, owner)) continue;
 
         lightinfo &l = lights.add(lightinfo(o, vec(color).mul(255).max(0), radius, flags, dir, spot));
+        l.owner = owner;
         if(l.validscissor()) lightorder.add(lights.length()-1);
     }
 
@@ -4605,7 +4610,7 @@ void rendershadowmaps(int offset = 0)
         }
         findshadowmms();
 
-        shadowmaskbatchedmodels(!(l.flags&L_NODYNSHADOW) && smdynshadow);
+        shadowmaskbatchedmodels(!(l.flags&L_NODYNSHADOW) && smdynshadow, l.owner);
         batchshadowmapmodels(mesh != NULL);
 
         shadowcacheval *cached = NULL;

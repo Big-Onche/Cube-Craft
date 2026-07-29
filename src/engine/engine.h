@@ -498,7 +498,7 @@ extern void rendershadowmesh(shadowmesh *m);
 
 extern void updatedynlights();
 extern int finddynlights();
-extern bool getdynlight(int n, vec &o, float &radius, vec &color, vec &dir, int &spot, int &flags);
+extern bool getdynlight(int n, vec &o, float &radius, vec &color, vec &dir, int &spot, int &flags, physent *&owner);
 
 // material
 
@@ -703,7 +703,7 @@ extern void resetmodelbatches();
 extern void startmodelquery(occludequery *query);
 extern void endmodelquery();
 extern void rendershadowmodelbatches(bool dynmodel = true);
-extern void shadowmaskbatchedmodels(bool dynshadow = true);
+extern void shadowmaskbatchedmodels(bool dynshadow = true, physent *shadowowner = NULL);
 extern void rendermapmodelbatches();
 extern void rendermodelbatches();
 extern void rendertransparentmodelbatches(int stencil = 0);

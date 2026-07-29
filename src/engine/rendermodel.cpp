@@ -667,13 +667,13 @@ static inline int shadowmaskmodel(const vec &center, float radius)
     return 0;
 }
 
-void shadowmaskbatchedmodels(bool dynshadow)
+void shadowmaskbatchedmodels(bool dynshadow, physent *shadowowner)
 {
     loopv(batchedmodels)
     {
         batchedmodel &b = batchedmodels[i];
         if(b.flags&(MDL_MAPMODEL | MDL_NOSHADOW)) break;
-        b.visible = dynshadow && (b.colorscale.a >= 1 || b.flags&(MDL_ONLYSHADOW | MDL_FORCESHADOW)) ? shadowmaskmodel(b.center, b.radius) : 0;
+        b.visible = dynshadow && (!shadowowner || b.d != shadowowner) && (b.colorscale.a >= 1 || b.flags&(MDL_ONLYSHADOW | MDL_FORCESHADOW)) ? shadowmaskmodel(b.center, b.radius) : 0;
     }
 }
 
