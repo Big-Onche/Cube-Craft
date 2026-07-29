@@ -2456,9 +2456,7 @@ void renderboundingbox(const vec &center, const vec &radius)
 void renderbreakoverlay(const ivec &origin, int size, int stage)
 {
     static Texture *destroytex = NULL;
-    if(!destroytex)
-        destroytex = textureload("media/texture/terrain/destroy.png", 3,
-                                 false, true, true);
+    if(!destroytex) destroytex = textureload("media/texture/terrain/destroy.png", 3, false, true, true);
     if(!destroytex || destroytex == notexture) return;
 
     stage = clamp(stage, 0, 7);
