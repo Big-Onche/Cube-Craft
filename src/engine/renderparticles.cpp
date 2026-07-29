@@ -191,7 +191,7 @@ struct partrenderer
 
     virtual void preload()
     {
-        if(texname && !tex) tex = textureload(texname, texclamp);
+        if(texname && !tex) tex = textureload(texname, texclamp, true, true, true);
     }
 
     //blend = 0 => remove it
