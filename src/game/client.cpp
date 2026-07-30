@@ -761,6 +761,25 @@ namespace game
             }
         }
     }
+    static void executeidentityalias(const char *name, const char *first, const char *second, int numargs)
+    {
+        string command;
+        copystring(command, name);
+        if(numargs > 0)
+        {
+            string escaped;
+            copystring(escaped, escapestring(first ? first : ""));
+            concformatstring(command, " %s", escaped);
+        }
+        if(numargs > 1)
+        {
+            string escaped;
+            copystring(escaped, escapestring(second ? second : ""));
+            concformatstring(command, " %s", escaped);
+        }
+        execute(command);
+    }
+
     ICOMMAND(identityinfo, "sN", (char *serverid, int *numargs),
     {
         ensureplayeridentities();
@@ -850,8 +869,13 @@ namespace game
                 copystring(identity->publickey, oldpublic);
                 conoutf(CON_ERROR, "could not save the rotated player identity");
             }
-            else conoutf(CON_WARN, "identity key rotated; an admin must replace the registered public key with %s before reconnecting", identity->publickey);
+            else conoutf(CON_WARN, "identity key rotated; an admin must replace the registered " "public key with %s before reconnecting", identity->publickey);
             memset(oldprivate, 0, sizeof(oldprivate));
         }
     });
+    ICOMMAND(idinfo, "sN", (char *serverid, int *numargs), executeidentityalias("identityinfo", serverid, NULL, *numargs > 0 ? 1 : 0));
+    ICOMMAND(idexport, "ss", (char *serverid, char *filename), executeidentityalias("identityexport", serverid, filename, 2));
+    ICOMMAND(idimport, "s", (char *filename), executeidentityalias("identityimport", filename, NULL, 1));
+    ICOMMAND(iddelete, "sN", (char *serverid, int *numargs), executeidentityalias("identitydelete", serverid, NULL, *numargs > 0 ? 1 : 0));
+    ICOMMAND(idrotate, "s", (char *serverid), executeidentityalias("identityrotate", serverid, NULL, 1));
 }

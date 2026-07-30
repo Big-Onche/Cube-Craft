@@ -962,12 +962,13 @@ namespace server
         if(*args) *args++ = '\0';
         while(iscubespace(*args)) ++args;
 
-        if(cubecaseequal(command, "identityrevoke"))
+        if(cubecaseequal(command, "identityrevoke") ||
+           cubecaseequal(command, "idrevoke"))
         {
             serveridentity *identity = valididentityhex(args, 48, 48) ? findserveridentity(args) : NULL;
             if(!identity)
             {
-                sendcommandresult(ci, "usage: /identityrevoke <player ID>");
+                sendcommandresult(ci, "usage: /idrevoke|identityrevoke <player ID>");
                 return;
             }
             bool old = identity->revoked;
@@ -978,8 +979,7 @@ namespace server
                 sendcommandresult(ci, "could not persist identity revocation");
                 return;
             }
-            conoutf(CON_WARN, "identity administration: identity revoked by client %d",
-                    ci.clientnum);
+            conoutf(CON_WARN, "identity administration: identity revoked by client %d", ci.clientnum);
             sendcommandresult(ci, "player identity revoked");
             loopv(clients)
             {
@@ -991,20 +991,19 @@ namespace server
             return;
         }
 
-        if(cubecaseequal(command, "identityreplace"))
+        if(cubecaseequal(command, "identityreplace") || cubecaseequal(command, "idreplace"))
         {
             char *publickey = args;
             while(*publickey && !iscubespace(*publickey)) ++publickey;
             if(*publickey) *publickey++ = '\0';
             while(iscubespace(*publickey)) ++publickey;
-            serveridentity *identity = valididentityhex(args, 48, 48) ?
-                                       findserveridentity(args) : NULL;
+            serveridentity *identity = valididentityhex(args, 48, 48) ? findserveridentity(args) : NULL;
             void *parsed = valididentitypoint(publickey) ? parsepubkey(publickey) : NULL;
             serveridentity *duplicate = parsed ? findserveridentitybykey(publickey) : NULL;
             if(!identity || !parsed || (duplicate && duplicate != identity))
             {
                 if(parsed) freepubkey(parsed);
-                sendcommandresult(ci, "usage: /identityreplace <player ID> <new public key>");
+                sendcommandresult(ci, "usage: /idreplace|identityreplace <player ID> <new public key>");
                 return;
             }
             freepubkey(parsed);
@@ -1020,8 +1019,7 @@ namespace server
                 sendcommandresult(ci, "could not persist identity replacement");
                 return;
             }
-            conoutf(CON_WARN, "identity administration: public key replaced by client %d",
-                    ci.clientnum);
+            conoutf(CON_WARN, "identity administration: public key replaced by client %d", ci.clientnum);
             sendcommandresult(ci, "player identity public key replaced");
             loopv(clients)
             {
@@ -1032,35 +1030,37 @@ namespace server
         }
 
         if(cubecaseequal(command, "identityban") ||
-           cubecaseequal(command, "identityunban"))
+           cubecaseequal(command, "idban") ||
+           cubecaseequal(command, "identityunban") ||
+           cubecaseequal(command, "idunban"))
         {
+            bool banning = cubecaseequal(command, "identityban") || cubecaseequal(command, "idban");
             serveridentity *identity = valididentityhex(args, 48, 48) ? findserveridentity(args) : NULL;
             if(!identity)
             {
-                sendcommandresult(ci, "usage: /identityban|identityunban <player ID>");
+                sendcommandresult(ci, "usage: /idban|idunban <player ID>");
                 return;
             }
             bool old = identity->banned;
-            identity->banned = cubecaseequal(command, "identityban");
+            identity->banned = banning;
             if(!writeserveridentities())
             {
                 identity->banned = old;
                 sendcommandresult(ci, "could not persist identity ban state");
                 return;
             }
-            conoutf(CON_WARN, "identity administration: identity %s by client %d",
-                    identity->banned ? "banned" : "unbanned", ci.clientnum);
+            conoutf(CON_WARN, "identity administration: identity %s by client %d", identity->banned ? "banned" : "unbanned", ci.clientnum);
             sendcommandresult(ci, identity->banned ? "player identity banned" : "player identity unbanned");
             if(identity->banned) loopv(clients)
             {
                 clientinfo *other = clients[i];
-                if(other && !strcmp(other->playerid, identity->playerid))
-                    disconnect_client(other->clientnum, DISC_PRIVATE);
+                if(other && !strcmp(other->playerid, identity->playerid)) disconnect_client(other->clientnum, DISC_PRIVATE);
             }
             return;
         }
 
-        if(cubecaseequal(command, "identitypermission"))
+        if(cubecaseequal(command, "identitypermission") ||
+           cubecaseequal(command, "idpermission"))
         {
             char *permission = args;
             while(*permission && !iscubespace(*permission)) ++permission;
@@ -1068,11 +1068,10 @@ namespace server
             while(iscubespace(*permission)) ++permission;
             char *end = NULL;
             long value = strtol(permission, &end, 10);
-            serveridentity *identity = valididentityhex(args, 48, 48) ?
-                                       findserveridentity(args) : NULL;
+            serveridentity *identity = valididentityhex(args, 48, 48) ? findserveridentity(args) : NULL;
             if(!identity || end == permission || *end || value < INT_MIN || value > INT_MAX)
             {
-                sendcommandresult(ci, "usage: /identitypermission <player ID> <integer>");
+                sendcommandresult(ci, "usage: /idpermission|identitypermission <player ID> <integer>");
                 return;
             }
             int old = identity->permissions;
@@ -1083,8 +1082,7 @@ namespace server
                 sendcommandresult(ci, "could not persist identity permissions");
                 return;
             }
-            conoutf("identity administration: permissions changed from %d to %d by client %d",
-                    old, identity->permissions, ci.clientnum);
+            conoutf("identity administration: permissions changed from %d to %d by client %d", old, identity->permissions, ci.clientnum);
             sendcommandresult(ci, "player identity permissions updated");
             return;
         }
