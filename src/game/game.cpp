@@ -841,12 +841,23 @@ namespace game
         if(result != ACTION_RESULT_ACCEPTED && reason && reason[0]) conoutf(CON_WARN, "server action rejected: %s", reason);
     }
 
+#ifndef STANDALONE
+    static void emitnetworkblockchips(const selinfo &sel, int orient, int num)
+    {
+        if(num <= 0 || orient < 0 || orient > 5) return;
+        const int dimension = orient>>1;
+        vec normal(0, 0, 0), hitpoint = vec(sel.o).add(sel.grid*0.5f);
+        normal[dimension] = orient&1 ? 1 : -1;
+        hitpoint[dimension] = sel.o[dimension] + (orient&1 ? sel.grid : 0);
+        const ivec position = ivec(sel.o).add(sel.grid / 2);
+        particle_blockchips(getworldcubetextureslotat(position, orient), hitpoint, normal, num);
+    }
+#endif
+
     void receivebreakstate(int actor, uint requestid, int phase, int action, const ivec &absolutetarget, int orient, int stage)
     {
 #ifndef STANDALONE
-        if(player1 && actor == player1->clientnum &&
-           (phase == BREAK_STATE_CANCEL || phase == BREAK_STATE_COMPLETE))
-            cancelclientbreakrequest(requestid);
+        if(player1 && actor == player1->clientnum && (phase == BREAK_STATE_CANCEL || phase == BREAK_STATE_COMPLETE)) cancelclientbreakrequest(requestid);
         gameent *d = clients.inrange(actor) ? clients[actor] : NULL;
         if(d && d != player1)
         {
@@ -870,6 +881,7 @@ namespace game
                 worldactionselection(sel, absolutetarget, orient);
                 worldselectiontolocal(sel);
                 setbreakstain(actor, requestid, sel.o, sel.grid, clamp(stage, 0, SURVIVAL_BREAK_STAGES - 1));
+                if(!player1 || actor != player1->clientnum) emitnetworkblockchips(sel, orient, phase == BREAK_STATE_START ? 2 : 3);
             }
             else clearbreakstain(actor, requestid);
         }
