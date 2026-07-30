@@ -496,7 +496,7 @@ namespace game
                         return;
                     }
                 }
-                if(assignedplayerid) conoutf("identity accepted: %s", currentidentitycreated ? "new player" : "returning player");
+                if(assignedplayerid) conoutf("identity %s (%s)", currentidentitycreated ? "created" : "accepted", currentidentitycreated ? "new player" : "returning player");
                 else conoutf("identity accepted: returning player");
                 currentidentitycreated = false;
                 break;
