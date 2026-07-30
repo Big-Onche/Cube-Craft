@@ -51,6 +51,8 @@ namespace server
     VAR(destructionratelimit, 1, 12, 100);
     VAR(survivalbreakmillis, 100, 5000, 60000);
     VAR(survivalscatterbreakmillis, 50, 250, 60000);
+    VAR(breaktimetolerance, 0, 125, 2000);
+    VAR(breakcancelgrace, 0, 125, 2000);
     VAR(servercubetypes, 1, 9, 0xFFFF);
     VAR(serverscattertypes, 0, 4, 0xFFFF);
     VAR(breaknetworkrange, 16, 512, 4096);
@@ -88,7 +90,7 @@ namespace server
             identitychallengemillis,
             identityfailures, identityfailurewindow, selectedslot, lastinventorysave,
             violations, violationwindow, actionwindow, placements, destructions,
-            breakaction, breakorient, breakitem, breakstart, breakupdate, breakstage;
+            breakaction, breakorient, breakitem, breakstart, breakupdate, breakstage, breakrelease;
         uint ip;
         uint lastrequestid, breakrequestid;
         bool connected, local, worldready, hasposition, inventoryloaded, inventorydirty, breakactive;
@@ -107,7 +109,7 @@ namespace server
                        identityfailures(0), identityfailurewindow(0),
                        selectedslot(0), lastinventorysave(0), violations(0), violationwindow(0),
                        actionwindow(0), placements(0), destructions(0), breakaction(-1),
-                       breakorient(0), breakitem(-1), breakstart(0), breakupdate(0), breakstage(0),
+                       breakorient(0), breakitem(-1), breakstart(0), breakupdate(0), breakstage(0), breakrelease(0),
                        ip(0),
                        lastrequestid(0), breakrequestid(0),
                        connected(false), local(false),
@@ -1338,6 +1340,7 @@ namespace server
         ci.breakrequestid = 0;
         ci.breakaction = -1;
         ci.breakitem = -1;
+        ci.breakrelease = 0;
     }
 
     static bool acceptworldaction(clientinfo &ci, uint requestid, int action, const ivec &target, int orient, int item)
@@ -1439,7 +1442,11 @@ namespace server
         }
         serverworldaction *state = findworldaction(target, action);
         if(state && (state->action == WORLD_ACTION_BREAK_CUBE_START || state->action == WORLD_ACTION_BREAK_SCATTER_START))
-            return rejectaction(ci, requestid, "destruction target is already absent", false, false, true);
+        {
+            rejectaction(ci, requestid, "destruction target is already absent");
+            sendworldcorrection(ci, *state);
+            return false;
+        }
         if(state && state->item != item)
         {
             rejectaction(ci, requestid, "destruction target does not match authoritative world state");
@@ -1453,6 +1460,7 @@ namespace server
         ci.breakorient = orient;
         ci.breakitem = state ? state->item : item;
         ci.breakstage = 0;
+        ci.breakrelease = 0;
         ci.breakstart = ci.breakupdate = max(totalmillis, 1);
         sendbreakstate(ci, BREAK_STATE_START, 0);
         return true;
@@ -1474,9 +1482,11 @@ namespace server
         }
         const int duration = ci.breakaction == WORLD_ACTION_BREAK_SCATTER_START ? survivalscatterbreakmillis : survivalbreakmillis,
                   elapsed = max(totalmillis - ci.breakstart, 0),
-                  allowedstage = min(7, elapsed * 8 / max(duration, 1) + 1);
+                  allowedstage = min(7, elapsed * 8 / max(duration, 1) + 1),
+                  tolerance = min(breaktimetolerance, max(duration / 4, 25));
         if(stage <= ci.breakstage) return true;
-        if(!servercreative() && stage > allowedstage)
+        const int toleratedstage = min(7, (elapsed + tolerance) * 8 / max(duration, 1) + 1);
+        if(!servercreative() && stage > max(allowedstage, toleratedstage))
         {
             cancelbreak(ci);
             return rejectaction(ci, requestid, "break progress advanced faster than configured", true);
@@ -1510,7 +1520,8 @@ namespace server
             return false;
         }
         const int duration = ci.breakaction == WORLD_ACTION_BREAK_SCATTER_START ? survivalscatterbreakmillis : survivalbreakmillis;
-        if(!servercreative() && totalmillis - ci.breakstart < duration)
+        const int tolerance = min(breaktimetolerance, max(duration / 4, 25));
+        if(!servercreative() && totalmillis - ci.breakstart + tolerance < duration)
         {
             cancelbreak(ci);
             return rejectaction(ci, requestid, "target was broken faster than configured", true);
@@ -2043,9 +2054,10 @@ namespace server
                 ci->lastpositionmillis = now;
                 if(ci->breakactive)
                 {
-                    if(!(flags&(1<<1)) ||
-                       vec(ci->breaktarget.x + 8.0f, ci->breaktarget.y + 8.0f, ci->breaktarget.z + 8.0f).dist(ci->o) > buildreach)
+                    if(vec(ci->breaktarget.x + 8.0f, ci->breaktarget.y + 8.0f, ci->breaktarget.z + 8.0f).dist(ci->o) > buildreach)
                         cancelbreak(*ci);
+                    else if(flags&(1<<1)) ci->breakrelease = 0;
+                    else if(!ci->breakrelease) ci->breakrelease = max(totalmillis, 1);
                 }
             }
             return;
@@ -2469,7 +2481,8 @@ namespace server
                 conoutf(CON_ERROR, "could not periodically save survival inventory for player ID %s", ci->playerid);
             if(ci->breakactive &&
                (!ci->hasposition ||
-                vec(ci->breaktarget.x + 8.0f, ci->breaktarget.y + 8.0f, ci->breaktarget.z + 8.0f).dist(ci->o) > buildreach))
+                vec(ci->breaktarget.x + 8.0f, ci->breaktarget.y + 8.0f, ci->breaktarget.z + 8.0f).dist(ci->o) > buildreach ||
+                (ci->breakrelease && totalmillis - ci->breakrelease >= breakcancelgrace)))
                 cancelbreak(*ci);
         }
         if(!worldtimefrozen && curtime > 0)
