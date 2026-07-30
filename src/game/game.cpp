@@ -869,9 +869,9 @@ namespace game
                 selinfo sel;
                 worldactionselection(sel, absolutetarget, orient);
                 worldselectiontolocal(sel);
-                setbreakstain(sel.o, sel.grid, clamp(stage, 0, SURVIVAL_BREAK_STAGES - 1));
+                setbreakstain(actor, requestid, sel.o, sel.grid, clamp(stage, 0, SURVIVAL_BREAK_STAGES - 1));
             }
-            else clearbreakstain();
+            else clearbreakstain(actor, requestid);
         }
 #else
         (void)actor; (void)requestid; (void)phase; (void)action; (void)absolutetarget; (void)orient; (void)stage;
@@ -1142,6 +1142,7 @@ namespace game
 
     static void cancelsurvivalbreak()
     {
+        const uint requestid = survivalbreakrequestid;
         if(survivalbreakrequestid && waitforserveredit())
         {
             if(survivalbreaktarget.type == CREATIVE_TARGET_SCATTER)
@@ -1155,6 +1156,7 @@ namespace game
                 sendworldaction(survivalbreakrequestid, WORLD_ACTION_BREAK_CANCEL, survivalbreaktarget.cube.o,
                                 survivalbreaktarget.cube.orient, survivalblockitem(survivalbreaktarget), -1);
         }
+        clearbreakstain(player1 ? player1->clientnum : -1, requestid);
         survivalbreakrequestid = 0;
         survivalbreaklaststage = -1;
     }
@@ -1162,11 +1164,11 @@ namespace game
     static void cancelclientbreakrequest(uint requestid)
     {
         if(!requestid || requestid != survivalbreakrequestid) return;
+        clearbreakstain(player1 ? player1->clientnum : -1, requestid);
         survivalbreakactive = false;
         survivalbreakrequestid = 0;
         survivalbreaklaststage = -1;
         survivalbreakparticlemillis = -1;
-        clearbreakstain();
     }
 
     static bool samesurvivaltarget(const creativetarget &a,
@@ -1201,7 +1203,7 @@ namespace game
             if(survivalbreakactive) cancelsurvivalbreak();
             survivalbreakactive = false;
             survivalbreakparticlemillis = -1;
-            clearbreakstain();
+            clearbreakstain(player1 ? player1->clientnum : -1, survivalbreakrequestid);
             return;
         }
 
@@ -1211,7 +1213,7 @@ namespace game
             if(survivalbreakactive) cancelsurvivalbreak();
             survivalbreakactive = false;
             survivalbreakparticlemillis = -1;
-            clearbreakstain();
+            clearbreakstain(player1 ? player1->clientnum : -1, survivalbreakrequestid);
             return;
         }
         if(!survivalbreakactive || !samesurvivaltarget(target, survivalbreaktarget))
@@ -1237,13 +1239,13 @@ namespace game
             }
             if(target.type == CREATIVE_TARGET_CUBE)
             {
-                setbreakstain(target.cube.o, target.cube.grid, 0);
+                setbreakstain(player1 ? player1->clientnum : -1, survivalbreakrequestid, target.cube.o, target.cube.grid, 0);
                 emitsurvivalblockchips(target, 2);
                 survivalbreakparticlemillis = lastmillis;
             }
             else
             {
-                clearbreakstain();
+                clearbreakstain(player1 ? player1->clientnum : -1, survivalbreakrequestid);
                 survivalbreakparticlemillis = -1;
             }
             return;
@@ -1255,7 +1257,7 @@ namespace game
         if(target.type == CREATIVE_TARGET_CUBE)
         {
             const int stage = clamp(elapsed, 0, authoritativebreakmillis - 1) * SURVIVAL_BREAK_STAGES / authoritativebreakmillis;
-            setbreakstain(target.cube.o, target.cube.grid, stage);
+            setbreakstain(player1 ? player1->clientnum : -1, survivalbreakrequestid, target.cube.o, target.cube.grid, stage);
             if(waitforserveredit() && survivalbreakrequestid && stage != survivalbreaklaststage)
             {
                 sendworldaction(survivalbreakrequestid, WORLD_ACTION_BREAK_UPDATE, survivalbreaktarget.cube.o,
@@ -1271,14 +1273,14 @@ namespace game
         }
         else
         {
-            clearbreakstain();
+            clearbreakstain(player1 ? player1->clientnum : -1, survivalbreakrequestid);
             survivalbreakparticlemillis = -1;
         }
         if(elapsed < breakmillis) return;
 
         int item = -1;
         bool broken = false;
-        clearbreakstain();
+        clearbreakstain(player1 ? player1->clientnum : -1, survivalbreakrequestid);
         if(survivalbreaktarget.type == CREATIVE_TARGET_SCATTER)
         {
             int type, mountorient;
@@ -1367,7 +1369,7 @@ namespace game
             if(survivalbreakactive) cancelsurvivalbreak();
             survivalbreakactive = false;
             survivalbreakparticlemillis = -1;
-            clearbreakstain();
+            clearbreakstain(player1 ? player1->clientnum : -1, survivalbreakrequestid);
 #endif
         }
     });

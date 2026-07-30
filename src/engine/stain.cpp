@@ -779,9 +779,49 @@ stainrenderer stains[] =
     stainrenderer("media/texture/terrain/destroy.png", SF_RND8|SF_GEOMETRY)
 };
 
-static bool breakstainactive = false;
-static ivec breakstainorigin(0, 0, 0);
-static int breakstainsize = 0, breakstainstage = -1;
+struct breakstainstate
+{
+    int owner;
+    uint requestid;
+    ivec origin;
+    int size, stage;
+
+    breakstainstate(int owner, uint requestid, const ivec &origin, int size, int stage)
+        : owner(owner), requestid(requestid), origin(origin), size(size), stage(stage)
+    {
+    }
+};
+
+static vector<breakstainstate> breakstainstates;
+
+static int findbreakstain(int owner, uint requestid)
+{
+    loopv(breakstainstates)
+        if(breakstainstates[i].owner == owner && breakstainstates[i].requestid == requestid)
+            return i;
+    return -1;
+}
+
+static void rebuildbreakstains()
+{
+    stainrenderer &renderer = stains[BREAK_STAIN];
+    renderer.clearstains();
+    loopv(breakstainstates)
+    {
+        const breakstainstate &state = breakstainstates[i];
+        const float half = state.size*0.5f;
+        const vec middle = vec(state.origin).add(half);
+        loopj(6)
+        {
+            const int dimension = j>>1;
+            const bool positive = (j&1) != 0;
+            vec center = middle, normal(0, 0, 0);
+            center[dimension] = state.origin[dimension] + (positive ? state.size : 0);
+            normal[dimension] = positive ? 1 : -1;
+            renderer.addstain(center, normal, half, bvec(0xFF, 0xFF, 0xFF), state.stage);
+        }
+    }
+}
 
 void initstains()
 {
@@ -798,49 +838,36 @@ void initstains()
 void clearstains()
 {
     loopi(sizeof(stains)/sizeof(stains[0])) stains[i].clearstains();
-    breakstainactive = false;
-    breakstainsize = 0;
-    breakstainstage = -1;
+    breakstainstates.setsize(0);
 }
 
-void clearbreakstain()
+void clearbreakstain(int owner, uint requestid)
 {
-    if(!breakstainactive) return;
-    stains[BREAK_STAIN].clearstains();
-    breakstainactive = false;
-    breakstainsize = 0;
-    breakstainstage = -1;
+    const int index = findbreakstain(owner, requestid);
+    if(index < 0) return;
+    breakstainstates.remove(index);
+    rebuildbreakstains();
 }
 
-void setbreakstain(const ivec &origin, int size, int stage)
+void setbreakstain(int owner, uint requestid, const ivec &origin, int size, int stage)
 {
     stage = clamp(stage, 0, 7);
     if(size <= 0)
     {
-        clearbreakstain();
+        clearbreakstain(owner, requestid);
         return;
     }
-    if(breakstainactive && breakstainorigin == origin &&
-       breakstainsize == size && breakstainstage == stage)
-        return;
-
-    stainrenderer &renderer = stains[BREAK_STAIN];
-    renderer.clearstains();
-    const float half = size*0.5f;
-    const vec middle = vec(origin).add(half);
-    loopi(6)
+    const int index = findbreakstain(owner, requestid);
+    if(index >= 0)
     {
-        const int dimension = i>>1;
-        const bool positive = (i&1) != 0;
-        vec center = middle, normal(0, 0, 0);
-        center[dimension] = origin[dimension] + (positive ? size : 0);
-        normal[dimension] = positive ? 1 : -1;
-        renderer.addstain(center, normal, half, bvec(0xFF, 0xFF, 0xFF), stage);
+        breakstainstate &state = breakstainstates[index];
+        if(state.origin == origin && state.size == size && state.stage == stage) return;
+        state.origin = origin;
+        state.size = size;
+        state.stage = stage;
     }
-    breakstainorigin = origin;
-    breakstainsize = size;
-    breakstainstage = stage;
-    breakstainactive = true;
+    else breakstainstates.add(breakstainstate(owner, requestid, origin, size, stage));
+    rebuildbreakstains();
 }
 
 VARNP(stains, showstains, 0, 1, 1);

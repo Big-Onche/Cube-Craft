@@ -148,8 +148,8 @@ extern bool editworldscatter(int type, const ivec &support, int orient, bool pla
 extern float rayent(const vec &o, const vec &ray, float radius, int mode,
                     int size, int &orient, int &ent);
 extern void renderboundingbox(const vec &center, const vec &radius);
-extern void setbreakstain(const ivec &origin, int size, int stage);
-extern void clearbreakstain();
+extern void setbreakstain(int owner, uint requestid, const ivec &origin, int size, int stage);
+extern void clearbreakstain(int owner, uint requestid);
 
 // command
 extern int variable(const char *name, int min, int cur, int max, int *storage, identfun fun, int flags);
