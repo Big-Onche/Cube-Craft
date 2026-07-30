@@ -442,10 +442,8 @@ void processmasterinput()
         int cmdlen = args - input;
         while(args < end && iscubespace(*args)) args++;
 
-        if(matchstring(input, cmdlen, "failreg"))
-            conoutf(CON_ERROR, "master server registration failed: %s", args);
-        else if(matchstring(input, cmdlen, "succreg"))
-            conoutf("master server registration succeeded");
+        if(matchstring(input, cmdlen, "failreg")) conoutf(CON_ERROR, "master server registration failed: %s", args);
+        else if(matchstring(input, cmdlen, "succreg")) conoutf("master server registration succeeded");
         else server::processmasterinput(input, cmdlen, args);
 
         end++;

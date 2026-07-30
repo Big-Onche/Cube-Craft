@@ -1,5 +1,55 @@
 #include "cube.h"
 
+bool identityrandombytes(uchar *data, int length)
+{
+#ifdef WIN32
+    HMODULE library = LoadLibraryA("bcrypt.dll");
+    if(library)
+    {
+        typedef LONG (WINAPI *bcryptgenrandom)(void *, uchar *, unsigned long, unsigned long);
+        bcryptgenrandom generate = (bcryptgenrandom)GetProcAddress(library, "BCryptGenRandom");
+        bool ok = generate && generate(NULL, data, length, 2) >= 0;
+        FreeLibrary(library);
+        if(ok) return true;
+    }
+#else
+    FILE *random = fopen("/dev/urandom", "rb");
+    if(random)
+    {
+        bool ok = fread(data, 1, length, random) == size_t(length);
+        fclose(random);
+        if(ok) return true;
+    }
+#endif
+    for(int offset = 0; offset < length; offset += sizeof(uint))
+    {
+        uint value = randomMT();
+        memcpy(data + offset, &value, min(int(sizeof(value)), length - offset));
+    }
+    return false;
+}
+
+bool identityrandomhex(char *result, int size, int bytes)
+{
+    vector<uchar> random;
+    uchar *data = random.pad(bytes);
+    bool secure = identityrandombytes(data, bytes);
+    if(size < 2*bytes + 1)
+    {
+        result[0] = '\0';
+        memset(data, 0, bytes);
+        return false;
+    }
+    loopi(bytes)
+    {
+        result[2*i] = "0123456789abcdef"[data[i] >> 4];
+        result[2*i + 1] = "0123456789abcdef"[data[i] & 0xF];
+    }
+    result[2*bytes] = '\0';
+    memset(data, 0, bytes);
+    return secure;
+}
+
 ///////////////////////// cryptography /////////////////////////////////
 
 /* Based off the reference implementation of Tiger, a cryptographically
@@ -789,8 +839,16 @@ struct ecjacobian
 
     bool parse(const char *s)
     {
+        if(!s || (*s != '+' && *s != '-')) return false;
         bool ybit = *s++ == '-';
+        int digits = 0;
+        for(const char *p = s; *p; ++p)
+        {
+            if(!isxdigit((uchar)*p) || ++digits > (GF_BITS + 3)/4) return false;
+        }
+        if(!digits) return false;
         x.parse(s);
+        if(x >= gfield::P) return false;
         if(!calcy(ybit)) return false;
         z = bigint<1>(1);
         return true;
@@ -901,7 +959,11 @@ bool answerchallenge(const char *privstr, const char *challenge, vector<char> &a
 void *parsepubkey(const char *pubstr)
 {
     ecjacobian *pubkey = new ecjacobian;
-    pubkey->parse(pubstr);
+    if(!pubkey->parse(pubstr))
+    {
+        delete pubkey;
+        return NULL;
+    }
     return pubkey;
 }
 
@@ -943,4 +1005,3 @@ bool checkchallenge(const char *answerstr, void *correct)
     gfint answer(answerstr);
     return answer == *(gfint *)correct;
 }
-

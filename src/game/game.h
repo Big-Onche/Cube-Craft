@@ -66,6 +66,8 @@ enum
     N_EDITMODE, N_EDITENT, N_EDITF, N_EDITT, N_EDITM, N_FLIP, N_COPY, N_PASTE, N_ROTATE, N_REPLACE, N_DELCUBE, N_CALCLIGHT, N_REMIP, N_EDITVSLOT, N_UNDO, N_REDO, N_NEWMAP, N_GETMAP, N_SENDMAP, N_CLIPBOARD, N_EDITVAR, N_EDITSCATTER,
     N_EDITAUTHOR, N_WORLDSTATE, N_WORLDREADY, N_WORLDSYNC, N_WORLDTIME,
     N_SETPRIVILEGE, N_SETMASTER, N_SERVERCOMMAND,
+    N_SERVERIDENTITY, N_IDENTITYLOGIN, N_IDENTITYREGISTER, N_IDENTITYCHALLENGE,
+    N_IDENTITYRESPONSE, N_IDENTITYSUCCESS, N_IDENTITYFAILURE, N_IDENTITYREVOKED,
     NUMMSG
 };
 
@@ -76,13 +78,15 @@ static const int msgsizes[] =
     N_EDITMODE, 2, N_EDITENT, 11, N_EDITF, 16, N_EDITT, 16, N_EDITM, 16, N_FLIP, 14, N_COPY, 14, N_PASTE, 14, N_ROTATE, 15, N_REPLACE, 17, N_DELCUBE, 14, N_CALCLIGHT, 1, N_REMIP, 1, N_EDITVSLOT, 16, N_UNDO, 0, N_REDO, 0, N_NEWMAP, 2, N_GETMAP, 1, N_SENDMAP, 0, N_CLIPBOARD, 0, N_EDITVAR, 0, N_EDITSCATTER, 16, N_EDITAUTHOR, 3,
     N_WORLDSTATE, 6, N_WORLDREADY, 2, N_WORLDSYNC, 2, N_WORLDTIME, 3,
     N_SETPRIVILEGE, 3, N_SETMASTER, 0, N_SERVERCOMMAND, 0,
+    N_SERVERIDENTITY, 0, N_IDENTITYLOGIN, 0, N_IDENTITYREGISTER, 0, N_IDENTITYCHALLENGE, 0,
+    N_IDENTITYRESPONSE, 0, N_IDENTITYSUCCESS, 0, N_IDENTITYFAILURE, 0, N_IDENTITYREVOKED, 0,
     -1
 };
 
 #define TESSERACT_SERVER_PORT 42000
 #define TESSERACT_LANINFO_PORT 41998
 #define TESSERACT_MASTER_PORT 41999
-#define PROTOCOL_VERSION 8
+#define PROTOCOL_VERSION 9
 
 struct gameent : dynent
 {
@@ -125,6 +129,21 @@ namespace entities
 
 namespace game
 {
+    enum { CREATIVE_ARM_CYCLE = 300 };
+
+    struct networkedit
+    {
+        int type, author, args[3];
+        uint revision;
+        selinfo selection;
+        vector<uchar> extra;
+
+        networkedit() : type(-1), author(-1), revision(0)
+        {
+            memset(args, 0, sizeof(args));
+        }
+    };
+
     extern int gamemode;
     extern string clientmap;
     extern bool connected, remote;
@@ -140,11 +159,20 @@ namespace game
     extern void requestworldcommand(const char *command);
     extern float horizontalmeterspersecond(const physent *d);
     extern float playerarmactionpitch(const gameent *d);
+    extern float creativearmwave(int elapsed);
     extern int selectedcreativeblock();
+    extern int smoothmove, smoothdist;
+    extern vector<networkedit *> pendingnetworkedits;
+    extern void processnetworkedits();
 
 #ifndef STANDALONE
     extern void preloadplayermodels();
     extern bool heldtorchemitterposition(gameent *d, vec &position);
+    extern void resetclientreceive();
+    extern bool pendingnetworkworld, pendingnetworkreset, pendingnetworkfrozen,
+                pendingnetworkrestoreposition;
+    extern int pendingnetworkseed, pendingnetworktime;
+    extern vec pendingnetworkposition;
 
     namespace environment
     {

@@ -599,6 +599,8 @@ extern void gets2c();
 extern void notifywelcome();
 
 // crypto
+extern bool identityrandombytes(uchar *data, int length);
+extern bool identityrandomhex(char *result, int size, int bytes);
 extern void genprivkey(const char *seed, vector<char> &privstr, vector<char> &pubstr);
 extern bool calcpubkey(const char *privstr, vector<char> &pubstr);
 extern bool hashstring(const char *str, char *result, int maxlen);

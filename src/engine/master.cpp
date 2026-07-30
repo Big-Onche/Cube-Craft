@@ -35,10 +35,22 @@ hashnameset<userinfo> users;
 
 void adduser(char *name, char *pubkey)
 {
+    void *parsed = parsepubkey(pubkey);
+    if(!parsed)
+    {
+        conoutf("rejecting malformed public key for auth user %s", name);
+        return;
+    }
+    if(userinfo *existing = users.access(name))
+    {
+        freepubkey(existing->pubkey);
+        existing->pubkey = parsed;
+        return;
+    }
     name = newstring(name);
     userinfo &u = users[name];
     u.name = name;
-    u.pubkey = parsepubkey(pubkey);
+    u.pubkey = parsed;
 }
 COMMAND(adduser, "ss");
 
@@ -720,4 +732,3 @@ int main(int argc, char **argv)
 
     return EXIT_SUCCESS;
 }
-
