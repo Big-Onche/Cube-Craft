@@ -4,10 +4,17 @@ namespace server
 {
     enum
     {
+        SURVIVAL_HOTBAR_SLOTS = game::SURVIVAL_HOTBAR_SLOTS,
+        SURVIVAL_USABLE_SLOTS = game::SURVIVAL_USABLE_SLOTS
+    };
+
+    enum
+    {
         SERVER_DAY_MILLIS = 20 * 60 * 1000,
         SERVER_START_MILLIS = 8 * SERVER_DAY_MILLIS / 24,
         SERVER_JOURNAL_VERSION = 1,
         MIN_SERVER_JOURNAL_PROTOCOL = 8,
+        SERVER_IDENTITY_DB_VERSION = 2,
         PLAYER_IDENTITY_VERSION = 1,
         PLAYER_IDENTITY_TIMEOUT = 15000,
         PLAYER_IDENTITY_MAX_RECORDS = 100000
@@ -37,14 +44,27 @@ namespace server
     SVAR(servermotd, "");
     VAR(serverworldseed, 0, 1337, INT_MAX);
     VAR(identityduplicatepolicy, 0, 0, 1);
+    VAR(creativemode, 0, 1, 1);
+    VAR(inventorysaveinterval, 1, 15, 3600);
+    VAR(buildreach, 16, 160, 1024);
+    VAR(placementratelimit, 1, 12, 100);
+    VAR(destructionratelimit, 1, 12, 100);
+    VAR(survivalbreakmillis, 100, 5000, 60000);
+    VAR(survivalscatterbreakmillis, 50, 250, 60000);
+    VAR(servercubetypes, 1, 9, 0xFFFF);
+    VAR(serverscattertypes, 0, 4, 0xFFFF);
+    VAR(breaknetworkrange, 16, 512, 4096);
+    VAR(desynctolerance, 0, 4, 100);
+    VAR(violationresetinterval, 1, 60, 3600);
+    VAR(identitybankicks, 1, 3, 100);
 
     struct serveridentity
     {
         string playerid, publickey, nickname;
-        int permissions;
+        int permissions, kicks;
         bool revoked, banned;
 
-        serveridentity() : permissions(0), revoked(false), banned(false)
+        serveridentity() : permissions(0), kicks(0), revoked(false), banned(false)
         {
             playerid[0] = publickey[0] = nickname[0] = '\0';
         }
@@ -66,10 +86,15 @@ namespace server
     {
         int clientnum, privilege, lastpositionmillis, identitystate, identitykind,
             identitychallengemillis,
-            identityfailures, identityfailurewindow;
+            identityfailures, identityfailurewindow, selectedslot, lastinventorysave,
+            violations, violationwindow, actionwindow, placements, destructions,
+            breakaction, breakorient, breakitem, breakstart, breakupdate, breakstage;
         uint ip;
-        bool connected, local, worldready, hasposition;
+        uint lastrequestid, breakrequestid;
+        bool connected, local, worldready, hasposition, inventoryloaded, inventorydirty, breakactive;
         string name, playerid, pendingpublickey, pendingname;
+        int inventoryitems[SURVIVAL_USABLE_SLOTS], inventorycounts[SURVIVAL_USABLE_SLOTS];
+        ivec breaktarget;
         vector<uchar> position;
         vec o;
         ENetPacket *getmap;
@@ -80,12 +105,22 @@ namespace server
                        identitystate(IDENTITY_UNAUTHENTICATED), identitykind(IDENTITY_KIND_NONE),
                        identitychallengemillis(0),
                        identityfailures(0), identityfailurewindow(0),
+                       selectedslot(0), lastinventorysave(0), violations(0), violationwindow(0),
+                       actionwindow(0), placements(0), destructions(0), breakaction(-1),
+                       breakorient(0), breakitem(-1), breakstart(0), breakupdate(0), breakstage(0),
                        ip(0),
+                       lastrequestid(0), breakrequestid(0),
                        connected(false), local(false),
-                       worldready(false), hasposition(false), o(0, 0, 0), getmap(NULL),
+                       worldready(false), hasposition(false), inventoryloaded(false), inventorydirty(false), breakactive(false),
+                       breaktarget(0, 0, 0), o(0, 0, 0), getmap(NULL),
                        identitychallenge(NULL), identity(NULL)
         {
             name[0] = playerid[0] = pendingpublickey[0] = pendingname[0] = '\0';
+            loopi(SURVIVAL_USABLE_SLOTS)
+            {
+                inventoryitems[i] = -1;
+                inventorycounts[i] = 0;
+            }
         }
 
         ~clientinfo()
@@ -98,17 +133,29 @@ namespace server
     {
         uint revision, timestamp;
         int author, type;
+        uint requestid;
         bool active, hasselection;
         string ownerid;
         selinfo selection;
         vector<uchar> payload;
 
-        serveredit() : revision(0), timestamp(0), author(-1), type(-1),
+        serveredit() : revision(0), timestamp(0), author(-1), type(-1), requestid(0),
                        active(true), hasselection(false)
         {
             ownerid[0] = '\0';
         }
     };
+
+    struct serverworldaction
+    {
+        ivec target;
+        int action, orient, item;
+
+        serverworldaction() : target(0, 0, 0), action(-1), orient(0), item(-1) {}
+    };
+
+    static vector<serverworldaction *> serverworldactions;
+    static void setworldactionstate(const ivec &target, int action, int orient, int item);
 
     vector<clientinfo *> clients;
     vector<serveredit *> worldhistory, worldredostack;
@@ -118,6 +165,11 @@ namespace server
     uint worldeditrevision = 0;
     int worldclockmillis = SERVER_START_MILLIS, lastworldtimesync = 0;
     bool worldtimefrozen = false, serverworldready = true, journalinitialized = false;
+
+    static bool servercreative()
+    {
+        return gamemode == STARTGAMEMODE;
+    }
 
     static bool valididentityhex(const char *value, int minlen, int maxlen)
     {
@@ -167,7 +219,7 @@ namespace server
         stream *file = openrawfile(tempname, "wb");
         if(!file) return false;
         bool ok = file->write("CCSI", 4) == 4 &&
-                  file->putlil<uint>(PLAYER_IDENTITY_VERSION) &&
+                  file->putlil<uint>(SERVER_IDENTITY_DB_VERSION) &&
                   writeserveridentitystring(*file, persistentserverid) &&
                   file->putlil<uint>(uint(serveridentities.length()));
         loopv(serveridentities)
@@ -177,6 +229,7 @@ namespace server
                         writeserveridentitystring(*file, identity.publickey) &&
                         writeserveridentitystring(*file, identity.nickname) &&
                         file->putlil<int>(identity.permissions) &&
+                        file->putlil<int>(identity.kicks) &&
                         file->putlil<uint>(identity.revoked ? 1U : 0U) &&
                         file->putlil<uint>(identity.banned ? 1U : 0U);
         }
@@ -234,7 +287,7 @@ namespace server
         char magic[4];
         uint version = 0, count = 0;
         bool ok = file->read(magic, 4) == 4 && !memcmp(magic, "CCSI", 4) &&
-                  (version = file->getlil<uint>()) == PLAYER_IDENTITY_VERSION &&
+                  (version = file->getlil<uint>()) >= 1 && version <= SERVER_IDENTITY_DB_VERSION &&
                   readserveridentitystring(*file, persistentserverid, sizeof(persistentserverid)) &&
                   valididentityhex(persistentserverid, 48, 48) &&
                   (count = file->getlil<uint>()) <= PLAYER_IDENTITY_MAX_RECORDS;
@@ -246,10 +299,11 @@ namespace server
                  readserveridentitystring(*file, identity->publickey, sizeof(identity->publickey)) &&
                  readserveridentitystring(*file, identity->nickname, sizeof(identity->nickname)) &&
                  (identity->permissions = file->getlil<int>(), true) &&
+                 (version < 2 || (identity->kicks = file->getlil<int>(), true)) &&
                  (revoked = file->getlil<uint>(), true) &&
                  (banned = file->getlil<uint>(), true) &&
                  valididentityhex(identity->playerid, 48, 48) &&
-                 valididentitypoint(identity->publickey) && revoked <= 1 && banned <= 1 &&
+                 valididentitypoint(identity->publickey) && identity->kicks >= 0 && revoked <= 1 && banned <= 1 &&
                  !findserveridentity(identity->playerid) &&
                  !findserveridentitybykey(identity->publickey);
             void *parsed = ok ? parsepubkey(identity->publickey) : NULL;
@@ -324,6 +378,20 @@ namespace server
     static void updateservereditmetadata(serveredit &edit)
     {
         edit.hasselection = false;
+        if(edit.type == N_WORLDAUTH)
+        {
+            ucharbuf p(edit.payload.getbuf(), edit.payload.length());
+            const int action = getint(p);
+            ivec target;
+            target.x = getint(p); target.y = getint(p); target.z = getint(p);
+            const int orient = getint(p), item = getint(p);
+            if(!p.overread() && !p.remaining() && orient >= 0 && orient <= 5)
+            {
+                if(action == WORLD_ACTION_PLACE_CUBE) target[orient >> 1] += orient&1 ? 16 : -16;
+                setworldactionstate(target, action, orient, item);
+            }
+            return;
+        }
         if(!editselectiontype(edit.type)) return;
         ucharbuf p(edit.payload.getbuf(), edit.payload.length());
         if(readselection(p, edit.selection)) edit.hasselection = true;
@@ -396,6 +464,7 @@ namespace server
     {
         worldhistory.deletecontents();
         worldredostack.deletecontents();
+        serverworldactions.deletecontents();
         worldeditrevision = 0;
         serverworldready = true;
 
@@ -507,6 +576,217 @@ namespace server
         return clients.inrange(n) ? clients[n] : NULL;
     }
 
+    static void inventoryname(char *name, size_t len, const char *playerid, const char *suffix = "")
+    {
+        snprintf(name, len, "config/server-inventories/%s.cfg%s", playerid, suffix ? suffix : "");
+        path(name);
+    }
+
+    static void clearinventory(clientinfo &ci)
+    {
+        loopi(SURVIVAL_USABLE_SLOTS)
+        {
+            ci.inventoryitems[i] = -1;
+            ci.inventorycounts[i] = 0;
+        }
+        ci.selectedslot = 0;
+        ci.inventorydirty = false;
+    }
+
+    static bool saveinventory(clientinfo &ci, bool force = false)
+    {
+        if(servercreative() || !ci.inventoryloaded || !ci.playerid[0] || (!force && !ci.inventorydirty)) return true;
+        string relative, temporary, finalpath, temppath;
+        inventoryname(relative, sizeof(relative), ci.playerid);
+        inventoryname(temporary, sizeof(temporary), ci.playerid, ".tmp");
+        copystring(finalpath, findfile(relative, "wb"));
+        copystring(temppath, findfile(temporary, "wb"));
+        stream *file = openrawfile(temporary, "wb");
+        if(!file) return false;
+        bool ok = file->printf("survival_inventory 1\nselected %d\n", ci.selectedslot) > 0;
+        loopi(SURVIVAL_USABLE_SLOTS) if(ok)
+            ok = file->printf("slot %d %d %d\n", i, ci.inventoryitems[i], ci.inventorycounts[i]) > 0;
+        delete file;
+        if(!ok || !replaceserveridentityfile(temppath, finalpath))
+        {
+            remove(temppath);
+            return false;
+        }
+        ci.inventorydirty = false;
+        ci.lastinventorysave = max(totalmillis, 1);
+        return true;
+    }
+
+    static bool loadinventory(clientinfo &ci)
+    {
+        clearinventory(ci);
+        ci.inventoryloaded = true;
+        ci.lastinventorysave = max(totalmillis, 1);
+        if(servercreative()) return true;
+        string relative;
+        inventoryname(relative, sizeof(relative), ci.playerid);
+        stream *file = openrawfile(relative, "rb");
+        if(!file) return true;
+        bool versionseen = false, valid = true;
+        bool slotsseen[SURVIVAL_USABLE_SLOTS] = { false };
+        string line;
+        while(file->getline(line, sizeof(line)))
+        {
+            int version, selected, slot, item, count;
+            if(sscanf(line, "survival_inventory %d", &version) == 1)
+            {
+                if(versionseen || version != 1) valid = false;
+                versionseen = true;
+            }
+            else if(sscanf(line, "selected %d", &selected) == 1)
+            {
+                if(selected < 0 || selected >= SURVIVAL_HOTBAR_SLOTS) valid = false;
+                else ci.selectedslot = selected;
+            }
+            else if(sscanf(line, "slot %d %d %d", &slot, &item, &count) == 3)
+            {
+                if(slot < 0 || slot >= SURVIVAL_USABLE_SLOTS || slotsseen[slot] ||
+                   count < 0 || count > 64 || (count == 0 && item != -1) ||
+                   (count > 0 && (item < 0 || item >= servercubetypes + serverscattertypes)))
+                    valid = false;
+                else
+                {
+                    slotsseen[slot] = true;
+                    ci.inventoryitems[slot] = item;
+                    ci.inventorycounts[slot] = count;
+                }
+            }
+            else if(line[0] && line[0] != '/' && line[0] != '#') valid = false;
+            if(!valid) break;
+        }
+        delete file;
+        if(!versionseen || !valid)
+        {
+            conoutf(CON_ERROR, "survival inventory for player ID %s is corrupt", ci.playerid);
+            clearinventory(ci);
+            ci.inventoryloaded = false;
+            return false;
+        }
+        return true;
+    }
+
+    static void sendinventory(clientinfo &ci)
+    {
+        packetbuf p(MAXTRANS, ENET_PACKET_FLAG_RELIABLE);
+        putint(p, N_INVENTORYSTATE);
+        putint(p, SURVIVAL_USABLE_SLOTS);
+        putint(p, ci.selectedslot);
+        loopi(SURVIVAL_USABLE_SLOTS)
+        {
+            putint(p, ci.inventoryitems[i]);
+            putint(p, ci.inventorycounts[i]);
+        }
+        sendpacket(ci.clientnum, 1, p.finalize());
+    }
+
+    static void sendactionresult(clientinfo &ci, uint requestid, int result, const char *reason = "")
+    {
+        sendf(ci.clientnum, 1, "ri3s", N_ACTIONRESULT, int(requestid), result, reason ? reason : "");
+    }
+
+    static void cancelbreak(clientinfo &ci, bool broadcast = true);
+
+    static bool kickviolation(clientinfo &ci, const char *reason)
+    {
+        string playerid;
+        copystring(playerid, ci.playerid);
+        int kicks = 0;
+        bool banned = false;
+        if(ci.identity)
+        {
+            kicks = ++ci.identity->kicks;
+            if(kicks >= identitybankicks) ci.identity->banned = banned = true;
+            if(!writeserveridentities()) conoutf(CON_ERROR, "could not persist kick/ban state for player ID %s", playerid);
+        }
+        defformatstring(message, "%s: %s", banned ? "identity automatically banned" : "kicked", reason ? reason : "illegal action");
+        sendf(ci.clientnum, 1, "ris", N_SERVMSG, message);
+        conoutf(CON_WARN, "%s player ID %s (client %d, kick %d/%d): %s",
+                banned ? "banned" : "kicked", playerid[0] ? playerid : "(local)", ci.clientnum, kicks, identitybankicks,
+                reason ? reason : "illegal action");
+        cancelbreak(ci);
+        saveinventory(ci, true);
+        if(!ci.local) disconnect_client(ci.clientnum, DISC_KICK);
+        return false;
+    }
+
+    static bool addviolation(clientinfo &ci, const char *reason, bool malicious)
+    {
+        const int now = max(totalmillis, 1);
+        if(!ci.violationwindow || now - ci.violationwindow >= violationresetinterval * 1000)
+        {
+            ci.violationwindow = now;
+            ci.violations = 0;
+        }
+        ++ci.violations;
+        conoutf(CON_WARN, "illegal action by player ID %s (client %d, violation %d/%d): %s",
+                ci.playerid, ci.clientnum, ci.violations, desynctolerance, reason ? reason : "validation failed");
+        if(malicious || ci.violations > desynctolerance) return kickviolation(ci, reason);
+        return true;
+    }
+
+    static bool rejectaction(clientinfo &ci, uint requestid, const char *reason, bool violation = false, bool malicious = false,
+                             bool predictioniscorrect = false)
+    {
+        sendactionresult(ci, requestid, predictioniscorrect ? ACTION_RESULT_CORRECTED : ACTION_RESULT_REJECTED, reason);
+        sendinventory(ci);
+        return !violation || addviolation(ci, reason, malicious);
+    }
+
+    static void markinventorydirty(clientinfo &ci)
+    {
+        if(!servercreative()) ci.inventorydirty = true;
+    }
+
+    static bool addinventoryitem(clientinfo &ci, int item)
+    {
+        if(item < 0) return false;
+        loopi(SURVIVAL_USABLE_SLOTS) if(ci.inventoryitems[i] == item && ci.inventorycounts[i] > 0 && ci.inventorycounts[i] < 64)
+        {
+            ++ci.inventorycounts[i];
+            markinventorydirty(ci);
+            return true;
+        }
+        loopi(SURVIVAL_USABLE_SLOTS) if(ci.inventorycounts[i] <= 0)
+        {
+            ci.inventoryitems[i] = item;
+            ci.inventorycounts[i] = 1;
+            markinventorydirty(ci);
+            return true;
+        }
+        return false;
+    }
+
+    static serverworldaction *findworldaction(const ivec &target, int action)
+    {
+        const bool scatter = action == WORLD_ACTION_PLACE_SCATTER || action == WORLD_ACTION_BREAK_SCATTER_START;
+        loopvrev(serverworldactions)
+        {
+            serverworldaction *state = serverworldactions[i];
+            const bool statescatter = state->action == WORLD_ACTION_PLACE_SCATTER || state->action == WORLD_ACTION_BREAK_SCATTER_START;
+            if(state->target == target && scatter == statescatter) return state;
+        }
+        return NULL;
+    }
+
+    static void setworldactionstate(const ivec &target, int action, int orient, int item)
+    {
+        serverworldaction *state = findworldaction(target, action);
+        if(!state)
+        {
+            state = new serverworldaction;
+            state->target = target;
+            serverworldactions.add(state);
+        }
+        state->action = action;
+        state->orient = orient;
+        state->item = item;
+    }
+
     static void sendprivilege(int cn, int subject, int privilege);
     static void sendworldstate(clientinfo &ci, bool reset);
     static void sendcommandresult(clientinfo &ci, const char *message);
@@ -606,11 +886,17 @@ namespace server
     static void completeidentity(clientinfo &ci)
     {
         if(duplicateidentity(ci)) return;
+        if(!loadinventory(ci))
+        {
+            rejectidentity(ci, "server inventory data is corrupt; an administrator must repair it");
+            return;
+        }
         ci.identitystate = IDENTITY_AUTHENTICATED;
         ci.connected = true;
         const char *kind = ci.identitykind == IDENTITY_KIND_NEW ? "new player" : "returning player";
         conoutf("identity accepted: client %d, %s", ci.clientnum, kind);
         sendf(ci.clientnum, 1, "ri2s", N_IDENTITYSUCCESS, PLAYER_IDENTITY_VERSION, ci.playerid);
+        sendinventory(ci);
         sendf(ci.clientnum, 1, "ri", N_WELCOME);
         loopv(clients)
         {
@@ -644,6 +930,7 @@ namespace server
         putint(q, N_EDITAUTHOR);
         putint(q, edit.author);
         putint(q, int(edit.revision));
+        putint(q, int(edit.requestid));
         putint(q, edit.type);
         q.put(edit.payload.getbuf(), edit.payload.length());
         sendpacket(cn, 1, q.finalize());
@@ -652,7 +939,8 @@ namespace server
     static void sendworldstate(clientinfo &ci, bool reset)
     {
         ci.worldready = false;
-        sendf(ci.clientnum, 1, "ri6", N_WORLDSTATE, serverworldseed, int(worldeditrevision), worldclockmillis, worldtimefrozen ? 1 : 0, reset ? 1 : 0);
+        sendf(ci.clientnum, 1, "ri9", N_WORLDSTATE, serverworldseed, int(worldeditrevision), worldclockmillis,
+              worldtimefrozen ? 1 : 0, reset ? 1 : 0, gamemode, survivalbreakmillis, survivalscatterbreakmillis);
     }
 
     static void replayworld(clientinfo &ci)
@@ -675,12 +963,14 @@ namespace server
 
     void serverinit()
     {
+        gamemode = creativemode ? STARTGAMEMODE : STARTGAMEMODE + 2;
         copystring(smapname, serverworld);
         journalinitialized = false;
         if(!loadserveridentities()) serverworldready = false;
         worldclockmillis = SERVER_START_MILLIS;
         worldtimefrozen = false;
         lastworldtimesync = 0;
+        conoutf("server gameplay mode: %s", servercreative() ? "creative" : "survival");
     }
     int reserveclients() { return 0; }
     int numchannels() { return 3; }
@@ -688,6 +978,9 @@ namespace server
     {
         if(clientinfo *ci = getinfo(n))
         {
+            cancelbreak(*ci);
+            if(ci->connected && !saveinventory(*ci, true))
+                conoutf(CON_ERROR, "could not save survival inventory for player ID %s on disconnect", ci->playerid);
             if(!ci->connected &&
                (ci->identitystate == IDENTITY_AWAITING_IDENTITY ||
                 ci->identitystate == IDENTITY_AWAITING_RESPONSE))
@@ -731,7 +1024,10 @@ namespace server
         ci->connected = ci->local = true;
         ci->identitystate = IDENTITY_AUTHENTICATED;
         ci->privilege = PRIV_ADMIN;
+        ci->inventoryloaded = true;
+        clearinventory(*ci);
         sendf(n, 1, "ri5ss", N_SERVINFO, n, PROTOCOL_VERSION, rnd(INT_MAX), 0, serverdesc, "");
+        sendinventory(*ci);
         sendf(n, 1, "ri", N_WELCOME);
         sendprivilege(n, n, ci->privilege);
         sendworldstate(*ci, false);
@@ -787,6 +1083,11 @@ namespace server
     static bool validateedit(clientinfo &ci, int type, packetbuf &p,
                              serveredit &edit, const char *&error)
     {
+        if(ci.privilege < PRIV_ADMIN)
+        {
+            error = "gameplay world changes must use the authoritative action protocol";
+            return false;
+        }
         int start = p.length();
         selinfo sel;
         if(!editselectiontype(type) || !readselection(p, sel) || !validselection(ci, sel, error)) return false;
@@ -890,7 +1191,7 @@ namespace server
         return true;
     }
 
-    static void acceptededit(serveredit *edit)
+    static bool acceptededit(serveredit *edit)
     {
         edit->revision = ++worldeditrevision;
         edit->timestamp = uint(time(NULL));
@@ -900,7 +1201,7 @@ namespace server
             clientinfo *ci = getinfo(edit->author);
             if(ci) sendf(ci->clientnum, 1, "ris", N_SERVMSG, "world edit rejected: server could not persist it");
             delete edit;
-            return;
+            return false;
         }
         worldhistory.add(edit);
         worldredostack.deletecontents();
@@ -909,6 +1210,391 @@ namespace server
             clientinfo *recipient = clients[i];
             if(recipient && recipient->connected && recipient->worldready) sendserveredit(recipient->clientnum, *edit);
         }
+        return true;
+    }
+
+    static ivec actionplacecell(const ivec &support, int orient)
+    {
+        ivec target = support;
+        target[orient >> 1] += orient&1 ? 16 : -16;
+        return target;
+    }
+
+    static bool validactiontarget(const clientinfo &ci, const ivec &target, int orient, const char *&error)
+    {
+        if(orient < 0 || orient > 5 || target.x % 16 || target.y % 16 || target.z % 16 ||
+           target.z < 0 || target.z > (1 << 13) - 16)
+        {
+            error = "invalid or unaligned world target";
+            return false;
+        }
+        if(!ci.hasposition)
+        {
+            error = "a valid player position is required";
+            return false;
+        }
+        if(vec(target.x + 8.0f, target.y + 8.0f, target.z + 8.0f).dist(ci.o) > buildreach)
+        {
+            error = "world target is outside allowed range";
+            return false;
+        }
+        return true;
+    }
+
+    static bool playeroccupies(const ivec &target)
+    {
+        const vec cellmin(target), cellmax = vec(target).add(16);
+        loopv(clients)
+        {
+            clientinfo *other = clients[i];
+            if(!other || !other->connected || !other->hasposition) continue;
+            const vec playermin(other->o.x - 6, other->o.y - 6, other->o.z),
+                      playermax(other->o.x + 6, other->o.y + 6, other->o.z + 30);
+            if(cellmin.x < playermax.x && cellmax.x > playermin.x &&
+               cellmin.y < playermax.y && cellmax.y > playermin.y &&
+               cellmin.z < playermax.z && cellmax.z > playermin.z)
+                return true;
+        }
+        return false;
+    }
+
+    static bool actionrate(clientinfo &ci, bool placement)
+    {
+        const int now = max(totalmillis, 1);
+        if(!ci.actionwindow || now - ci.actionwindow >= 1000)
+        {
+            ci.actionwindow = now;
+            ci.placements = ci.destructions = 0;
+        }
+        int &count = placement ? ci.placements : ci.destructions;
+        const int limit = placement ? placementratelimit : destructionratelimit;
+        return ++count <= limit;
+    }
+
+    static bool inventoryhasroom(const clientinfo &ci, int item)
+    {
+        loopi(SURVIVAL_USABLE_SLOTS)
+            if((ci.inventoryitems[i] == item && ci.inventorycounts[i] > 0 && ci.inventorycounts[i] < 64) ||
+               ci.inventorycounts[i] <= 0)
+                return true;
+        return false;
+    }
+
+    static bool validactionitem(int action, int item)
+    {
+        if(action == WORLD_ACTION_PLACE_CUBE || action == WORLD_ACTION_BREAK_CUBE_START)
+            return item >= 0 && item < servercubetypes;
+        if(action == WORLD_ACTION_PLACE_SCATTER || action == WORLD_ACTION_BREAK_SCATTER_START)
+            return item >= servercubetypes && item < servercubetypes + serverscattertypes;
+        return false;
+    }
+
+    static bool validnewrequest(clientinfo &ci, uint requestid, const char *&error)
+    {
+        if(!requestid)
+        {
+            error = "zero action request ID";
+            return false;
+        }
+        if(requestid <= ci.lastrequestid)
+        {
+            error = requestid == ci.lastrequestid ? "duplicate action request ID" : "stale action request ID";
+            return false;
+        }
+        ci.lastrequestid = requestid;
+        return true;
+    }
+
+    static void sendbreakstate(const clientinfo &ci, int phase, int stage)
+    {
+        packetbuf p(MAXTRANS, ENET_PACKET_FLAG_RELIABLE);
+        putint(p, N_BREAKSTATE);
+        putint(p, ci.clientnum);
+        putint(p, int(ci.breakrequestid));
+        putint(p, phase);
+        putint(p, ci.breakaction);
+        putint(p, ci.breaktarget.x);
+        putint(p, ci.breaktarget.y);
+        putint(p, ci.breaktarget.z);
+        putint(p, ci.breakorient);
+        putint(p, stage);
+        ENetPacket *packet = p.finalize();
+        packet->referenceCount++;
+        loopv(clients)
+        {
+            clientinfo *recipient = clients[i];
+            if(!recipient || !recipient->connected || !recipient->worldready || !recipient->hasposition) continue;
+            if(vec(ci.breaktarget.x + 8.0f, ci.breaktarget.y + 8.0f, ci.breaktarget.z + 8.0f).dist(recipient->o) <= breaknetworkrange)
+                sendpacket(recipient->clientnum, 1, packet);
+        }
+        if(--packet->referenceCount == 0) enet_packet_destroy(packet);
+    }
+
+    static void cancelbreak(clientinfo &ci, bool broadcast)
+    {
+        if(!ci.breakactive) return;
+        if(broadcast) sendbreakstate(ci, BREAK_STATE_CANCEL, 0);
+        ci.breakactive = false;
+        ci.breakrequestid = 0;
+        ci.breakaction = -1;
+        ci.breakitem = -1;
+    }
+
+    static bool acceptworldaction(clientinfo &ci, uint requestid, int action, const ivec &target, int orient, int item)
+    {
+        serveredit *edit = new serveredit;
+        edit->author = ci.clientnum;
+        edit->requestid = requestid;
+        edit->type = N_WORLDAUTH;
+        copystring(edit->ownerid, ci.playerid);
+        packetbuf payload(MAXTRANS);
+        putint(payload, action);
+        putint(payload, target.x); putint(payload, target.y); putint(payload, target.z);
+        putint(payload, orient);
+        putint(payload, item);
+        edit->payload.put(payload.buf, payload.length());
+        return acceptededit(edit);
+    }
+
+    static void sendworldcorrection(clientinfo &ci, const serverworldaction &state)
+    {
+        serveredit correction;
+        correction.author = -1;
+        correction.revision = worldeditrevision;
+        correction.type = N_WORLDAUTH;
+        int action = state.action;
+        ivec target = state.target;
+        if(action == WORLD_ACTION_PLACE_CUBE)
+            target[state.orient >> 1] += state.orient&1 ? -16 : 16;
+        packetbuf payload(MAXTRANS);
+        putint(payload, action);
+        putint(payload, target.x); putint(payload, target.y); putint(payload, target.z);
+        putint(payload, state.orient);
+        putint(payload, state.item);
+        correction.payload.put(payload.buf, payload.length());
+        sendserveredit(ci.clientnum, correction);
+    }
+
+    static bool handleplacement(clientinfo &ci, uint requestid, int action, const ivec &support, int orient, int item, int slot)
+    {
+        const char *error = NULL;
+        if(!validnewrequest(ci, requestid, error))
+            return rejectaction(ci, requestid, error, requestid == ci.lastrequestid);
+        if(action != WORLD_ACTION_PLACE_CUBE && action != WORLD_ACTION_PLACE_SCATTER)
+            return rejectaction(ci, requestid, "invalid placement action", true, true);
+        if(!validactiontarget(ci, support, orient, error))
+            return rejectaction(ci, requestid, error, true);
+        const ivec occupied = action == WORLD_ACTION_PLACE_CUBE ? actionplacecell(support, orient) : support;
+        if(action == WORLD_ACTION_PLACE_CUBE && !validactiontarget(ci, occupied, orient, error))
+            return rejectaction(ci, requestid, error, true);
+        if(!actionrate(ci, true))
+            return rejectaction(ci, requestid, "excessive placement rate", true);
+        if(playeroccupies(occupied))
+            return rejectaction(ci, requestid, error ? error : "placement target is occupied by a player", true);
+        serverworldaction *state = findworldaction(occupied, action);
+        if(state && (state->action == WORLD_ACTION_PLACE_CUBE || state->action == WORLD_ACTION_PLACE_SCATTER))
+        {
+            rejectaction(ci, requestid, "placement target is already occupied");
+            sendworldcorrection(ci, *state);
+            return false;
+        }
+        if(!servercreative())
+        {
+            if(slot < 0 || slot >= SURVIVAL_HOTBAR_SLOTS || slot != ci.selectedslot || ci.inventorycounts[slot] <= 0 ||
+               ci.inventorycounts[slot] > 64 || ci.inventoryitems[slot] != item)
+                return rejectaction(ci, requestid, "placed item is not owned in the requested inventory slot", true, true);
+        }
+        if(!validactionitem(action, item))
+            return rejectaction(ci, requestid, "invalid placed item type", true, true);
+        if(!acceptworldaction(ci, requestid, action, support, orient, item))
+            return rejectaction(ci, requestid, "server could not persist the placement");
+        setworldactionstate(occupied, action, orient, item);
+        if(!servercreative())
+        {
+            if(--ci.inventorycounts[slot] <= 0)
+            {
+                ci.inventoryitems[slot] = -1;
+                ci.inventorycounts[slot] = 0;
+            }
+            markinventorydirty(ci);
+        }
+        sendactionresult(ci, requestid, true);
+        sendinventory(ci);
+        return true;
+    }
+
+    static bool beginbreak(clientinfo &ci, uint requestid, int action, const ivec &target, int orient, int item)
+    {
+        const char *error = NULL;
+        if(!validnewrequest(ci, requestid, error))
+            return rejectaction(ci, requestid, error, requestid == ci.lastrequestid);
+        if(action != WORLD_ACTION_BREAK_CUBE_START && action != WORLD_ACTION_BREAK_SCATTER_START)
+            return rejectaction(ci, requestid, "invalid destruction action", true, true);
+        if(!validactiontarget(ci, target, orient, error)) return rejectaction(ci, requestid, error, true);
+        if(!validactionitem(action, item)) return rejectaction(ci, requestid, "invalid destroyed item type", true, true);
+        if(ci.breakactive)
+        {
+            cancelbreak(ci);
+            return rejectaction(ci, requestid, "breaking multiple targets simultaneously", true);
+        }
+        serverworldaction *state = findworldaction(target, action);
+        if(state && (state->action == WORLD_ACTION_BREAK_CUBE_START || state->action == WORLD_ACTION_BREAK_SCATTER_START))
+            return rejectaction(ci, requestid, "destruction target is already absent", false, false, true);
+        if(state && state->item != item)
+        {
+            rejectaction(ci, requestid, "destruction target does not match authoritative world state");
+            sendworldcorrection(ci, *state);
+            return false;
+        }
+        ci.breakactive = true;
+        ci.breakrequestid = requestid;
+        ci.breakaction = action;
+        ci.breaktarget = target;
+        ci.breakorient = orient;
+        ci.breakitem = state ? state->item : item;
+        ci.breakstage = 0;
+        ci.breakstart = ci.breakupdate = max(totalmillis, 1);
+        sendbreakstate(ci, BREAK_STATE_START, 0);
+        return true;
+    }
+
+    static bool updatebreak(clientinfo &ci, uint requestid, const ivec &target, int orient, int stage)
+    {
+        if(!ci.breakactive || requestid != ci.breakrequestid)
+            return rejectaction(ci, requestid, "no matching break action is active");
+        if(target != ci.breaktarget || orient != ci.breakorient)
+        {
+            cancelbreak(ci);
+            return rejectaction(ci, requestid, "break target changed without cancellation", true);
+        }
+        if(stage < 0 || stage >= 8)
+        {
+            cancelbreak(ci);
+            return rejectaction(ci, requestid, "invalid break progress stage", true, true);
+        }
+        const int duration = ci.breakaction == WORLD_ACTION_BREAK_SCATTER_START ? survivalscatterbreakmillis : survivalbreakmillis,
+                  elapsed = max(totalmillis - ci.breakstart, 0),
+                  allowedstage = min(7, elapsed * 8 / max(duration, 1) + 1);
+        if(stage <= ci.breakstage) return true;
+        if(!servercreative() && stage > allowedstage)
+        {
+            cancelbreak(ci);
+            return rejectaction(ci, requestid, "break progress advanced faster than configured", true);
+        }
+        ci.breakupdate = max(totalmillis, 1);
+        ci.breakstage = stage;
+        sendbreakstate(ci, BREAK_STATE_UPDATE, stage);
+        return true;
+    }
+
+    static bool completebreak(clientinfo &ci, uint requestid, const ivec &target, int orient, int item)
+    {
+        if(!ci.breakactive || requestid != ci.breakrequestid)
+            return rejectaction(ci, requestid, "no matching break action is active");
+        if(target != ci.breaktarget || orient != ci.breakorient || item != ci.breakitem)
+        {
+            cancelbreak(ci);
+            return rejectaction(ci, requestid, "break completion does not match its start", true, true);
+        }
+        serverworldaction *state = findworldaction(target, ci.breakaction);
+        if(state && (state->action == WORLD_ACTION_BREAK_CUBE_START || state->action == WORLD_ACTION_BREAK_SCATTER_START))
+        {
+            cancelbreak(ci);
+            return rejectaction(ci, requestid, "destruction target became stale", false, false, true);
+        }
+        if(state && state->item != item)
+        {
+            cancelbreak(ci);
+            rejectaction(ci, requestid, "destruction target changed while breaking");
+            sendworldcorrection(ci, *state);
+            return false;
+        }
+        const int duration = ci.breakaction == WORLD_ACTION_BREAK_SCATTER_START ? survivalscatterbreakmillis : survivalbreakmillis;
+        if(!servercreative() && totalmillis - ci.breakstart < duration)
+        {
+            cancelbreak(ci);
+            return rejectaction(ci, requestid, "target was broken faster than configured", true);
+        }
+        if(!actionrate(ci, false))
+        {
+            cancelbreak(ci);
+            return rejectaction(ci, requestid, "excessive destruction rate", true);
+        }
+        const int action = ci.breakaction;
+        if(!servercreative() && !inventoryhasroom(ci, item))
+        {
+            cancelbreak(ci);
+            return rejectaction(ci, requestid, "inventory is full");
+        }
+        if(!acceptworldaction(ci, requestid, action, target, orient, item))
+        {
+            cancelbreak(ci);
+            return rejectaction(ci, requestid, "server could not persist the destruction");
+        }
+        setworldactionstate(target, action, orient, item);
+        if(!servercreative()) addinventoryitem(ci, item);
+        sendbreakstate(ci, BREAK_STATE_COMPLETE, 7);
+        ci.breakactive = false;
+        ci.breakrequestid = 0;
+        sendactionresult(ci, requestid, true);
+        sendinventory(ci);
+        return true;
+    }
+
+    static bool handleworldaction(clientinfo &ci, uint requestid, int action, const ivec &target, int orient, int item, int slot)
+    {
+        switch(action)
+        {
+            case WORLD_ACTION_PLACE_CUBE:
+            case WORLD_ACTION_PLACE_SCATTER:
+                return handleplacement(ci, requestid, action, target, orient, item, slot);
+            case WORLD_ACTION_BREAK_CUBE_START:
+            case WORLD_ACTION_BREAK_SCATTER_START:
+                return beginbreak(ci, requestid, action, target, orient, item);
+            case WORLD_ACTION_BREAK_UPDATE:
+                return updatebreak(ci, requestid, target, orient, slot);
+            case WORLD_ACTION_BREAK_CANCEL:
+                if(ci.breakactive && ci.breakrequestid == requestid)
+                {
+                    cancelbreak(ci);
+                    sendactionresult(ci, requestid, true);
+                    return true;
+                }
+                return rejectaction(ci, requestid, "no matching break action is active");
+            case WORLD_ACTION_BREAK_COMPLETE:
+                return completebreak(ci, requestid, target, orient, item);
+            default:
+                return rejectaction(ci, requestid, "unknown world action", true, true);
+        }
+    }
+
+    static bool handleinventoryaction(clientinfo &ci, uint requestid, int action, int first, int second)
+    {
+        const char *error = NULL;
+        if(!validnewrequest(ci, requestid, error))
+            return rejectaction(ci, requestid, error, requestid == ci.lastrequestid);
+        if(servercreative()) return rejectaction(ci, requestid, "survival inventory is disabled in creative mode");
+        switch(action)
+        {
+            case INVENTORY_ACTION_SWAP:
+                if(first < 0 || first >= SURVIVAL_USABLE_SLOTS || second < 0 || second >= SURVIVAL_USABLE_SLOTS)
+                    return rejectaction(ci, requestid, "invalid inventory slot", true, true);
+                swap(ci.inventoryitems[first], ci.inventoryitems[second]);
+                swap(ci.inventorycounts[first], ci.inventorycounts[second]);
+                markinventorydirty(ci);
+                break;
+            case INVENTORY_ACTION_SELECT:
+                if(first < 0 || first >= SURVIVAL_HOTBAR_SLOTS)
+                    return rejectaction(ci, requestid, "invalid hotbar slot", true, true);
+                ci.selectedslot = first;
+                markinventorydirty(ci);
+                break;
+            default:
+                return rejectaction(ci, requestid, "invalid inventory action", true, true);
+        }
+        sendactionresult(ci, requestid, true);
+        sendinventory(ci);
+        return true;
     }
 
     static serveredit *cloneserveredit(const serveredit &source)
@@ -917,6 +1603,7 @@ namespace server
         edit->revision = source.revision;
         edit->timestamp = source.timestamp;
         edit->author = source.author;
+        edit->requestid = source.requestid;
         copystring(edit->ownerid, source.ownerid);
         edit->type = source.type;
         edit->active = source.active;
@@ -1042,10 +1729,13 @@ namespace server
                 return;
             }
             bool old = identity->banned;
+            int oldkicks = identity->kicks;
             identity->banned = banning;
+            if(!banning) identity->kicks = 0;
             if(!writeserveridentities())
             {
                 identity->banned = old;
+                identity->kicks = oldkicks;
                 sendcommandresult(ci, "could not persist identity ban state");
                 return;
             }
@@ -1351,6 +2041,12 @@ namespace server
                 ci->o = nextposition;
                 ci->hasposition = true;
                 ci->lastpositionmillis = now;
+                if(ci->breakactive)
+                {
+                    if(!(flags&(1<<1)) ||
+                       vec(ci->breaktarget.x + 8.0f, ci->breaktarget.y + 8.0f, ci->breaktarget.z + 8.0f).dist(ci->o) > buildreach)
+                        cancelbreak(*ci);
+                }
             }
             return;
         }
@@ -1578,6 +2274,28 @@ namespace server
                     }
                     break;
                 }
+                case N_INVENTORYACTION:
+                {
+                    clientinfo *ci = getinfo(sender);
+                    const uint requestid = uint(getint(p));
+                    const int action = getint(p), first = getint(p), second = getint(p);
+                    if(ci && ci->connected && !p.overread()) handleinventoryaction(*ci, requestid, action, first, second);
+                    break;
+                }
+                case N_WORLDACTION:
+                {
+                    clientinfo *ci = getinfo(sender);
+                    const uint requestid = uint(getint(p));
+                    const int action = getint(p);
+                    ivec target;
+                    target.x = getint(p); target.y = getint(p); target.z = getint(p);
+                    const int orient = getint(p), item = getint(p), slot = getint(p);
+                    if(ci && ci->connected && ci->worldready && !p.overread())
+                        handleworldaction(*ci, requestid, action, target, orient, item, slot);
+                    else if(ci && ci->connected && !ci->worldready)
+                        rejectaction(*ci, requestid, "world actions are disabled until synchronization completes");
+                    break;
+                }
                 case N_EDITENT:
                 case N_EDITF: case N_EDITT: case N_EDITM: case N_FLIP: case N_COPY: case N_PASTE: case N_ROTATE: case N_REPLACE: case N_DELCUBE: case N_CALCLIGHT: case N_REMIP: case N_EDITVSLOT: case N_EDITSCATTER: case N_UNDO: case N_REDO: case N_EDITVAR:
                 {
@@ -1656,6 +2374,16 @@ namespace server
                     }
                     break;
                 }
+                case N_INVENTORYSTATE:
+                case N_WORLDAUTH:
+                case N_ACTIONRESULT:
+                case N_BREAKSTATE:
+                {
+                    clientinfo *ci = getinfo(sender);
+                    p.pad(p.remaining());
+                    if(ci) kickviolation(*ci, "forged server-authoritative gameplay message");
+                    return;
+                }
                 default:
                 {
                     int size = msgsizelookup(type);
@@ -1730,6 +2458,19 @@ namespace server
             clientinfo *ci = clients[i];
             if(ci && ci->identitystate == IDENTITY_AWAITING_RESPONSE && ci->identitychallenge && totalmillis - ci->identitychallengemillis > PLAYER_IDENTITY_TIMEOUT)
                 rejectidentity(*ci, "authentication challenge expired");
+            if(!ci || !ci->connected) continue;
+            if(ci->violations && totalmillis - ci->violationwindow >= violationresetinterval * 1000)
+            {
+                ci->violations = 0;
+                ci->violationwindow = max(totalmillis, 1);
+            }
+            if(ci->inventorydirty && totalmillis - ci->lastinventorysave >= inventorysaveinterval * 1000 &&
+               !saveinventory(*ci))
+                conoutf(CON_ERROR, "could not periodically save survival inventory for player ID %s", ci->playerid);
+            if(ci->breakactive &&
+               (!ci->hasposition ||
+                vec(ci->breaktarget.x + 8.0f, ci->breaktarget.y + 8.0f, ci->breaktarget.z + 8.0f).dist(ci->o) > buildreach))
+                cancelbreak(*ci);
         }
         if(!worldtimefrozen && curtime > 0)
         {

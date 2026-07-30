@@ -15,6 +15,20 @@ namespace game
     gameent *player1 = NULL;
     vector<gameent *> players, clients;
     vector<uchar> messages;
+#ifndef STANDALONE
+    static uint nextworldrequestid = 1;
+
+    struct predictedworldaction
+    {
+        uint requestid;
+        int action, orient, item;
+        ivec target;
+
+        predictedworldaction() : requestid(0), action(-1), orient(0), item(-1), target(0, 0, 0) {}
+    };
+
+    static vector<predictedworldaction *> predictedworldactions;
+#endif
 
     float horizontalmeterspersecond(const physent *d)
     {
@@ -30,6 +44,7 @@ namespace game
     static string sentname = "";
 #ifndef STANDALONE
     static void updatesurvivalbreaking();
+    static void cancelclientbreakrequest(uint requestid);
 #endif
 
     static void putsel(packetbuf &p, const selinfo &sel)
@@ -40,6 +55,100 @@ namespace game
         putint(p, sel.cx); putint(p, sel.cxs); putint(p, sel.cy); putint(p, sel.cys);
         putint(p, sel.corner);
     }
+
+#ifndef STANDALONE
+    static uint newworldrequestid()
+    {
+        if(!nextworldrequestid) ++nextworldrequestid;
+        return nextworldrequestid++;
+    }
+
+    static predictedworldaction *findpredictedworldaction(uint requestid)
+    {
+        loopv(predictedworldactions) if(predictedworldactions[i]->requestid == requestid) return predictedworldactions[i];
+        return NULL;
+    }
+
+    static void worldactionselection(selinfo &sel, const ivec &origin, int orient)
+    {
+        sel.o = origin;
+        sel.s = ivec(1, 1, 1);
+        sel.grid = 16;
+        sel.orient = orient;
+        sel.cx = sel.cy = sel.corner = 0;
+        sel.cxs = sel.cys = 2;
+    }
+
+    static ivec worldactionplacecell(const ivec &support, int orient)
+    {
+        ivec target = support;
+        const int dimension = orient >> 1;
+        target[dimension] += orient&1 ? 16 : -16;
+        return target;
+    }
+
+    static bool applyworldaction(int action, const ivec &absolutetarget, int orient, int item)
+    {
+        selinfo sel;
+        worldactionselection(sel, absolutetarget, orient);
+        worldselectiontolocal(sel);
+        if(!sel.validate() || !worldselectionready(sel)) return false;
+        const ivec target = sel.o;
+        switch(action)
+        {
+            case WORLD_ACTION_PLACE_CUBE:
+            {
+                if(item < 0 || item >= numworldcubes()) return false;
+                const ivec placedorigin = worldactionplacecell(target, orient);
+                selinfo placed;
+                worldactionselection(placed, placedorigin, orient);
+                mpeditface(-1, 1, sel, false);
+                mpedittex(getworldcubeslot(item), 1, placed, false);
+                return true;
+            }
+            case WORLD_ACTION_PLACE_SCATTER:
+                return item >= numworldcubes() &&
+                       editworldscatter(item - numworldcubes(), target, orient, true);
+            case WORLD_ACTION_BREAK_CUBE_START:
+                mpdelcube(sel, false);
+                return true;
+            case WORLD_ACTION_BREAK_SCATTER_START:
+                return item >= numworldcubes() &&
+                       editworldscatter(item - numworldcubes(), target, orient, false);
+            default:
+                return false;
+        }
+    }
+
+    static void rollbackworldaction(const predictedworldaction &prediction)
+    {
+        if(prediction.action == WORLD_ACTION_PLACE_CUBE)
+        {
+            ivec target = worldactionplacecell(prediction.target, prediction.orient);
+            selinfo sel;
+            worldactionselection(sel, target, prediction.orient);
+            worldselectiontolocal(sel);
+            mpdelcube(sel, false);
+        }
+        else if(prediction.action == WORLD_ACTION_PLACE_SCATTER)
+        {
+            selinfo sel;
+            worldactionselection(sel, prediction.target, prediction.orient);
+            worldselectiontolocal(sel);
+            editworldscatter(prediction.item - numworldcubes(), sel.o, prediction.orient, false);
+        }
+        else if(prediction.action == WORLD_ACTION_BREAK_CUBE_START)
+        {
+            ivec target = prediction.target,
+                 support = target;
+            const int dimension = prediction.orient >> 1;
+            support[dimension] += prediction.orient&1 ? -16 : 16;
+            applyworldaction(WORLD_ACTION_PLACE_CUBE, support, prediction.orient, prediction.item);
+        }
+        else if(prediction.action == WORLD_ACTION_BREAK_SCATTER_START)
+            applyworldaction(WORLD_ACTION_PLACE_SCATTER, prediction.target, prediction.orient, prediction.item);
+    }
+#endif
 
     #ifndef STANDALONE
     static void putvslot(packetbuf &p, int index)
@@ -171,6 +280,10 @@ namespace game
     void gamedisconnect(bool cleanup)
     {
         connected = remote = false;
+        predictedworldactions.deletecontents();
+        nextworldrequestid = 1;
+        resetsurvivalinventory();
+        receiveserversettings(5000, 250);
 #ifndef STANDALONE
         resetclientreceive();
 #endif
@@ -309,6 +422,14 @@ namespace game
 
     static bool applynetworkedit(networkedit &edit)
     {
+        if(edit.type == N_WORLDAUTH)
+        {
+            if(player1 && edit.author == player1->clientnum && edit.requestid && findpredictedworldaction(edit.requestid)) return true;
+            setworldeditauthor(edit.author);
+            setworldeditrevision(edit.revision);
+            return applyworldaction(edit.args[0], ivec(edit.args[1], edit.args[2], edit.args[3]), edit.args[4], edit.args[5]);
+        }
+
         selinfo sel = edit.selection;
         worldselectiontolocal(sel);
         if(!sel.validate() || !worldselectionready(sel)) return false;
@@ -617,14 +738,43 @@ namespace game
     enum
     {
         CREATIVE_ARM_RELEASE = 120,
-        SURVIVAL_BREAK_MILLIS = 5000,
-        SURVIVAL_SCATTER_BREAK_MILLIS = 250,
         SURVIVAL_BREAK_STAGES = 8,
         SURVIVAL_BREAK_PARTICLE_MILLIS = 125,
         SURVIVAL_STACK_SIZE = 64
     };
 
     static const float CREATIVE_ARM_PITCH = 70.0f;
+    static int authoritativebreakmillis = 5000, authoritativescatterbreakmillis = 250;
+
+    static void sendworldaction(uint requestid, int action, const ivec &localtarget, int orient, int item, int slot)
+    {
+        selinfo selection;
+        worldactionselection(selection, localtarget, orient);
+        if(waitforserveredit()) worldselectiontoabsolute(selection);
+        addmsg(N_WORLDACTION, "ri8", int(requestid), action, selection.o.x, selection.o.y, selection.o.z, orient, item, slot);
+    }
+
+    static void addpredictedworldaction(uint requestid, int action, const ivec &absolutetarget, int orient, int item)
+    {
+        predictedworldaction *prediction = new predictedworldaction;
+        prediction->requestid = requestid;
+        prediction->action = action;
+        prediction->target = absolutetarget;
+        prediction->orient = orient;
+        prediction->item = item;
+        predictedworldactions.add(prediction);
+    }
+
+    static uint predictworldaction(int action, const ivec &localtarget, int orient, int item, int slot)
+    {
+        const uint requestid = newworldrequestid();
+        selinfo selection;
+        worldactionselection(selection, localtarget, orient);
+        if(waitforserveredit()) worldselectiontoabsolute(selection);
+        addpredictedworldaction(requestid, action, selection.o, orient, item);
+        sendworldaction(requestid, action, localtarget, orient, item, slot);
+        return requestid;
+    }
 
     static int clampcreativehotbarslot()
     {
@@ -660,6 +810,72 @@ namespace game
             survivalitems[i] = items[i];
             survivalcounts[i] = clamp(counts[i], 1, int(SURVIVAL_STACK_SIZE));
         }
+    }
+
+    void receiveinventory(const int *items, const int *counts, int slots, int selected)
+    {
+        loadsurvivalinventory(items, counts, slots);
+        creativehotbarslot = clamp(selected, 0, CREATIVE_HOTBAR_SLOTS - 1);
+    }
+
+    void receiveserversettings(int breakmillis, int scatterbreakmillis)
+    {
+        authoritativebreakmillis = clamp(breakmillis, 100, 60000);
+        authoritativescatterbreakmillis = clamp(scatterbreakmillis, 50, 60000);
+    }
+
+    void receiveactionresult(uint requestid, int result, const char *reason)
+    {
+#ifndef STANDALONE
+        if(result != ACTION_RESULT_ACCEPTED) cancelclientbreakrequest(requestid);
+#endif
+        loopv(predictedworldactions)
+        {
+            predictedworldaction *prediction = predictedworldactions[i];
+            if(prediction->requestid != requestid) continue;
+            if(result == ACTION_RESULT_REJECTED) rollbackworldaction(*prediction);
+            delete prediction;
+            predictedworldactions.remove(i);
+            break;
+        }
+        if(result != ACTION_RESULT_ACCEPTED && reason && reason[0]) conoutf(CON_WARN, "server action rejected: %s", reason);
+    }
+
+    void receivebreakstate(int actor, uint requestid, int phase, int action, const ivec &absolutetarget, int orient, int stage)
+    {
+#ifndef STANDALONE
+        if(player1 && actor == player1->clientnum &&
+           (phase == BREAK_STATE_CANCEL || phase == BREAK_STATE_COMPLETE))
+            cancelclientbreakrequest(requestid);
+        gameent *d = clients.inrange(actor) ? clients[actor] : NULL;
+        if(d && d != player1)
+        {
+            const bool active = phase == BREAK_STATE_START || phase == BREAK_STATE_UPDATE;
+            if(active && !d->renderattacking)
+            {
+                d->renderattacking = true;
+                d->renderattackmillis = lastmillis;
+            }
+            else if(!active && d->renderattacking)
+            {
+                d->renderattacking = false;
+                d->renderattackreleasemillis = lastmillis;
+            }
+        }
+        if(action == WORLD_ACTION_BREAK_CUBE_START)
+        {
+            if(phase == BREAK_STATE_START || phase == BREAK_STATE_UPDATE)
+            {
+                selinfo sel;
+                worldactionselection(sel, absolutetarget, orient);
+                worldselectiontolocal(sel);
+                setbreakstain(sel.o, sel.grid, clamp(stage, 0, SURVIVAL_BREAK_STAGES - 1));
+            }
+            else clearbreakstain();
+        }
+#else
+        (void)actor; (void)requestid; (void)phase; (void)action; (void)absolutetarget; (void)orient; (void)stage;
+#endif
     }
 
     void savesurvivalinventory(stream *f)
@@ -843,7 +1059,16 @@ namespace game
                 if(hit.orient == WORLD_ORIENT_BOTTOM) return;
             }
             else if(hit.orient != WORLD_ORIENT_TOP) return;
-            scatteredittrigger(type, hit.o, hit.orient, true);
+            if(!waitforserveredit())
+            {
+                scatteredittrigger(type, hit.o, hit.orient, true);
+                if(m_survival) consumesurvivalitem();
+                player1->renderplacemillis = lastmillis;
+                player1->renderplacetoggle = !player1->renderplacetoggle;
+                return;
+            }
+            if(!editworldscatter(type, hit.o, hit.orient, true)) return;
+            predictworldaction(WORLD_ACTION_PLACE_SCATTER, hit.o, hit.orient, selected, clampcreativehotbarslot());
             if(m_survival) consumesurvivalitem();
             player1->renderplacemillis = lastmillis;
             player1->renderplacetoggle = !player1->renderplacetoggle;
@@ -859,8 +1084,17 @@ namespace game
         // Extrude exactly one 16-unit voxel, then deliberately paint every face.
         selinfo placed = hit;
         placed.o = target;
-        mpeditface(-1, 1, hit, true);
-        mpedittex(getworldcubeslot(selected), 1, placed, true);
+        if(!waitforserveredit())
+        {
+            mpeditface(-1, 1, hit, true);
+            mpedittex(getworldcubeslot(selected), 1, placed, true);
+        }
+        else
+        {
+            mpeditface(-1, 1, hit, false);
+            mpedittex(getworldcubeslot(selected), 1, placed, false);
+            predictworldaction(WORLD_ACTION_PLACE_CUBE, hit.o, hit.orient, selected, clampcreativehotbarslot());
+        }
         if(m_survival) consumesurvivalitem();
         player1->renderplacemillis = lastmillis;
         player1->renderplacetoggle = !player1->renderplacetoggle;
@@ -875,16 +1109,63 @@ namespace game
             int type, mountorient;
             ivec support;
             if(getworldscatterentityedit(target.entity, type, support, mountorient))
-                scatteredittrigger(type, support, mountorient, false);
+            {
+                if(!waitforserveredit()) scatteredittrigger(type, support, mountorient, false);
+                else
+                {
+                    editworldscatter(type, support, mountorient, false);
+                    predictworldaction(WORLD_ACTION_BREAK_SCATTER_START, support, mountorient, numworldcubes() + type, -1);
+                    sendworldaction(predictedworldactions.last()->requestid, WORLD_ACTION_BREAK_COMPLETE,
+                                    support, mountorient, numworldcubes() + type, -1);
+                }
+            }
             return;
         }
-        mpdelcube(target.cube, true);
+        if(!waitforserveredit()) mpdelcube(target.cube, true);
+        else
+        {
+            const int item = getworldcubeindexat(ivec(target.cube.o).add(target.cube.grid / 2), target.cube.orient);
+            mpdelcube(target.cube, false);
+            predictworldaction(WORLD_ACTION_BREAK_CUBE_START, target.cube.o, target.cube.orient, item, -1);
+            sendworldaction(predictedworldactions.last()->requestid, WORLD_ACTION_BREAK_COMPLETE, target.cube.o, target.cube.orient, item, -1);
+        }
     }
 
 #ifndef STANDALONE
     static bool survivalbreakactive = false;
     static creativetarget survivalbreaktarget;
-    static int survivalbreakstart = 0, survivalbreakparticlemillis = -1;
+    static int survivalbreakstart = 0, survivalbreakparticlemillis = -1, survivalbreaklaststage = -1;
+    static uint survivalbreakrequestid = 0;
+    static int survivalblockitem(const creativetarget &target);
+
+    static void cancelsurvivalbreak()
+    {
+        if(survivalbreakrequestid && waitforserveredit())
+        {
+            if(survivalbreaktarget.type == CREATIVE_TARGET_SCATTER)
+            {
+                int type, orient;
+                ivec support;
+                if(getworldscatterentityedit(survivalbreaktarget.entity, type, support, orient))
+                    sendworldaction(survivalbreakrequestid, WORLD_ACTION_BREAK_CANCEL, support, orient, numworldcubes() + type, -1);
+            }
+            else
+                sendworldaction(survivalbreakrequestid, WORLD_ACTION_BREAK_CANCEL, survivalbreaktarget.cube.o,
+                                survivalbreaktarget.cube.orient, survivalblockitem(survivalbreaktarget), -1);
+        }
+        survivalbreakrequestid = 0;
+        survivalbreaklaststage = -1;
+    }
+
+    static void cancelclientbreakrequest(uint requestid)
+    {
+        if(!requestid || requestid != survivalbreakrequestid) return;
+        survivalbreakactive = false;
+        survivalbreakrequestid = 0;
+        survivalbreaklaststage = -1;
+        survivalbreakparticlemillis = -1;
+        clearbreakstain();
+    }
 
     static bool samesurvivaltarget(const creativetarget &a,
                                    const creativetarget &b)
@@ -915,6 +1196,7 @@ namespace game
     {
         if(!survivalenabled() || !player1->renderattacking)
         {
+            if(survivalbreakactive) cancelsurvivalbreak();
             survivalbreakactive = false;
             survivalbreakparticlemillis = -1;
             clearbreakstain();
@@ -924,6 +1206,7 @@ namespace game
         creativetarget target;
         if(!findcreativetarget(target))
         {
+            if(survivalbreakactive) cancelsurvivalbreak();
             survivalbreakactive = false;
             survivalbreakparticlemillis = -1;
             clearbreakstain();
@@ -931,9 +1214,25 @@ namespace game
         }
         if(!survivalbreakactive || !samesurvivaltarget(target, survivalbreaktarget))
         {
+            if(survivalbreakactive) cancelsurvivalbreak();
             survivalbreaktarget = target;
             survivalbreakstart = lastmillis;
             survivalbreakactive = true;
+            survivalbreaklaststage = 0;
+            if(waitforserveredit())
+            {
+                survivalbreakrequestid = newworldrequestid();
+                if(target.type == CREATIVE_TARGET_SCATTER)
+                {
+                    int type, mountorient;
+                    ivec support;
+                    if(getworldscatterentityedit(target.entity, type, support, mountorient))
+                        sendworldaction(survivalbreakrequestid, WORLD_ACTION_BREAK_SCATTER_START, support, mountorient, numworldcubes() + type, -1);
+                }
+                else
+                    sendworldaction(survivalbreakrequestid, WORLD_ACTION_BREAK_CUBE_START, target.cube.o, target.cube.orient,
+                                    survivalblockitem(target), -1);
+            }
             if(target.type == CREATIVE_TARGET_CUBE)
             {
                 setbreakstain(target.cube.o, target.cube.grid, 0);
@@ -948,13 +1247,19 @@ namespace game
             return;
         }
         const int breakmillis = target.type == CREATIVE_TARGET_SCATTER
-                              ? SURVIVAL_SCATTER_BREAK_MILLIS
-                              : SURVIVAL_BREAK_MILLIS;
+                              ? authoritativescatterbreakmillis
+                              : authoritativebreakmillis;
         const int elapsed = max(lastmillis - survivalbreakstart, 0);
         if(target.type == CREATIVE_TARGET_CUBE)
         {
-            const int stage = clamp(elapsed, 0, SURVIVAL_BREAK_MILLIS - 1) * SURVIVAL_BREAK_STAGES / SURVIVAL_BREAK_MILLIS;
+            const int stage = clamp(elapsed, 0, authoritativebreakmillis - 1) * SURVIVAL_BREAK_STAGES / authoritativebreakmillis;
             setbreakstain(target.cube.o, target.cube.grid, stage);
+            if(waitforserveredit() && survivalbreakrequestid && stage != survivalbreaklaststage)
+            {
+                sendworldaction(survivalbreakrequestid, WORLD_ACTION_BREAK_UPDATE, target.cube.o, target.cube.orient,
+                                survivalblockitem(target), stage);
+                survivalbreaklaststage = stage;
+            }
             if(survivalbreakparticlemillis < 0 || lastmillis - survivalbreakparticlemillis >= SURVIVAL_BREAK_PARTICLE_MILLIS)
             {
                 const int num = survivalbreakparticlemillis < 0 ? 1 : min((lastmillis - survivalbreakparticlemillis) / SURVIVAL_BREAK_PARTICLE_MILLIS, 3);
@@ -979,7 +1284,16 @@ namespace game
             if(getworldscatterentityedit(survivalbreaktarget.entity, type, support, mountorient))
             {
                 item = numworldcubes() + type;
-                scatteredittrigger(type, support, mountorient, false);
+                if(!waitforserveredit()) scatteredittrigger(type, support, mountorient, false);
+                else
+                {
+                    editworldscatter(type, support, mountorient, false);
+                    selinfo absolute;
+                    worldactionselection(absolute, support, mountorient);
+                    worldselectiontoabsolute(absolute);
+                    addpredictedworldaction(survivalbreakrequestid, WORLD_ACTION_BREAK_SCATTER_START, absolute.o, mountorient, item);
+                    sendworldaction(survivalbreakrequestid, WORLD_ACTION_BREAK_COMPLETE, support, mountorient, item, -1);
+                }
                 broken = true;
             }
         }
@@ -987,12 +1301,24 @@ namespace game
         {
             item = survivalblockitem(survivalbreaktarget);
             emitsurvivalblockchips(target, 8);
-            mpdelcube(survivalbreaktarget.cube, true);
+            if(!waitforserveredit()) mpdelcube(survivalbreaktarget.cube, true);
+            else
+            {
+                mpdelcube(survivalbreaktarget.cube, false);
+                selinfo absolute = survivalbreaktarget.cube;
+                worldselectiontoabsolute(absolute);
+                addpredictedworldaction(survivalbreakrequestid, WORLD_ACTION_BREAK_CUBE_START, absolute.o,
+                                        survivalbreaktarget.cube.orient, item);
+                sendworldaction(survivalbreakrequestid, WORLD_ACTION_BREAK_COMPLETE, survivalbreaktarget.cube.o,
+                                survivalbreaktarget.cube.orient, item, -1);
+            }
             broken = true;
         }
         if(broken && !addsurvivalitem(item)) conoutf(CON_WARN, "inventory is full; the broken block was not collected");
         survivalbreakactive = false;
         survivalbreakparticlemillis = -1;
+        survivalbreakrequestid = 0;
+        survivalbreaklaststage = -1;
     }
 #endif
 
@@ -1036,6 +1362,7 @@ namespace game
             player1->renderattackreleasemillis = lastmillis;
             player1->renderattacking = false;
 #ifndef STANDALONE
+            if(survivalbreakactive) cancelsurvivalbreak();
             survivalbreakactive = false;
             survivalbreakparticlemillis = -1;
             clearbreakstain();
@@ -1052,10 +1379,14 @@ namespace game
     {
         creativehotbarslot = (clampcreativehotbarslot() - *dir) % CREATIVE_HOTBAR_SLOTS;
         if(creativehotbarslot < 0) creativehotbarslot += CREATIVE_HOTBAR_SLOTS;
+        if(m_survival && waitforserveredit())
+            addmsg(N_INVENTORYACTION, "ri4", int(newworldrequestid()), INVENTORY_ACTION_SELECT, creativehotbarslot, 0);
     });
     ICOMMAND(creativehotbarselect, "i", (int *slot),
     {
         creativehotbarslot = clamp(*slot, 0, CREATIVE_HOTBAR_SLOTS - 1);
+        if(m_survival && waitforserveredit())
+            addmsg(N_INVENTORYACTION, "ri4", int(newworldrequestid()), INVENTORY_ACTION_SELECT, creativehotbarslot, 0);
     });
     ICOMMAND(creativehotbarassign, "ii", (int *slot, int *item),
     {
@@ -1092,6 +1423,8 @@ namespace game
         {
             swap(survivalitems[*from], survivalitems[*to]);
             swap(survivalcounts[*from], survivalcounts[*to]);
+            if(waitforserveredit())
+                addmsg(N_INVENTORYACTION, "ri4", int(newworldrequestid()), INVENTORY_ACTION_SWAP, *from, *to);
         }
     });
     ICOMMAND(creativeblockcount, "", (), intret(numworldcubes() + numworldscatters()));
@@ -1360,6 +1693,11 @@ namespace game
     {
         if(*numargs > 0)
         {
+            if(waitforserveredit())
+            {
+                conoutf(CON_ERROR, "the multiplayer server owns the game mode");
+                intret(0);
+            }
             if(m_valid(*mode))
             {
                 gamemode = *mode;

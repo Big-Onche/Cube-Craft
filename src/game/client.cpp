@@ -5,7 +5,7 @@ namespace game
     static int sessionid = 0;
     static string servdesc = "";
     static int authoritativeauthor = -1;
-    static uint authoritativerevision = 0, synchronizedrevision = 0;
+    static uint authoritativerevision = 0, authoritativerequestid = 0, synchronizedrevision = 0;
     vector<networkedit *> pendingnetworkedits;
 
     static void getsel(packetbuf &p, selinfo &sel)
@@ -44,7 +44,7 @@ namespace game
         pendingnetworkworld = pendingnetworkreset = pendingnetworkrestoreposition = false;
         pendingnetworkedits.deletecontents();
         authoritativeauthor = -1;
-        authoritativerevision = synchronizedrevision = 0;
+        authoritativerevision = authoritativerequestid = synchronizedrevision = 0;
     }
 
     static bool validhex(const char *value, int minlen, int maxlen)
@@ -577,6 +577,7 @@ namespace game
             case N_EDITAUTHOR:
                 authoritativeauthor = getint(p);
                 authoritativerevision = uint(getint(p));
+                authoritativerequestid = uint(getint(p));
                 break;
             case N_WORLDSTATE:
             {
@@ -585,6 +586,10 @@ namespace game
                 pendingnetworktime = getint(p);
                 pendingnetworkfrozen = getint(p) != 0;
                 pendingnetworkreset = getint(p) != 0;
+                gamemode = getint(p);
+                if(!m_valid(gamemode) || (!m_creative && !m_survival)) gamemode = STARTGAMEMODE;
+                const int breakmillis = getint(p), scatterbreakmillis = getint(p);
+                receiveserversettings(breakmillis, scatterbreakmillis);
                 pendingnetworkrestoreposition = pendingnetworkreset && player1;
                 if(pendingnetworkrestoreposition)
                 {
@@ -593,7 +598,7 @@ namespace game
                 }
                 pendingnetworkedits.deletecontents();
                 authoritativeauthor = -1;
-                authoritativerevision = 0;
+                authoritativerevision = authoritativerequestid = 0;
                 pendingnetworkworld = true;
                 break;
             }
@@ -670,14 +675,19 @@ namespace game
             case N_DELCUBE:
             case N_EDITVSLOT:
             case N_EDITSCATTER:
+            case N_WORLDAUTH:
             {
                 networkedit *edit = new networkedit;
                 edit->type = type;
                 edit->author = authoritativeauthor;
                 edit->revision = authoritativerevision;
-                getsel(p, edit->selection);
+                edit->requestid = authoritativerequestid;
+                if(type != N_WORLDAUTH) getsel(p, edit->selection);
                 switch(type)
                 {
+                    case N_WORLDAUTH:
+                        loopi(6) edit->args[i] = getint(p);
+                        break;
                     case N_EDITF:
                         edit->args[0] = getint(p);
                         edit->args[1] = getint(p);
@@ -739,7 +749,60 @@ namespace game
                     processnetworkedits();
                 }
                 authoritativeauthor = -1;
-                authoritativerevision = 0;
+                authoritativerevision = authoritativerequestid = 0;
+                break;
+            }
+            case N_INVENTORYSTATE:
+            {
+                const int slots = getint(p), selected = getint(p);
+                if(slots != SURVIVAL_USABLE_SLOTS)
+                {
+                    conoutf(CON_ERROR, "server sent an invalid survival inventory");
+                    disconnect();
+                    return;
+                }
+                int items[SURVIVAL_USABLE_SLOTS], counts[SURVIVAL_USABLE_SLOTS];
+                loopi(SURVIVAL_USABLE_SLOTS)
+                {
+                    items[i] = -1;
+                    counts[i] = 0;
+                }
+                loopi(max(slots, 0))
+                {
+                    const int item = getint(p), count = getint(p);
+                    if(i < SURVIVAL_USABLE_SLOTS)
+                    {
+                        items[i] = item;
+                        counts[i] = count;
+                    }
+                }
+                if(!p.overread()) receiveinventory(items, counts, SURVIVAL_USABLE_SLOTS, selected);
+                break;
+            }
+            case N_ACTIONRESULT:
+            {
+                const uint requestid = uint(getint(p));
+                const int result = getint(p);
+                string reason;
+                getstring(reason, p, sizeof(reason));
+                if(result < ACTION_RESULT_REJECTED || result > ACTION_RESULT_CORRECTED)
+                {
+                    conoutf(CON_ERROR, "server sent an invalid action result");
+                    disconnect();
+                    return;
+                }
+                receiveactionresult(requestid, result, reason);
+                break;
+            }
+            case N_BREAKSTATE:
+            {
+                const int actor = getint(p);
+                const uint requestid = uint(getint(p));
+                const int phase = getint(p), action = getint(p);
+                ivec target;
+                target.x = getint(p); target.y = getint(p); target.z = getint(p);
+                const int orient = getint(p), stage = getint(p);
+                receivebreakstate(actor, requestid, phase, action, target, orient, stage);
                 break;
             }
             case N_CALCLIGHT:

@@ -68,25 +68,65 @@ enum
     N_SETPRIVILEGE, N_SETMASTER, N_SERVERCOMMAND,
     N_SERVERIDENTITY, N_IDENTITYLOGIN, N_IDENTITYREGISTER, N_IDENTITYCHALLENGE,
     N_IDENTITYRESPONSE, N_IDENTITYSUCCESS, N_IDENTITYFAILURE, N_IDENTITYREVOKED,
+    N_INVENTORYSTATE, N_INVENTORYACTION, N_WORLDACTION, N_WORLDAUTH, N_ACTIONRESULT,
+    N_BREAKSTATE,
     NUMMSG
+};
+
+enum
+{
+    INVENTORY_ACTION_SWAP = 0,
+    INVENTORY_ACTION_SELECT
+};
+
+enum
+{
+    WORLD_ACTION_PLACE_CUBE = 0,
+    WORLD_ACTION_PLACE_SCATTER,
+    WORLD_ACTION_BREAK_CUBE_START,
+    WORLD_ACTION_BREAK_SCATTER_START,
+    WORLD_ACTION_BREAK_UPDATE,
+    WORLD_ACTION_BREAK_CANCEL,
+    WORLD_ACTION_BREAK_COMPLETE
+};
+
+enum
+{
+    BREAK_STATE_START = 0,
+    BREAK_STATE_UPDATE,
+    BREAK_STATE_COMPLETE,
+    BREAK_STATE_CANCEL
+};
+
+enum
+{
+    ACTION_RESULT_REJECTED = 0,
+    ACTION_RESULT_ACCEPTED,
+    ACTION_RESULT_CORRECTED
 };
 
 static const int msgsizes[] =
 {
     N_CONNECT, 0, N_SERVINFO, 0, N_WELCOME, 1, N_INITCLIENT, 0, N_POS, 0, N_TEXT, 0, N_SOUND, 2, N_CDIS, 2,
     N_MAPCHANGE, 0, N_MAPVOTE, 0, N_PING, 2, N_PONG, 2, N_CLIENTPING, 2, N_SERVMSG, 0,
-    N_EDITMODE, 2, N_EDITENT, 11, N_EDITF, 16, N_EDITT, 16, N_EDITM, 16, N_FLIP, 14, N_COPY, 14, N_PASTE, 14, N_ROTATE, 15, N_REPLACE, 17, N_DELCUBE, 14, N_CALCLIGHT, 1, N_REMIP, 1, N_EDITVSLOT, 16, N_UNDO, 0, N_REDO, 0, N_NEWMAP, 2, N_GETMAP, 1, N_SENDMAP, 0, N_CLIPBOARD, 0, N_EDITVAR, 0, N_EDITSCATTER, 16, N_EDITAUTHOR, 3,
-    N_WORLDSTATE, 6, N_WORLDREADY, 2, N_WORLDSYNC, 2, N_WORLDTIME, 3,
+    N_EDITMODE, 2, N_EDITENT, 11, N_EDITF, 16, N_EDITT, 16, N_EDITM, 16,
+    N_FLIP, 14, N_COPY, 14, N_PASTE, 14, N_ROTATE, 15, N_REPLACE, 17,
+    N_DELCUBE, 14, N_CALCLIGHT, 1, N_REMIP, 1, N_EDITVSLOT, 16,
+    N_UNDO, 0, N_REDO, 0, N_NEWMAP, 2, N_GETMAP, 1, N_SENDMAP, 0,
+    N_CLIPBOARD, 0, N_EDITVAR, 0, N_EDITSCATTER, 16, N_EDITAUTHOR, 4,
+    N_WORLDSTATE, 9, N_WORLDREADY, 2, N_WORLDSYNC, 2, N_WORLDTIME, 3,
     N_SETPRIVILEGE, 3, N_SETMASTER, 0, N_SERVERCOMMAND, 0,
     N_SERVERIDENTITY, 0, N_IDENTITYLOGIN, 0, N_IDENTITYREGISTER, 0, N_IDENTITYCHALLENGE, 0,
     N_IDENTITYRESPONSE, 0, N_IDENTITYSUCCESS, 0, N_IDENTITYFAILURE, 0, N_IDENTITYREVOKED, 0,
+    N_INVENTORYSTATE, 0, N_INVENTORYACTION, 5, N_WORLDACTION, 9, N_WORLDAUTH, 7,
+    N_ACTIONRESULT, 0, N_BREAKSTATE, 10,
     -1
 };
 
 #define TESSERACT_SERVER_PORT 42000
 #define TESSERACT_LANINFO_PORT 41998
 #define TESSERACT_MASTER_PORT 41999
-#define PROTOCOL_VERSION 9
+#define PROTOCOL_VERSION 10
 
 struct gameent : dynent
 {
@@ -133,12 +173,12 @@ namespace game
 
     struct networkedit
     {
-        int type, author, args[3];
-        uint revision;
+        int type, author, args[6];
+        uint revision, requestid;
         selinfo selection;
         vector<uchar> extra;
 
-        networkedit() : type(-1), author(-1), revision(0)
+        networkedit() : type(-1), author(-1), revision(0), requestid(0)
         {
             memset(args, 0, sizeof(args));
         }
@@ -161,6 +201,10 @@ namespace game
     extern float playerarmactionpitch(const gameent *d);
     extern float creativearmwave(int elapsed);
     extern int selectedcreativeblock();
+    extern void receiveserversettings(int breakmillis, int scatterbreakmillis);
+    extern void receiveinventory(const int *items, const int *counts, int slots, int selected);
+    extern void receiveactionresult(uint requestid, int result, const char *reason);
+    extern void receivebreakstate(int actor, uint requestid, int phase, int action, const ivec &target, int orient, int stage);
     extern int smoothmove, smoothdist;
     extern vector<networkedit *> pendingnetworkedits;
     extern void processnetworkedits();
