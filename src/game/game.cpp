@@ -1091,9 +1091,11 @@ namespace game
         }
         else
         {
+            // mpeditface advances hit.o to the placed cell, while the protocol carries the support cell.
+            const ivec support = hit.o;
             mpeditface(-1, 1, hit, false);
             mpedittex(getworldcubeslot(selected), 1, placed, false);
-            predictworldaction(WORLD_ACTION_PLACE_CUBE, hit.o, hit.orient, selected, clampcreativehotbarslot());
+            predictworldaction(WORLD_ACTION_PLACE_CUBE, support, hit.orient, selected, clampcreativehotbarslot());
         }
         if(m_survival) consumesurvivalitem();
         player1->renderplacemillis = lastmillis;
@@ -1256,8 +1258,8 @@ namespace game
             setbreakstain(target.cube.o, target.cube.grid, stage);
             if(waitforserveredit() && survivalbreakrequestid && stage != survivalbreaklaststage)
             {
-                sendworldaction(survivalbreakrequestid, WORLD_ACTION_BREAK_UPDATE, target.cube.o, target.cube.orient,
-                                survivalblockitem(target), stage);
+                sendworldaction(survivalbreakrequestid, WORLD_ACTION_BREAK_UPDATE, survivalbreaktarget.cube.o,
+                                survivalbreaktarget.cube.orient, survivalblockitem(survivalbreaktarget), stage);
                 survivalbreaklaststage = stage;
             }
             if(survivalbreakparticlemillis < 0 || lastmillis - survivalbreakparticlemillis >= SURVIVAL_BREAK_PARTICLE_MILLIS)

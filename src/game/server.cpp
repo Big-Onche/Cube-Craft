@@ -1381,19 +1381,13 @@ namespace server
     static bool handleplacement(clientinfo &ci, uint requestid, int action, const ivec &support, int orient, int item, int slot)
     {
         const char *error = NULL;
-        if(!validnewrequest(ci, requestid, error))
-            return rejectaction(ci, requestid, error, requestid == ci.lastrequestid);
-        if(action != WORLD_ACTION_PLACE_CUBE && action != WORLD_ACTION_PLACE_SCATTER)
-            return rejectaction(ci, requestid, "invalid placement action", true, true);
-        if(!validactiontarget(ci, support, orient, error))
-            return rejectaction(ci, requestid, error, true);
+        if(!validnewrequest(ci, requestid, error)) return rejectaction(ci, requestid, error, requestid == ci.lastrequestid);
+        if(action != WORLD_ACTION_PLACE_CUBE && action != WORLD_ACTION_PLACE_SCATTER) return rejectaction(ci, requestid, "invalid placement action", true, true);
+        if(!validactiontarget(ci, support, orient, error)) return rejectaction(ci, requestid, error, true);
         const ivec occupied = action == WORLD_ACTION_PLACE_CUBE ? actionplacecell(support, orient) : support;
-        if(action == WORLD_ACTION_PLACE_CUBE && !validactiontarget(ci, occupied, orient, error))
-            return rejectaction(ci, requestid, error, true);
-        if(!actionrate(ci, true))
-            return rejectaction(ci, requestid, "excessive placement rate", true);
-        if(playeroccupies(occupied))
-            return rejectaction(ci, requestid, error ? error : "placement target is occupied by a player", true);
+        if(action == WORLD_ACTION_PLACE_CUBE && !validactiontarget(ci, occupied, orient, error)) return rejectaction(ci, requestid, error, true);
+        if(!actionrate(ci, true)) return rejectaction(ci, requestid, "excessive placement rate", true);
+        if(playeroccupies(occupied)) return rejectaction(ci, requestid, "");
         serverworldaction *state = findworldaction(occupied, action);
         if(state && (state->action == WORLD_ACTION_PLACE_CUBE || state->action == WORLD_ACTION_PLACE_SCATTER))
         {
@@ -1435,11 +1429,7 @@ namespace server
             return rejectaction(ci, requestid, "invalid destruction action", true, true);
         if(!validactiontarget(ci, target, orient, error)) return rejectaction(ci, requestid, error, true);
         if(!validactionitem(action, item)) return rejectaction(ci, requestid, "invalid destroyed item type", true, true);
-        if(ci.breakactive)
-        {
-            cancelbreak(ci);
-            return rejectaction(ci, requestid, "breaking multiple targets simultaneously", true);
-        }
+        if(ci.breakactive) cancelbreak(ci);
         serverworldaction *state = findworldaction(target, action);
         if(state && (state->action == WORLD_ACTION_BREAK_CUBE_START || state->action == WORLD_ACTION_BREAK_SCATTER_START))
         {
@@ -1468,12 +1458,11 @@ namespace server
 
     static bool updatebreak(clientinfo &ci, uint requestid, const ivec &target, int orient, int stage)
     {
-        if(!ci.breakactive || requestid != ci.breakrequestid)
-            return rejectaction(ci, requestid, "no matching break action is active");
-        if(target != ci.breaktarget || orient != ci.breakorient)
+        if(!ci.breakactive || requestid != ci.breakrequestid) return rejectaction(ci, requestid, "no matching break action is active");
+        if(target != ci.breaktarget || (ci.breakaction == WORLD_ACTION_BREAK_SCATTER_START && orient != ci.breakorient))
         {
             cancelbreak(ci);
-            return rejectaction(ci, requestid, "break target changed without cancellation", true);
+            return rejectaction(ci, requestid, "break target changed; the previous action was cancelled");
         }
         if(stage < 0 || stage >= 8)
         {
@@ -1499,12 +1488,16 @@ namespace server
 
     static bool completebreak(clientinfo &ci, uint requestid, const ivec &target, int orient, int item)
     {
-        if(!ci.breakactive || requestid != ci.breakrequestid)
-            return rejectaction(ci, requestid, "no matching break action is active");
-        if(target != ci.breaktarget || orient != ci.breakorient || item != ci.breakitem)
+        if(!ci.breakactive || requestid != ci.breakrequestid) return rejectaction(ci, requestid, "no matching break action is active");
+        if(target != ci.breaktarget || (ci.breakaction == WORLD_ACTION_BREAK_SCATTER_START && orient != ci.breakorient))
         {
             cancelbreak(ci);
-            return rejectaction(ci, requestid, "break completion does not match its start", true, true);
+            return rejectaction(ci, requestid, "break completion target changed; the previous action was cancelled");
+        }
+        if(item != ci.breakitem)
+        {
+            cancelbreak(ci);
+            return rejectaction(ci, requestid, "break completion item does not match its start", true, true);
         }
         serverworldaction *state = findworldaction(target, ci.breakaction);
         if(state && (state->action == WORLD_ACTION_BREAK_CUBE_START || state->action == WORLD_ACTION_BREAK_SCATTER_START))
@@ -1537,12 +1530,12 @@ namespace server
             cancelbreak(ci);
             return rejectaction(ci, requestid, "inventory is full");
         }
-        if(!acceptworldaction(ci, requestid, action, target, orient, item))
+        if(!acceptworldaction(ci, requestid, action, target, ci.breakorient, item))
         {
             cancelbreak(ci);
             return rejectaction(ci, requestid, "server could not persist the destruction");
         }
-        setworldactionstate(target, action, orient, item);
+        setworldactionstate(target, action, ci.breakorient, item);
         if(!servercreative()) addinventoryitem(ci, item);
         sendbreakstate(ci, BREAK_STATE_COMPLETE, 7);
         ci.breakactive = false;
