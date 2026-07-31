@@ -27,19 +27,6 @@ The project is based on [Tesseract](http://tesseract.gg/), a fork of Cube 2: Sau
 - ⬛⬛⬛⬛⬛ **Sound**: No sound
 - 🟩🟩🟩🟩🟩 **Stupidity of the project**: Maximum
 
-Most voxel games treat the world as a collection of fixed blocks and save every generated region to disk.
-
-Kastenbrot takes a different approach:
-
-- The world is generated deterministically from a seed.
-- Untouched terrain is never stored.
-- Only player modifications are saved as compact chunk diffs.
-- Cube Engine’s octree allows terrain to be edited at multiple resolutions.
-- Multiplayer clients generate the same base world locally.
-- The server only replicates authoritative changes.
-
-The result is a sandbox designed around fast exploration, powerful world editing, compact persistence, and responsive multiplayer.
-
 ---
 
 ## Features
