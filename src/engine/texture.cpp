@@ -1759,23 +1759,23 @@ uchar *loadalphamask(Texture *t)
     return t->alphamask;
 }
 
-Texture *textureload(const char *name, int clamp, bool mipit, bool msg, bool geometry)
+Texture *textureload(const char *name, int clamp, bool mipit, bool msg, bool unfiltered)
 {
     string tname, tkey;
     copystring(tname, name);
-    if(geometry) formatstring(tkey, "<geometry>%s", tname);
+    if(unfiltered) formatstring(tkey, "<unfiltered>%s", tname);
     else copystring(tkey, tname);
     Texture *t = textures.access(path(tkey));
     if(t) return t;
     int compress = 0;
     ImageData s;
-    if(texturedata(s, tname, msg, &compress, &clamp)) return newtexture(NULL, tkey, s, clamp, mipit, false, false, compress, geometry);
+    if(texturedata(s, tname, msg, &compress, &clamp)) return newtexture(NULL, tkey, s, clamp, mipit, false, false, compress, unfiltered);
     return notexture;
 }
 
-bool settexture(const char *name, int clamp)
+bool settexture(const char *name, int clamp, bool unfiltered)
 {
-    Texture *t = textureload(name, clamp, true, false);
+    Texture *t = textureload(name, clamp, true, false, unfiltered);
     glBindTexture(GL_TEXTURE_2D, t->id);
     return t != notexture;
 }
