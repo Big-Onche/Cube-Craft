@@ -1,6 +1,7 @@
 // main.cpp: initialisation & main loop
 
 #include "engine.h"
+#include "../game/world.h"
 
 #ifdef SDL_VIDEO_DRIVER_X11
 #include "SDL_syswm.h"
@@ -154,18 +155,208 @@ void bgquad(float x, float y, float w, float h, float tx = 0, float ty = 0, floa
     gle::end();
 }
 
+static const float BACKGROUND_TILE_WIDTH_PCT = 0.018f;
+static const float BACKGROUND_GROUND_LEVEL = 0.55f;
+static const float BACKGROUND_HILL_HEIGHT = 0.20f;
+static const int BACKGROUND_SMOOTH_PASSES = 3;
+
+static GLuint backgroundskytex = 0;
+
+static void bindbackgroundsky()
+{
+    if(!backgroundskytex)
+    {
+        // Top color, then horizon color.
+        static const uchar pixels[] = {45, 105, 190, 255, 145, 205, 245, 255};
+
+        glGenTextures(1, &backgroundskytex);
+        glBindTexture(GL_TEXTURE_2D, backgroundskytex);
+
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+
+        glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, 1, 2, 0, GL_RGBA, GL_UNSIGNED_BYTE, pixels);
+    }
+    else glBindTexture(GL_TEXTURE_2D, backgroundskytex);
+}
+
+static void setbackgroundtiletexture(const char *name)
+{
+    settexture(name, 0, false);
+
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_REPEAT);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_REPEAT);
+}
+
+static void renderproceduralbackground(int w, int h)
+{
+    static FastNoiseLite heightnoise;
+    static FastNoiseLite detailnoise;
+    static FastNoiseLite soilnoise;
+
+    static bool noiseinitialized = false;
+    static int backgroundseed = 0;
+
+    if(!noiseinitialized)
+    {
+        const Uint64 counter = SDL_GetPerformanceCounter();
+
+        backgroundseed = int(time(NULL)) ^ int(counter) ^ int(counter >> 32);
+
+        if(!backgroundseed) backgroundseed = 1;
+
+        heightnoise.SetSeed(backgroundseed);
+        heightnoise.SetNoiseType(FastNoiseLite::NoiseType_OpenSimplex2);
+        heightnoise.SetFractalType(FastNoiseLite::FractalType_FBm);
+        heightnoise.SetFractalOctaves(5);
+        heightnoise.SetFractalLacunarity(2.0f);
+        heightnoise.SetFractalGain(0.52f);
+        heightnoise.SetFrequency(0.028f);
+
+        detailnoise.SetSeed(backgroundseed ^ 0x6D2B79F5);
+        detailnoise.SetNoiseType(FastNoiseLite::NoiseType_OpenSimplex2);
+        detailnoise.SetFractalType(FastNoiseLite::FractalType_FBm);
+        detailnoise.SetFractalOctaves(3);
+        detailnoise.SetFractalLacunarity(2.0f);
+        detailnoise.SetFractalGain(0.5f);
+        detailnoise.SetFrequency(0.09f);
+
+        soilnoise.SetSeed(backgroundseed ^ 0x1B56C4E9);
+        soilnoise.SetNoiseType(FastNoiseLite::NoiseType_Value);
+        soilnoise.SetFrequency(0.16f);
+
+        noiseinitialized = true;
+    }
+
+    const float tilesize = max(float(w) * BACKGROUND_TILE_WIDTH_PCT, 1.0f);
+    const int columns = max(int(ceilf(float(w) / tilesize)), 1);
+    const int rows = max(int(ceilf(float(h) / tilesize)), 2);
+
+    static vector<int> rawsurfaces;
+    static vector<int> surfaces;
+    static vector<int> stonebegins;
+
+    rawsurfaces.setsize(0);
+    surfaces.setsize(0);
+    stonebegins.setsize(0);
+
+    loopi(columns)
+    {
+        rawsurfaces.add(0);
+        surfaces.add(0);
+        stonebegins.add(0);
+    }
+
+    const int basesurface = clamp(int(rows * BACKGROUND_GROUND_LEVEL), 2, max(rows - 2, 2));
+    const int hillheight = max(int(rows * BACKGROUND_HILL_HEIGHT), 3);
+
+    loopi(columns)
+    {
+        const float broad = heightnoise.GetNoise(float(i), 0.0f);
+        const float detail = detailnoise.GetNoise(float(i), 256.0f);
+        const float terrain = broad * 0.90f + detail * 0.35f;
+
+        rawsurfaces[i] = clamp(basesurface + int(terrain * hillheight), 2, max(rows - 4, 2));
+    }
+
+    loopj(BACKGROUND_SMOOTH_PASSES)
+    {
+        loopi(columns)
+        {
+            const int left = rawsurfaces[max(i - 1, 0)];
+            const int center = rawsurfaces[i];
+            const int right = rawsurfaces[min(i + 1, columns - 1)];
+
+            surfaces[i] = (left + center * 2 + right + 2) / 4;
+        }
+
+        loopi(columns) rawsurfaces[i] = surfaces[i];
+    }
+
+    // Limit slopes to one block vertically per column prevents isolated towers and ugly cliffs
+    for(int i = 1; i < columns; ++i)
+    {
+        surfaces[i] = clamp(surfaces[i], surfaces[i - 1] - 1, surfaces[i - 1] + 1);
+    }
+
+    for(int i = columns - 2; i >= 0; --i)
+    {
+        surfaces[i] = clamp(surfaces[i], surfaces[i + 1] - 1, surfaces[i + 1] + 1 );
+    }
+
+    // Generate a varying dirt thickness.
+    loopi(columns)
+    {
+        const float soil = soilnoise.GetNoise(float(i), 512.0f);
+        const int dirtdepth = clamp(4 + int((soil + 1.0f) * 2.0f), 3, 8);
+
+        stonebegins[i] = min(surfaces[i] + 1 + dirtdepth, rows);
+    }
+
+    // Sky
+    bindbackgroundsky();
+    bgquad(0, 0, w, h);
+
+    // Stone
+    setbackgroundtiletexture("media/texture/terrain/stone.png");
+
+    loopi(columns)
+    {
+        const float x = i * tilesize;
+        const float y = stonebegins[i] * tilesize;
+        const float columnwidth = min(tilesize, float(w) - x);
+
+        if(columnwidth <= 0 || y >= h) continue;
+
+        const float layerheight = float(h) - y;
+
+        bgquad(x, y, columnwidth, layerheight, 0, 0, columnwidth / tilesize, layerheight / tilesize);
+    }
+
+    // Dirt below the grass.
+    setbackgroundtiletexture("media/texture/terrain/dirt.png");
+
+    loopi(columns)
+    {
+        const float x = i * tilesize;
+        const float y = (surfaces[i] + 1) * tilesize;
+        const float columnwidth = min(tilesize, float(w) - x);
+        const float bottom = min(stonebegins[i] * tilesize, float(h));
+        const float layerheight = bottom - y;
+
+        if(columnwidth <= 0 || layerheight <= 0) continue;
+
+        bgquad(x, y, columnwidth, layerheight, 0, 0, columnwidth / tilesize, layerheight / tilesize);
+    }
+
+    // Grass surface
+    setbackgroundtiletexture("media/texture/terrain/grass_dirt.png");
+
+    loopi(columns)
+    {
+        const float x = i * tilesize;
+        const float y = surfaces[i] * tilesize;
+        const float columnwidth = min(tilesize, float(w) - x);
+        const float tileheight = min(tilesize, float(h) - y);
+
+        if(columnwidth <= 0 || tileheight <= 0) continue;
+
+        bgquad(x, y, columnwidth, tileheight, 0, 0, columnwidth / tilesize, tileheight / tilesize);
+    }
+}
+
 void renderbackgroundview(int w, int h, const char *caption, Texture *mapshot, const char *mapname, const char *mapinfo)
 {
     static int lastupdate = -1, lastw = -1, lasth = -1;
-    static float backgroundu = 0, backgroundv = 0;
     if((renderedframe && !mainmenu && lastupdate != lastmillis) || lastw != w || lasth != h)
     {
         lastupdate = lastmillis;
         lastw = w;
         lasth = h;
-
-        backgroundu = rndscale(1);
-        backgroundv = rndscale(1);
     }
     else if(lastupdate != lastmillis) lastupdate = lastmillis;
 
@@ -176,9 +367,9 @@ void renderbackgroundview(int w, int h, const char *caption, Texture *mapshot, c
     gle::defvertex(2);
     gle::deftexcoord0();
 
-    settexture("media/interface/background.png", 0);
-    float bu = w*0.67f/256.0f, bv = h*0.67f/256.0f;
-    bgquad(0, 0, w, h, backgroundu, backgroundv, bu, bv);
+    glDisable(GL_BLEND);
+
+    renderproceduralbackground(w, h);
 
     glEnable(GL_BLEND);
     glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
@@ -201,8 +392,8 @@ void renderbackgroundview(int w, int h, const char *caption, Texture *mapshot, c
         lw = lh * logoaspect;
     }
 
-    float lx = 0.5f * (w - lw);
-    float ly = 0.15f * h - 0.5f * lh;
+    const float lx = 0.5f * (w - lw);
+    const float ly = 0.15f * h - 0.5f * lh;
 
     settexture("<premul>media/interface/logo.png", 3, true);
     bgquad(lx, ly, lw, lh);
@@ -211,49 +402,65 @@ void renderbackgroundview(int w, int h, const char *caption, Texture *mapshot, c
 
     if(caption)
     {
-        int tw = text_width(caption);
-        float tsz = 0.04f*min(w, h)/FONTH,
-              tx = 0.5f*(w - tw*tsz), ty = h - 0.075f*1.5f*min(w, h) - FONTH*tsz;
+        const int tw = text_width(caption);
+        const float tsz = 0.04f * min(w, h) / FONTH;
+        const float tx = 0.5f * (w - tw * tsz);
+        const float ty = h - 0.075f * 1.5f * min(w, h) - FONTH * tsz;
+
         pushhudtranslate(tx, ty, tsz);
         draw_text(caption, 0, 0);
         pophudmatrix();
     }
     if(mapshot || mapname)
     {
-        float infowidth = 14*FONTH, sz = 0.35f*min(w, h), msz = (0.85f*min(w, h) - sz)/(infowidth + FONTH), x = 0.5f*w, y = ly+lh - sz/15, mx = 0, my = 0, mw = 0, mh = 0;
+        const float infowidth = 14 * FONTH;
+        const float sz = 0.35f * min(w, h);
+        const float msz = (0.85f * min(w, h) - sz) / (infowidth + FONTH);
+
+        float x = 0.5f * w;
+        const float y = ly + lh - sz / 15;
+
+        float mx = 0;
+        float my = 0;
+        float mw = 0;
+        float mh = 0;
+
         if(mapinfo)
         {
             text_boundsf(mapinfo, mw, mh, infowidth);
-            x -= 0.5f*mw*msz;
-            if(mapshot && mapshot!=notexture)
+            x -= 0.5f * mw * msz;
+            if(mapshot && mapshot != notexture)
             {
-                x -= 0.5f*FONTH*msz;
-                mx = sz + FONTH*msz;
+                x -= 0.5f * FONTH * msz;
+                mx = sz + FONTH * msz;
             }
         }
-        if(mapshot && mapshot!=notexture)
+        if(mapshot && mapshot != notexture)
         {
-            x -= 0.5f*sz;
+            x -= 0.5f * sz;
+
             resethudshader();
             glBindTexture(GL_TEXTURE_2D, mapshot->id);
             bgquad(x, y, sz, sz);
         }
         if(mapname)
         {
-            float tw = text_widthf(mapname), tsz = sz/(8*FONTH), tx = max(0.5f*(mw*msz - tw*tsz), 0.0f);
-            pushhudtranslate(x+mx+tx, y, tsz);
+            const float tw = text_widthf(mapname);
+            const float tsz = sz / (8 * FONTH);
+            const float tx = max(0.5f * (mw * msz - tw * tsz), 0.0f);
+
+            pushhudtranslate(x + mx + tx, y, tsz);
             draw_text(mapname, 0, 0);
             pophudmatrix();
-            my = 1.5f*FONTH*tsz;
+            my = 1.5f * FONTH * tsz;
         }
         if(mapinfo)
         {
-            pushhudtranslate(x+mx, y+my, msz);
+            pushhudtranslate(x + mx, y + my, msz);
             draw_text(mapinfo, 0, 0, 0xFF, 0xFF, 0xFF, 0xFF, -1, infowidth);
             pophudmatrix();
         }
     }
-
     glDisable(GL_BLEND);
 }
 
