@@ -187,10 +187,14 @@ namespace game
         return true;
     }
 
+    static int effectivewaterspeed()
+    {
+        return authoritativewatersettings ? authoritativewaterspeed : clamp(int(waterflowspeed * 1000.0f + 0.5f), 100, 20000);
+    }
+
     static int waterstepmillis()
     {
-        const int speed = authoritativewatersettings ? authoritativewaterspeed : clamp(int(waterflowspeed * 1000.0f + 0.5f), 100, 20000);
-        return max(1000000 / speed, 1);
+        return max(1000000 / effectivewaterspeed(), 1);
     }
 
     static void schedulewater(const ivec &position, int delay)
@@ -547,7 +551,7 @@ namespace game
         if(current && current->falling) flow.z = -2;
         if(!flow.iszero())
         {
-            flow.normalize().mul(min(curtime / 1000.0f, 0.05f) * 12.0f * waterflowspeed);
+            flow.normalize().mul(min(curtime / 1000.0f, 0.05f) * 12.0f * effectivewaterspeed() / 1000.0f);
             player1->vel.add(flow);
         }
         player1->falling.z = max(player1->falling.z, -20.0f);
@@ -634,12 +638,13 @@ namespace game
             case WORLD_ACTION_PLACE_CUBE:
             {
                 if(item < 0 || item >= numworldcubes()) return false;
-                const ivec placedorigin = worldactionplacecell(target, orient);
+                const ivec placedorigin = worldactionplacecell(target, orient),
+                           absoluteplacedorigin = worldactionplacecell(absolutetarget, orient);
                 selinfo placed;
                 worldactionselection(placed, placedorigin, orient);
                 mpeditface(-1, 1, sel, false);
                 mpedittex(getworldcubeslot(item), 1, placed, false);
-                waterterrainchanged(placedorigin);
+                waterterrainchanged(absoluteplacedorigin);
                 return true;
             }
             case WORLD_ACTION_PLACE_SCATTER:
@@ -649,14 +654,14 @@ namespace game
             {
                 const int itemoffset = numworldcubes() + numworldscatters();
                 if(item < itemoffset || item >= itemoffset + numworlditems()) return false;
-                const ivec placedorigin = worldactionplacecell(target, orient);
+                const ivec placedorigin = worldactionplacecell(absolutetarget, orient);
                 fluidcell *existing = fluidcells.access(placedorigin);
                 return (existing && existing->source()) ||
                        addwatercell(placedorigin, 0, WATER_SOURCE_MANUAL, false);
             }
             case WORLD_ACTION_BREAK_CUBE_START:
                 mpdelcube(sel, false);
-                waterterrainchanged(target);
+                waterterrainchanged(absolutetarget);
                 return true;
             case WORLD_ACTION_BREAK_SCATTER_START:
                 return item >= numworldcubes() &&
@@ -675,6 +680,7 @@ namespace game
             worldactionselection(sel, target, prediction.orient);
             worldselectiontolocal(sel);
             mpdelcube(sel, false);
+            waterterrainchanged(target);
         }
         else if(prediction.action == WORLD_ACTION_PLACE_SCATTER)
         {
@@ -834,7 +840,7 @@ namespace game
         predictedworldactions.deletecontents();
         nextworldrequestid = 1;
         resetsurvivalinventory();
-        receiveserversettings(5000, 250, 2048, 12, 1000);
+        receiveserversettings(5000, 250, 1024, 128, 4000);
         authoritativewatersettings = false;
 #ifndef STANDALONE
         resetclientreceive();
@@ -1380,7 +1386,7 @@ namespace game
         authoritativebreakmillis = clamp(breakmillis, 100, 60000);
         authoritativescatterbreakmillis = clamp(scatterbreakmillis, 50, 60000);
         authoritativewaterupdates = clamp(waterupdates, 1, 16384);
-        authoritativewaterdistance = clamp(waterdistance, 1, 64);
+        authoritativewaterdistance = clamp(waterdistance, 1, 1024);
         authoritativewaterspeed = clamp(waterspeed, 100, 20000);
         authoritativewatersettings = true;
     }
@@ -1687,6 +1693,9 @@ namespace game
             const ivec support = hit.o;
             mpeditface(-1, 1, hit, false);
             mpedittex(getworldcubeslot(selected), 1, placed, false);
+            selinfo absolute = placed;
+            worldselectiontoabsolute(absolute);
+            waterterrainchanged(absolute.o);
             predictworldaction(WORLD_ACTION_PLACE_CUBE, support, hit.orient, selected, clampcreativehotbarslot());
         }
         if(m_survival) consumesurvivalitem();
@@ -1726,6 +1735,9 @@ namespace game
         {
             const int item = getworldcubeindexat(ivec(target.cube.o).add(target.cube.grid / 2), target.cube.orient);
             mpdelcube(target.cube, false);
+            selinfo absolute = target.cube;
+            worldselectiontoabsolute(absolute);
+            waterterrainchanged(absolute.o);
             predictworldaction(WORLD_ACTION_BREAK_CUBE_START, target.cube.o, target.cube.orient, item, -1);
             sendworldaction(predictedworldactions.last()->requestid, WORLD_ACTION_BREAK_COMPLETE, target.cube.o, target.cube.orient, item, -1);
         }
@@ -1909,6 +1921,7 @@ namespace game
                 mpdelcube(survivalbreaktarget.cube, false);
                 selinfo absolute = survivalbreaktarget.cube;
                 worldselectiontoabsolute(absolute);
+                waterterrainchanged(absolute.o);
                 addpredictedworldaction(survivalbreakrequestid, WORLD_ACTION_BREAK_CUBE_START, absolute.o,
                                         survivalbreaktarget.cube.orient, item);
                 sendworldaction(survivalbreakrequestid, WORLD_ACTION_BREAK_COMPLETE, survivalbreaktarget.cube.o,

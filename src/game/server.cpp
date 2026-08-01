@@ -946,10 +946,20 @@ namespace server
     static void sendworldstate(clientinfo &ci, bool reset)
     {
         ci.worldready = false;
-        sendf(ci.clientnum, 1, "ri12", N_WORLDSTATE, serverworldseed, int(worldeditrevision), worldclockmillis,
-              worldtimefrozen ? 1 : 0, reset ? 1 : 0, gamemode, survivalbreakmillis, survivalscatterbreakmillis,
-              serverwaterupdatespertick, serverwatersimulationmaxdist,
-              clamp(int(serverwaterflowspeed * 1000.0f + 0.5f), 100, 20000));
+        packetbuf p(MAXTRANS, ENET_PACKET_FLAG_RELIABLE);
+        putint(p, N_WORLDSTATE);
+        putint(p, serverworldseed);
+        putint(p, int(worldeditrevision));
+        putint(p, worldclockmillis);
+        putint(p, worldtimefrozen ? 1 : 0);
+        putint(p, reset ? 1 : 0);
+        putint(p, gamemode);
+        putint(p, survivalbreakmillis);
+        putint(p, survivalscatterbreakmillis);
+        putint(p, serverwaterupdatespertick);
+        putint(p, serverwatersimulationmaxdist);
+        putint(p, clamp(int(serverwaterflowspeed * 1000.0f + 0.5f), 100, 20000));
+        sendpacket(ci.clientnum, 1, p.finalize());
     }
 
     static void replayworld(clientinfo &ci)
