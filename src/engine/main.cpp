@@ -1459,6 +1459,7 @@ int main(int argc, char **argv)
     restorevsync();
     initgbuffer();
     loadshaders();
+    initworlddefinitions();
     initparticles();
     initstains();
 

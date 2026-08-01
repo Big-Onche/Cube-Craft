@@ -131,6 +131,7 @@ enum
     WORLD_ORIENT_BOTTOM, WORLD_ORIENT_TOP
 };
 extern int numworldcubes();
+extern void initworlddefinitions();
 extern int getworldcubeslot(int index);
 extern int getworldcubefaceslot(int index, int orient);
 extern int getworldcubeindex(int slot);

@@ -235,10 +235,10 @@ struct worldcubedefinition
     float texsize;
     int item, slot, sideslot, bottomslot;
     vector<worlddropdefinition> drops;
-    bool explicitdrops;
+    bool explicitdrops, errorfallback;
 
     worldcubedefinition()
-        : texsize(1), item(-1), slot(DEFAULT_GEOM), sideslot(DEFAULT_GEOM), bottomslot(DEFAULT_GEOM), explicitdrops(false)
+        : texsize(1), item(-1), slot(DEFAULT_GEOM), sideslot(DEFAULT_GEOM), bottomslot(DEFAULT_GEOM), explicitdrops(false), errorfallback(false)
     {
         id[0] = itemid[0] = texture[0] = sidetexture[0] = bottom[0] = bottomtexture[0] = '\0';
     }
@@ -262,11 +262,11 @@ struct worldscatterdefinition
     int item;
     int mapmodel;
     float lightradius;
-    bool placeable;
+    bool scatter, placeable;
     vector<worlddropdefinition> drops;
     bool explicitdrops;
 
-    worldscatterdefinition() : item(-1), mapmodel(-1), lightradius(0), placeable(false), explicitdrops(false)
+    worldscatterdefinition() : item(-1), mapmodel(-1), lightradius(0), scatter(false), placeable(false), explicitdrops(false)
     {
         id[0] = itemid[0] = model[0] = icon[0] = lightcolor[0] = '\0';
     }
@@ -288,7 +288,8 @@ static vector<worldscatterdefinition *> worldscatterdefinitions;
 static vector<inventoryitemdefinition *> inventoryitemdefinitions;
 static vector<worldgencubetextures> worldgentextures;
 static int worldgrassscatter = -1, worldrosescatter = -1,
-           worldtulipscatter = -1, worlddandelionscatter = -1;
+           worldtulipscatter = -1, worlddandelionscatter = -1,
+           worlderrorcube = -1, worlderrorobject = -1, worlderroritem = -1;
 static void updateleavesalpha();
 static void setworldleavesalpha(cube *root, bool enabled);
 static worldcubedefinition *findworldcube(const char *name);
@@ -298,14 +299,28 @@ int numworldcubes()
     return worldcubedefinitions.length();
 }
 
+static int validworldcubeindex(int index)
+{
+    if(worldcubedefinitions.inrange(index)) return index;
+    return worldcubedefinitions.inrange(worlderrorcube) ? worlderrorcube : -1;
+}
+
+static int validworldobjectindex(int index)
+{
+    if(worldscatterdefinitions.inrange(index)) return index;
+    return worldscatterdefinitions.inrange(worlderrorobject) ? worlderrorobject : -1;
+}
+
 int getworldcubeslot(int index)
 {
-    return worldcubedefinitions.inrange(index) ? worldcubedefinitions[index]->slot : DEFAULT_GEOM;
+    index = validworldcubeindex(index);
+    return index >= 0 ? worldcubedefinitions[index]->slot : DEFAULT_GEOM;
 }
 
 int getworldcubefaceslot(int index, int orient)
 {
-    if(!worldcubedefinitions.inrange(index)) return DEFAULT_GEOM;
+    index = validworldcubeindex(index);
+    if(index < 0) return DEFAULT_GEOM;
     const worldcubedefinition &type = *worldcubedefinitions[index];
     if(orient == WORLD_ORIENT_TOP) return type.slot;
     if(orient == WORLD_ORIENT_BOTTOM) return type.bottomslot;
@@ -314,12 +329,18 @@ int getworldcubefaceslot(int index, int orient)
 
 int getworldcubeindex(int slot)
 {
+    if(worldcubedefinitions.inrange(worlderrorcube))
+    {
+        const worldcubedefinition &error = *worldcubedefinitions[worlderrorcube];
+        if(error.slot == slot || error.sideslot == slot || error.bottomslot == slot) return worlderrorcube;
+    }
     loopv(worldcubedefinitions)
     {
+        if(i == worlderrorcube) continue;
         const worldcubedefinition &type = *worldcubedefinitions[i];
         if(type.slot == slot || type.sideslot == slot || type.bottomslot == slot) return i;
     }
-    return -1;
+    return worldcubedefinitions.inrange(worlderrorcube) ? worlderrorcube : -1;
 }
 
 int getworldcubeindexat(const ivec &position, int orient)
@@ -340,18 +361,21 @@ int getworldcubetextureslotat(const ivec &position, int orient)
 
 const char *getworldcubename(int index)
 {
-    return worldcubedefinitions.inrange(index) ? worldcubedefinitions[index]->id : "";
+    index = validworldcubeindex(index);
+    return index >= 0 ? worldcubedefinitions[index]->id : "";
 }
 
 int getworldcubeitem(int index)
 {
-    return worldcubedefinitions.inrange(index) ? worldcubedefinitions[index]->item : -1;
+    index = validworldcubeindex(index);
+    return index >= 0 ? worldcubedefinitions[index]->item : -1;
 }
 
 const char *getworldcubetexture(int index, int face)
 {
     static string texturepath;
-    if(!worldcubedefinitions.inrange(index)) return "";
+    index = validworldcubeindex(index);
+    if(index < 0) return "";
     worldcubedefinition &type = *worldcubedefinitions[index];
     const char *texture = type.texture;
     if(face == WORLD_CUBE_SIDE && type.sidetexture[0]) texture = type.sidetexture;
@@ -370,18 +394,21 @@ int numworldscatters()
 
 const char *getworldscattername(int index)
 {
-    return worldscatterdefinitions.inrange(index) ? worldscatterdefinitions[index]->id : "";
+    index = validworldobjectindex(index);
+    return index >= 0 ? worldscatterdefinitions[index]->id : "";
 }
 
 const char *getworldscattermodel(int index)
 {
-    return worldscatterdefinitions.inrange(index) ? worldscatterdefinitions[index]->model : "";
+    index = validworldobjectindex(index);
+    return index >= 0 ? worldscatterdefinitions[index]->model : "";
 }
 
 const char *getworldscattericon(int index)
 {
     static string iconpath;
-    if(!worldscatterdefinitions.inrange(index)) return "";
+    index = validworldobjectindex(index);
+    if(index < 0) return "";
     const worldscatterdefinition &type = *worldscatterdefinitions[index];
     if(type.icon[0]) return type.icon;
     formatstring(iconpath, "media/model/%s/diffuse.png", type.model);
@@ -395,7 +422,8 @@ bool isworldtorch(int index)
 
 int getworldscatteritem(int index)
 {
-    return worldscatterdefinitions.inrange(index) ? worldscatterdefinitions[index]->item : -1;
+    index = validworldobjectindex(index);
+    return index >= 0 ? worldscatterdefinitions[index]->item : -1;
 }
 
 bool isworldplaceable(int index)
@@ -563,23 +591,18 @@ static worldcubedefinition *findworldcube(const char *name)
     return NULL;
 }
 
-static void ensureworlderrorcube()
-{
-    static const char *id = "__missing_worldcube__";
-    worldcubedefinition *type = findworldcube(id);
-    if(!type) type = worldcubedefinitions.add(new worldcubedefinition);
-    copystring(type->id, id);
-    type->itemid[0] = type->sidetexture[0] = type->bottom[0] = type->bottomtexture[0] = '\0';
-    copystring(type->texture, "game/notexture.png");
-    type->texsize = 16;
-}
-
 static worldscatterdefinition *findworldscatter(const char *name)
 {
     loopv(worldscatterdefinitions)
         if(!cubecasecmp(worldscatterdefinitions[i]->id, name))
             return worldscatterdefinitions[i];
     return NULL;
+}
+
+static int getworldscatteridindex(const char *id)
+{
+    worldscatterdefinition *type = findworldscatter(id);
+    return type ? worldscatterdefinitions.find(type) : worlderrorobject;
 }
 
 static inventoryitemdefinition *findinventoryitem(const char *id)
@@ -595,6 +618,7 @@ void worldreset()
     inventoryitemdefinitions.deletecontents();
     worldgentextures.shrink(0);
     worldgrassscatter = worldrosescatter = worldtulipscatter = worlddandelionscatter = -1;
+    worlderrorcube = worlderrorobject = worlderroritem = -1;
 }
 
 COMMAND(worldreset, "");
@@ -621,9 +645,9 @@ ICOMMAND(inventoryitem, "ssi", (char *id, char *name, int *maxstack),
 
 static void defineworldcube(const char *id, const char *itemid, const char *texture, float texsize, const char *side, const char *bottom, const char *bottomalternate, int numargs)
 {
-    if(!id[0] || !texture[0])
+    if(!id[0])
     {
-        conoutf(CON_ERROR, "worldcube requires a world id and texture path");
+        conoutf(CON_ERROR, "worldcube requires a world id");
         return;
     }
 
@@ -631,7 +655,7 @@ static void defineworldcube(const char *id, const char *itemid, const char *text
     if(!type) type = worldcubedefinitions.add(new worldcubedefinition);
     copystring(type->id, id);
     copystring(type->itemid, itemid ? itemid : "");
-    copystring(type->texture, texture);
+    copystring(type->texture, texture ? texture : "");
     copystring(type->sidetexture, numargs >= 5 && side ? side : "");
     copystring(type->bottom, numargs >= 6 && bottom ? bottom : numargs >= 7 && bottomalternate ? bottomalternate : "");
     type->bottomtexture[0] = '\0';
@@ -645,19 +669,23 @@ ICOMMAND(worldcube, "sssfsssN", (char *id, char *itemid, char *texture, float *t
 
 static void defineworldscatter(const char *id, const char *itemid, const char *model, bool placeable, float lightradius = 0, const char *lightcolor = "")
 {
-    if(!id[0] || !model[0])
+    if(!id[0])
     {
-        conoutf(CON_ERROR, "worldscatter requires a world id and model path");
+        conoutf(CON_ERROR, "world object requires a world id");
         return;
     }
     worldscatterdefinition *type = findworldscatter(id);
     if(!type) type = worldscatterdefinitions.add(new worldscatterdefinition);
     copystring(type->id, id);
     copystring(type->itemid, itemid ? itemid : "");
-    copystring(type->model, model);
+    copystring(type->model, model ? model : "");
     type->icon[0] = '\0';
-    type->placeable = placeable;
-    type->lightradius = placeable ? max(lightradius, 0.0f) : 0.0f;
+    if(placeable)
+    {
+        type->placeable = true;
+        type->lightradius = max(lightradius, 0.0f);
+    }
+    else type->scatter = true;
     copystring(type->lightcolor, lightcolor ? lightcolor : "");
 }
 
@@ -718,6 +746,45 @@ static int loadworldtextureslot(const char *path, float texsize, bool alpha)
     return slots.last()->variants->index;
 }
 
+static bool canloadworldtexture(const char *path)
+{
+    if(!path || !path[0]) return false;
+    defformatstring(filename, "media/texture/%s", path);
+    return textureload(filename, 3, true, false) != notexture;
+}
+
+static void validateworlderrorfallback()
+{
+    inventoryitemdefinition *item = findinventoryitem("error");
+    worldcubedefinition *cube = findworldcube("error");
+    worldscatterdefinition *object = findworldscatter("error");
+    if(!item) fatal("world startup failed: config/world.cfg must define inventoryitem \"error\"");
+    if(!cube) fatal("world startup failed: config/world.cfg must define worldcube \"error\"");
+    if(!object || !object->scatter || !object->placeable)
+        fatal("world startup failed: config/world.cfg must define both worldscatter and worldplaceable \"error\"");
+    if(cubecasecmp(cube->itemid, "error"))
+        fatal("world startup failed: worldcube \"error\" must reference inventory item \"error\"");
+    if(cubecasecmp(object->itemid, "error"))
+        fatal("world startup failed: error model definitions must reference inventory item \"error\"");
+    if(!canloadworldtexture(cube->texture))
+        fatal("world startup failed: error cube texture media/texture/%s could not be loaded", cube->texture);
+    if(cube->sidetexture[0] && !canloadworldtexture(cube->sidetexture))
+        fatal("world startup failed: error cube side texture media/texture/%s could not be loaded", cube->sidetexture);
+    if(cube->bottom[0] && !findworldcube(cube->bottom) && !canloadworldtexture(cube->bottom))
+        fatal("world startup failed: error cube bottom texture media/texture/%s could not be loaded", cube->bottom);
+
+    object->mapmodel = registermapmodelpath(object->model);
+    if(object->mapmodel < 0 || !loadmapmodel(object->mapmodel))
+        fatal("world startup failed: error model media/model/%s could not be loaded", object->model);
+    defformatstring(modeltexture, "media/model/%s/diffuse.png", object->model);
+    if(textureload(modeltexture, 3, true, false) == notexture)
+        fatal("world startup failed: error model texture %s could not be loaded", modeltexture);
+
+    worlderroritem = inventoryitemdefinitions.find(item);
+    worlderrorcube = worldcubedefinitions.find(cube);
+    worlderrorobject = worldscatterdefinitions.find(object);
+}
+
 static bool findworldscatterimage(const char *model, const char *basename, string &imagepath)
 {
     defformatstring(directory, "media/model/%s", model);
@@ -758,7 +825,7 @@ static bool loadworlddefinitions()
         return false;
     }
 
-    ensureworlderrorcube();
+    validateworlderrorfallback();
 
     loopv(worldcubedefinitions)
     {
@@ -767,8 +834,9 @@ static bool loadworlddefinitions()
         type.item = item ? inventoryitemdefinitions.find(item) : -1;
         if(type.itemid[0] && type.item < 0)
         {
-            conoutf(CON_ERROR, "world cube %s references unknown inventory item %s", type.id, type.itemid);
-            return false;
+            conoutf(CON_ERROR, "world cube %s references unknown inventory item %s; using error item", type.id, type.itemid);
+            copystring(type.itemid, "error");
+            type.item = worlderroritem;
         }
     }
     loopv(worldscatterdefinitions)
@@ -778,8 +846,9 @@ static bool loadworlddefinitions()
         type.item = item ? inventoryitemdefinitions.find(item) : -1;
         if(type.itemid[0] && type.item < 0)
         {
-            conoutf(CON_ERROR, "world object %s references unknown inventory item %s", type.id, type.itemid);
-            return false;
+            conoutf(CON_ERROR, "world object %s references unknown inventory item %s; using error item", type.id, type.itemid);
+            copystring(type.itemid, "error");
+            type.item = worlderroritem;
         }
     }
     loopv(worldcubedefinitions)
@@ -793,8 +862,10 @@ static bool loadworlddefinitions()
                 inventoryitemdefinition *item = findinventoryitem(type.drops[i].itemid);
                 if(!item)
                 {
-                    conoutf(CON_ERROR, "worlddrop for %s references unknown inventory item %s", type.id, type.drops[i].itemid);
-                    return false;
+                    conoutf(CON_ERROR, "worlddrop for %s references unknown inventory item %s; using error item",
+                            type.id, type.drops[i].itemid);
+                    type.drops[i].item = worlderroritem;
+                    continue;
                 }
                 type.drops[i].item = inventoryitemdefinitions.find(item);
             }
@@ -811,8 +882,10 @@ static bool loadworlddefinitions()
                 inventoryitemdefinition *item = findinventoryitem(type.drops[i].itemid);
                 if(!item)
                 {
-                    conoutf(CON_ERROR, "worlddrop for %s references unknown inventory item %s", type.id, type.drops[i].itemid);
-                    return false;
+                    conoutf(CON_ERROR, "worlddrop for %s references unknown inventory item %s; using error item",
+                            type.id, type.drops[i].itemid);
+                    type.drops[i].item = worlderroritem;
+                    continue;
                 }
                 type.drops[i].item = inventoryitemdefinitions.find(item);
             }
@@ -820,17 +893,54 @@ static bool loadworlddefinitions()
     }
 
     execute("texturereset; texsky; setshader stdworld");
+    worldcubedefinition &errorcube = *worldcubedefinitions[worlderrorcube];
+    errorcube.slot = loadworldtextureslot(errorcube.texture, errorcube.texsize, false);
+    errorcube.sideslot = errorcube.sidetexture[0]
+                       ? loadworldtextureslot(errorcube.sidetexture, errorcube.texsize, false)
+                       : errorcube.slot;
     loopv(worldcubedefinitions)
     {
+        if(i == worlderrorcube) continue;
         worldcubedefinition &type = *worldcubedefinitions[i];
+        type.errorfallback = false;
         const bool alpha = !cubecasecmp(type.id, "leaves") || !cubecasecmp(type.id, "needles");
-        type.slot = loadworldtextureslot(type.texture, type.texsize, alpha);
-        type.sideslot = type.sidetexture[0]
-                      ? loadworldtextureslot(type.sidetexture, type.texsize, alpha)
-                      : type.slot;
+        if(canloadworldtexture(type.texture)) type.slot = loadworldtextureslot(type.texture, type.texsize, alpha);
+        else
+        {
+            conoutf(CON_ERROR, "world cube %s could not load texture %s; using error cube", type.id, type.texture);
+            type.errorfallback = true;
+            copystring(type.texture, errorcube.texture);
+            type.slot = errorcube.slot;
+        }
+        if(!type.sidetexture[0]) type.sideslot = type.slot;
+        else if(canloadworldtexture(type.sidetexture)) type.sideslot = loadworldtextureslot(type.sidetexture, type.texsize, alpha);
+        else
+        {
+            conoutf(CON_ERROR, "world cube %s could not load side texture %s; using error cube", type.id, type.sidetexture);
+            type.errorfallback = true;
+            copystring(type.sidetexture, errorcube.sidetexture[0] ? errorcube.sidetexture : errorcube.texture);
+            type.sideslot = errorcube.sideslot;
+        }
+    }
+    worldcubedefinition *errorbottomtype = errorcube.bottom[0] ? findworldcube(errorcube.bottom) : NULL;
+    if(errorbottomtype)
+    {
+        errorcube.bottomslot = errorbottomtype->slot;
+        copystring(errorcube.bottomtexture, errorbottomtype->texture);
+    }
+    else if(errorcube.bottom[0])
+    {
+        errorcube.bottomslot = loadworldtextureslot(errorcube.bottom, errorcube.texsize, false);
+        copystring(errorcube.bottomtexture, errorcube.bottom);
+    }
+    else
+    {
+        errorcube.bottomslot = errorcube.sideslot;
+        copystring(errorcube.bottomtexture, errorcube.sidetexture[0] ? errorcube.sidetexture : errorcube.texture);
     }
     loopv(worldcubedefinitions)
     {
+        if(i == worlderrorcube) continue;
         worldcubedefinition &type = *worldcubedefinitions[i];
         worldcubedefinition *bottomtype = type.bottom[0] ? findworldcube(type.bottom) : NULL;
         if(bottomtype)
@@ -841,14 +951,35 @@ static bool loadworlddefinitions()
         else if(type.bottom[0])
         {
             const bool alpha = !cubecasecmp(type.id, "leaves") || !cubecasecmp(type.id, "needles");
-            type.bottomslot = loadworldtextureslot(type.bottom, type.texsize, alpha);
-            copystring(type.bottomtexture, type.bottom);
+            if(canloadworldtexture(type.bottom))
+            {
+                type.bottomslot = loadworldtextureslot(type.bottom, type.texsize, alpha);
+                copystring(type.bottomtexture, type.bottom);
+            }
+            else
+            {
+                conoutf(CON_ERROR, "world cube %s could not load bottom texture %s; using error cube", type.id, type.bottom);
+                type.errorfallback = true;
+                type.bottomslot = errorcube.sideslot;
+                copystring(type.bottomtexture, errorcube.sidetexture[0] ? errorcube.sidetexture : errorcube.texture);
+            }
         }
         else
         {
             type.bottomslot = type.sideslot;
             copystring(type.bottomtexture, type.sidetexture[0] ? type.sidetexture : type.texture);
         }
+    }
+    loopv(worldcubedefinitions)
+    {
+        worldcubedefinition &type = *worldcubedefinitions[i];
+        if(!type.errorfallback) continue;
+        copystring(type.texture, errorcube.texture);
+        copystring(type.sidetexture, errorcube.sidetexture);
+        copystring(type.bottomtexture, errorcube.bottomtexture);
+        type.slot = errorcube.slot;
+        type.sideslot = errorcube.sideslot;
+        type.bottomslot = errorcube.bottomslot;
     }
 
     loopv(worldcubedefinitions)
@@ -859,13 +990,19 @@ static bool loadworlddefinitions()
     loopv(worldscatterdefinitions)
     {
         worldscatterdefinition &type = *worldscatterdefinitions[i];
-        resolveworldscattericon(type);
+        if(i == worlderrorobject)
+        {
+            resolveworldscattericon(type);
+            continue;
+        }
         type.mapmodel = registermapmodelpath(type.model);
         if(type.mapmodel < 0 || !loadmapmodel(type.mapmodel))
         {
-            conoutf(CON_ERROR, "could not load world scatter model %s", type.model);
-            type.mapmodel = -1;
+            conoutf(CON_ERROR, "world object %s could not load model %s; using error model", type.id, type.model);
+            copystring(type.model, worldscatterdefinitions[worlderrorobject]->model);
+            type.mapmodel = worldscatterdefinitions[worlderrorobject]->mapmodel;
         }
+        resolveworldscattericon(type);
     }
     loopv(worldscatterdefinitions)
     {
@@ -876,14 +1013,20 @@ static bool loadworlddefinitions()
             copystring(type.icon, icon);
         }
     }
-    worldgrassscatter = worldscatterdefinitions.find(findworldscatter("grass"));
-    worldrosescatter = worldscatterdefinitions.find(findworldscatter("rose"));
-    worldtulipscatter = worldscatterdefinitions.find(findworldscatter("tulip"));
-    worlddandelionscatter = worldscatterdefinitions.find(findworldscatter("dandelion"));
+    worldgrassscatter = getworldscatteridindex("grass");
+    worldrosescatter = getworldscatteridindex("rose");
+    worldtulipscatter = getworldscatteridindex("tulip");
+    worlddandelionscatter = getworldscatteridindex("dandelion");
     setworldleavesalpha(worldroot, leavesalpha != 0);
     conoutf(CON_DEBUG, "loaded %d inventory item, %d world cube, and %d world object definitions",
             inventoryitemdefinitions.length(), worldcubedefinitions.length(), worldscatterdefinitions.length());
     return true;
+}
+
+void initworlddefinitions()
+{
+    if(!loadworlddefinitions())
+        fatal("world startup failed: config/world.cfg contains invalid definitions; see the preceding error for details");
 }
 
 ICOMMAND(worldload, "", (), intret(loadworlddefinitions() ? 1 : 0));
@@ -3644,7 +3787,7 @@ struct worldgencontext
           prepared(prepared), remip(remip), families(0), optimized(0), cancelled(cancelled)
     {
         loopv(this->cubetextures) cubeids[this->cubetextures[i].id] = i;
-        int *error = cubeids.access("__missing_worldcube__");
+        int *error = cubeids.access("error");
         errorcube = error ? *error : -1;
     }
 
@@ -4538,7 +4681,7 @@ static void generateworldscatter(cube *root, int chunkx, int chunky, const game:
                            settings.dandelionweight > 0));
     if(!grass && !flowers) return;
     worldcubedefinition *surface = findworldcube("grass");
-    if(!surface) surface = findworldcube("__missing_worldcube__");
+    if(!surface && worldcubedefinitions.inrange(worlderrorcube)) surface = worldcubedefinitions[worlderrorcube];
     worldgrasscollectcontext ctx(chunkx, chunky, settings, scatter);
     loopi(8)
         collectworldgrassnode(ctx, root[i], root, ivec(i, ivec(0, 0, 0), WORLD_CHUNK_ROOT_SIZE), WORLD_CHUNK_ROOT_SIZE, surface->slot);
