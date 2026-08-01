@@ -1120,6 +1120,7 @@ static bool stopworldchunkthread = false;
 static uint worldchunkepoch = 1;
 static uint worldchunkrequest = 1;
 static int lastworldchunkpublish = -1;
+static bool stopworldchunkgeneration = false;
 static int worldchunkfocusx = 0, worldchunkfocusy = 0;
 static int worldchunkaheadx = 0, worldchunkaheady = 0;
 static int worldchunkviewx = 0, worldchunkviewy = 0;
@@ -1557,6 +1558,7 @@ void clearworldchunks()
     worldfirstchunkx = worldfirstchunky = 0;
     lastplayerchunkx = lastplayerchunky = INT_MIN;
     lastchunkdist = -1;
+    stopworldchunkgeneration = false;
     rebuildingworldchunks = false;
     lastworldchunkpublish = -1;
     lastworldchunkmotion = -1;
@@ -2720,6 +2722,33 @@ static void shutdownworldchunkloader()
     stopworldchunkthread = false;
 }
 
+static void setworldchunkgenerationstopped(bool stopped)
+{
+    if(stopworldchunkgeneration == stopped) return;
+    stopworldchunkgeneration = stopped;
+    if(stopped)
+    {
+        // Keep completed chunks and their mounted geometry, but discard all
+        // work that has not been published yet so no new terrain appears
+        // after the pause command.
+        shutdownworldchunkloader();
+        for(int i = worldchunks.length() - 1; i >= 0; --i)
+            if(worldchunks[i].loading) worldchunks.removeunordered(i);
+        conoutf("procedural chunk loading and generation stopped");
+    }
+    else
+    {
+        // Force the next streaming update to rebuild the queue even if the
+        // player has stayed in the same chunk while generation was paused.
+        lastplayerchunkx = lastplayerchunky = INT_MIN;
+        lastchunkdist = -1;
+        lastworldchunkpublish = -1;
+        conoutf("procedural chunk loading and generation resumed");
+    }
+}
+
+ICOMMAND(stopchunkgen, "", (), setworldchunkgenerationstopped(!stopworldchunkgeneration));
+
 static int acquireworldchunksync(int x, int y, int &generated)
 {
     int index = findworldchunk(x, y);
@@ -2787,6 +2816,7 @@ static int queueworldchunk(int x, int y)
 {
     ZoneScopedN("Chunks/Queue chunk");
     ZoneTextF("%d_%d", x, y);
+    if(stopworldchunkgeneration) return -1;
     int index = findworldchunk(x, y);
     if(index >= 0) return index;
 
@@ -2830,6 +2860,7 @@ static int queueworldchunkview(int chunkx, int chunky, int aheadx, int aheady)
 {
     ZoneScopedN("Chunks/Fill load queue");
     ZoneTextF("focus %d_%d ahead %d_%d", chunkx, chunky, aheadx, aheady);
+    if(stopworldchunkgeneration) return 0;
     if(!startworldchunkloader()) return 0;
     int viewx, viewy;
     worldchunkviewfocus(chunkx, chunky, viewx, viewy);
@@ -3395,7 +3426,7 @@ static int processworldchunkchanges(int chunkx, int chunky)
 
 static void processworldchunkupdates(int chunkx, int chunky, int aheadx, int aheady)
 {
-    if(lastworldchunkpublish == totalmillis) return;
+    if(stopworldchunkgeneration || lastworldchunkpublish == totalmillis) return;
     ZoneScopedN("Chunks/Streaming update");
     ZoneTextF("focus %d_%d ahead %d_%d", chunkx, chunky, aheadx, aheady);
     lastworldchunkpublish = totalmillis;
@@ -3512,6 +3543,7 @@ static int pruneworldchunkcache(int chunkx, int chunky, int limit)
 
 static void rebuildworldchunks(int chunkx, int chunky, int aheadx, int aheady, bool load, bool updategeometry)
 {
+    if(stopworldchunkgeneration) return;
     ZoneScopedN("Chunks/Rebuild view");
     ZoneTextF("focus %d_%d ahead %d_%d", chunkx, chunky, aheadx, aheady);
     rebuildingworldchunks = true;
@@ -3621,6 +3653,7 @@ void updateworldchunks(bool force)
     if(worldchunks.empty() || rebuildingworldchunks || !worldroot) return;
     ZoneScopedN("Chunks/Update world chunks");
     flushworlddiffjournals(false);
+    if(stopworldchunkgeneration) return;
 
     int localchunkx = 0, localchunky = 0;
     if(player)
@@ -5300,6 +5333,71 @@ static uint hashworldfeature(uint seed, long long x, long long y, int z, uint sa
     return mixworldfeaturehash(hash, uint(z));
 }
 
+struct worldoredefinition
+{
+    const char *id;
+    int minheight, maxheight, optimalminheight, optimalmaxheight;
+    int mindepth, maxdepth, minvein, maxvein, rareminvein, raremaxvein, cellsize;
+    float chance, geologicalbonus;
+    uint salt;
+    bool uniformdistribution;
+};
+
+static const worldoredefinition worldores[] =
+{
+    // Elevation and depth values are in world blocks relative to sea level.
+    { "coal",      -112,  200,  -32,   64,   4, 110,  8, 28, 40, 80, 12, 1.05f, 1.6f, 0x4A1D3B27U, false },
+    { "copper",    -128,  128,  -48,   32,  10, 130,  5, 16,  0,  0, 14, 0.90f, 1.5f, 0x7C3E91A5U, false },
+    { "iron",      -192,  160,  -96,   16,  12, 180,  6, 20,  0,  0, 14, 0.85f, 1.7f, 0xB6A54D19U, false },
+    { "tin",       -176,   64, -112,  -48,  25, 170,  3,  9,  0,  0, 16, 0.80f, 1.4f, 0xD82F6043U, false },
+    { "gold",      -224,  -32, -168, -112,  60, WORLD_HEIGHT_BLOCKS, 2,  7,  0,  0, 20, 0.70f, 1.8f, 0xE91B72C5U, false },
+    { "diamond",   -248, -136, -232, -200, 120, WORLD_HEIGHT_BLOCKS, 1,  4,  0,  0, 24, 0.55f, 1.25f, 0xF05A8C31U, false },
+    { "moon_dust", WORLD_MIN_HEIGHT, WORLD_MAX_HEIGHT - 1, WORLD_MIN_HEIGHT, WORLD_MAX_HEIGHT - 1, 0, WORLD_HEIGHT_BLOCKS, 1, 2, 1, 3, 8, 1.2f, 1.0f, 0x2C7E4B91U, true }
+};
+
+static float worldoreoptimalweight(const worldoredefinition &ore, int elevation)
+{
+    const int edge = elevation < ore.optimalminheight
+                   ? ore.optimalminheight - ore.minheight
+                   : ore.maxheight - ore.optimalmaxheight;
+    if(elevation >= ore.optimalminheight && elevation <= ore.optimalmaxheight) return 1.0f;
+    if(edge <= 0) return 0.35f;
+    const int dist = elevation < ore.optimalminheight ? ore.optimalminheight - elevation : elevation - ore.optimalmaxheight;
+    return 1.0f - 0.65f * clamp(dist / float(edge), 0.0f, 1.0f);
+}
+
+static float worldoreelevationweight(const worldoredefinition &ore, int elevation)
+{
+    if(!ore.uniformdistribution) return worldoreoptimalweight(ore, elevation);
+
+    // Moon Dust is uncommon near the surface and reaches its full rate at
+    // -196, remaining capped throughout the deepest layers.
+    const float depth = clamp((float(WORLD_MAX_HEIGHT - 1) - elevation) / 451.0f, 0.0f, 1.0f);
+    return 0.10f + 0.90f * depth * depth;
+}
+
+static float worldoregeologicalweight(const worldoredefinition &ore, const game::worldtectonicsample &tectonics, int elevation)
+{
+    if(ore.uniformdistribution) return 1.0f;
+    const float relief = clamp(tectonics.terrainroughness, 0.0f, 1.0f),
+                mountain = worldsmoothstep(0.45f, 0.75f, relief),
+                hill = worldsmoothstep(0.12f, 0.45f, relief),
+                deep = 1.0f - worldsmoothstep(-180.0f, -80.0f, float(elevation)),
+                activity = clamp(tectonics.activity, 0.0f, 1.0f);
+    if(!strcmp(ore.id, "coal")) return 1.0f + (ore.geologicalbonus - 1.0f) * mountain;
+    if(!strcmp(ore.id, "copper")) return 1.0f + (ore.geologicalbonus - 1.0f) * hill;
+    if(!strcmp(ore.id, "iron")) return (1.0f + 0.7f * mountain) * (1.0f + 0.3f * activity);
+    if(!strcmp(ore.id, "tin")) return 1.0f + (ore.geologicalbonus - 1.0f) * mountain * deep;
+    if(!strcmp(ore.id, "gold")) return 1.0f + (ore.geologicalbonus - 1.0f) * activity;
+    return 1.0f + (ore.geologicalbonus - 1.0f) * deep;
+}
+
+static int worldoreveinradius(const worldoredefinition &ore)
+{
+    const int largestvein = max(ore.maxvein, ore.raremaxvein), radius = int(ceilf(powf(max(float(largestvein), 1.0f), 1.0f / 3.0f) * 2.0f));
+    return max(radius, 2);
+}
+
 static long long worldfloordiv(long long value, int divisor)
 {
     long long quotient = value / divisor;
@@ -5425,27 +5523,15 @@ static bool generateworldlavalakes(worldgencontext &ctx, uchar *carvemap, int ch
         const int centerz = cellz * verticalspacing + int((positionhash >> 16) % uint(verticalspacing));
         if(centerz < minimumheight || centerz > startheight) continue;
 
-        const float approachweight = deepheight < startheight
-                                   ? clamp((startheight - centerz) / float(startheight - deepheight),
-                                           0.0f, 1.0f)
-                                   : 1.0f,
-                    deepweight = deepheight > minimumheight
-                               ? clamp((deepheight - centerz) / float(deepheight - minimumheight),
-                                       0.0f, 1.0f)
-                               : centerz <= deepheight ? 1.0f : 0.0f,
-                    lakechance = ctx.settings.lavalakeshallowchance * approachweight
-                               + (ctx.settings.lavalakedeepchance
-                                - ctx.settings.lavalakeshallowchance) * deepweight;
+        const float approachweight = deepheight < startheight ? clamp((startheight - centerz) / float(startheight - deepheight), 0.0f, 1.0f) : 1.0f,
+                    deepweight = deepheight > minimumheight ? clamp((deepheight - centerz) / float(deepheight - minimumheight), 0.0f, 1.0f) : centerz <= deepheight ? 1.0f : 0.0f,
+                    lakechance = ctx.settings.lavalakeshallowchance * approachweight + (ctx.settings.lavalakedeepchance - ctx.settings.lavalakeshallowchance) * deepweight;
         if(worldtreeunit(chancehash) >= clamp(lakechance, 0.0f, 1.0f)) continue;
 
-        const int depthmaxradius = clamp(int(floor(minradius
-                                               + (maxradius - minradius)
-                                               * (0.25f + deepweight * 0.75f) + 0.5f)),
-                                           minradius, maxradius),
+        const int depthmaxradius = clamp(int(floor(minradius + (maxradius - minradius) * (0.25f + deepweight * 0.75f) + 0.5f)), minradius, maxradius),
                   radiusrange = max(depthmaxradius - minradius + 1, 1),
                   radius = minradius + int(sizehash % uint(radiusrange)),
-                  minorradius = max(2, int(floor(radius
-                                  * (0.55f + ((sizehash >> 8) & 0xFFU) / 637.5f) + 0.5f))),
+                  minorradius = max(2, int(floor(radius * (0.55f + ((sizehash >> 8) & 0xFFU) / 637.5f) + 0.5f))),
                   verticalradius = max(2, (radius + minorradius) / 4),
                   lavalevel = centerz - int((sizehash >> 28) % uint(max(verticalradius / 2, 1)));
         const float angle = ((sizehash >> 16) & 0x0FFFU) / 4096.0f * 2.0f * M_PI,
@@ -5464,8 +5550,7 @@ static bool generateworldlavalakes(worldgencontext &ctx, uchar *carvemap, int ch
 
         const int centerblockx = int(centerx - (long long)chunkx * WORLD_CHUNK_BLOCKS),
                   centerblocky = int(centery - (long long)chunky * WORLD_CHUNK_BLOCKS),
-                  centerheight = generateworldheight(ctx, chunkx, chunky,
-                                                           centerblockx, centerblocky) / WORLD_BLOCK_SIZE;
+                  centerheight = generateworldheight(ctx, chunkx, chunky, centerblockx, centerblocky) / WORLD_BLOCK_SIZE;
         if(centerz + verticalradius > centerheight - ctx.settings.cavemindepth) continue;
 
         const int xmin = max(centerlocalx - radius, 0),
@@ -5480,17 +5565,13 @@ static bool generateworldlavalakes(worldgencontext &ctx, uchar *carvemap, int ch
                         localy = float(y - centerlocaly),
                         rotatedx = localx * anglecos + localy * anglesin,
                         rotatedy = -localx * anglesin + localy * anglecos,
-                        primary = rotatedx * rotatedx / float(radius * radius)
-                                + rotatedy * rotatedy / float(minorradius * minorradius),
+                        primary = rotatedx * rotatedx / float(radius * radius) + rotatedy * rotatedy / float(minorradius * minorradius),
                         lobex = rotatedx - lobecenterx,
                         lobey = rotatedy - lobecentery,
-                        lobe = lobex * lobex / (loberadius * loberadius)
-                             + lobey * lobey / (lobeminorradius * lobeminorradius),
+                        lobe = lobex * lobex / (loberadius * loberadius) + lobey * lobey / (lobeminorradius * lobeminorradius),
                         horizontal = min(primary, lobe),
-                        shapenoise = ctx.generator.lakeshape.GetNoise(float(chunkx) * WORLD_CHUNK_BLOCKS + x + 9200.5f,
-                                                           float(chunky) * WORLD_CHUNK_BLOCKS + y - 9200.5f),
-                        boundary = 1.0f - shapevariation * 0.5f
-                                 + shapenoise * shapevariation * 0.5f;
+                        shapenoise = ctx.generator.lakeshape.GetNoise(float(chunkx) * WORLD_CHUNK_BLOCKS + x + 9200.5f, float(chunky) * WORLD_CHUNK_BLOCKS + y - 9200.5f),
+                        boundary = 1.0f - shapevariation * 0.5f + shapenoise * shapevariation * 0.5f;
             if(horizontal > boundary) continue;
 
             const int surfaceheight = ctx.heightmap[y * WORLD_CHUNK_BLOCKS + x] / WORLD_BLOCK_SIZE;
@@ -5542,15 +5623,188 @@ static bool placeworldcaves(worldgencontext &ctx, cube *root, int chunkx, int ch
             {
                 const uchar type = carve[worldcarveindex(x, y, z)];
                 if(type == WORLD_CARVE_NONE) continue;
-                cube &c = lookupworldgenblock(ctx, root, ivec(x * WORLD_BLOCK_SIZE,
-                                                             y * WORLD_BLOCK_SIZE,
-                                                             z * WORLD_BLOCK_SIZE));
+                cube &c = lookupworldgenblock(ctx, root, ivec(x * WORLD_BLOCK_SIZE, y * WORLD_BLOCK_SIZE, z * WORLD_BLOCK_SIZE));
                 if(type == WORLD_CARVE_LAVA) setworldcubematerial(c, MAT_LAVA);
                 else if(!isempty(c) && c.material == MAT_AIR) setworldcubematerial(c, MAT_AIR);
             }
         }
     }
     return true;
+}
+
+static bool worldcaveairat(const worldgencontext &ctx, int worldx, int worldy, int elevation)
+{
+    const int bottomlayers = clamp(ctx.settings.bottomlavalayers, 0, int(WORLD_HEIGHT_BLOCKS)),
+              minheight = WORLD_MIN_HEIGHT + bottomlayers,
+              mindepth = min(ctx.settings.cavemindepth, ctx.settings.cavefulldepth),
+              fulldepth = max(ctx.settings.cavemindepth, ctx.settings.cavefulldepth),
+              surfaceheight = ctx.generator.height(worldx, worldy),
+              caveceiling = min(surfaceheight - 1, WORLD_MAX_HEIGHT - 1);
+    if(elevation < minheight || elevation > caveceiling) return false;
+
+    const game::worldtectonicsample tectonics = ctx.generator.tectonics(worldx, worldy);
+    const float deepdenominator = max(float(ctx.settings.cavedeepheight - minheight), 1.0f),
+                depth = float(surfaceheight - elevation),
+                depthweight = worldsmoothstep(float(mindepth), float(fulldepth), depth),
+                tectonicdepthweight = worldsmoothstep(max(float(mindepth), 12.0f),
+                                                       max(float(fulldepth), max(float(mindepth), 12.0f) + 1.0f),
+                                                       depth),
+                foundationprotection = 1.0f - tectonics.landuplift * 0.70f,
+                tectonicbase = tectonics.activity * tectonicdepthweight * foundationprotection,
+                caveexpansion = tectonicbase * ctx.settings.tectoniccavestrength,
+                tunnelweight = worldsmoothstep(1.0f, float(mindepth), depth),
+                surfacepenalty = (1.0f - depthweight) * 0.35f,
+                deepweight = clamp((ctx.settings.cavedeepheight - elevation) / deepdenominator, 0.0f, 1.0f),
+                noisex = worldx + 17500.5f,
+                noisey = worldy - 17500.5f,
+                noisez = elevation + 3500.5f,
+                veinwidth = ctx.settings.caveentrancewidth
+                          + (ctx.settings.tunnelwidth - ctx.settings.caveentrancewidth) * tunnelweight,
+                largecavethreshold = ctx.settings.largecavethreshold
+                                  + (ctx.settings.largecavedeepthreshold - ctx.settings.largecavethreshold) * deepweight
+                                  + surfacepenalty - caveexpansion * 0.22f,
+                fracturewidth = ctx.settings.tectonicfracturestrength * tectonicbase * 0.06f;
+    bool carve = fabs(ctx.generator.tunnela.GetNoise(noisex, noisey, noisez)) < veinwidth &&
+                 fabs(ctx.generator.tunnelb.GetNoise(noisex, noisey, noisez)) < veinwidth;
+    if(!carve && ctx.generator.fracturecorridor(worldx, worldy) < fracturewidth)
+        carve = ctx.generator.fracturevertical.GetNoise(noisex + 13500.0f, noisey - 13500.0f, elevation * 0.18f + 5000.5f) > -0.25f;
+    if(!carve && depth >= mindepth)
+        carve = ctx.generator.caves.GetNoise(noisex, noisey, noisez) > ctx.settings.cavethreshold + surfacepenalty ||
+                ctx.generator.largecaves.GetNoise(noisex, noisey, noisez) > largecavethreshold;
+    return carve;
+}
+
+static bool worldorecaveedge(const worldgencontext &ctx, int worldx, int worldy, int elevation)
+{
+    static const int directions[6][3] =
+    {
+        { -1, 0, 0 }, { 1, 0, 0 }, { 0, -1, 0 },
+        { 0, 1, 0 }, { 0, 0, -1 }, { 0, 0, 1 }
+    };
+    if(worldcaveairat(ctx, worldx, worldy, elevation)) return false;
+    loopi(6) if(worldcaveairat(ctx, worldx + directions[i][0], worldy + directions[i][1], elevation + directions[i][2])) return true;
+    return false;
+}
+
+static void placeworldoreblock(worldgencontext &ctx, cube *root, const worldoredefinition &ore, int chunkx, int chunky, int worldx, int worldy, int elevation, int stonetexture, int orecube)
+{
+    if(elevation < WORLD_MIN_HEIGHT || elevation >= WORLD_MAX_HEIGHT) return;
+    const int localx = worldx - chunkx * WORLD_CHUNK_BLOCKS,
+              localy = worldy - chunky * WORLD_CHUNK_BLOCKS;
+
+    if(localx < 0 || localx >= WORLD_CHUNK_BLOCKS || localy < 0 || localy >= WORLD_CHUNK_BLOCKS) return;
+
+    const int surfaceheight = ctx.heightmap[localy * WORLD_CHUNK_BLOCKS + localx] / WORLD_BLOCK_SIZE,
+              depth = surfaceheight - elevation;
+
+    if(elevation < ore.minheight || elevation > ore.maxheight || depth < ore.mindepth || depth > ore.maxdepth) return;
+
+    cube &c = lookupworldgenblock(ctx, root, ivec(localx * WORLD_BLOCK_SIZE, localy * WORLD_BLOCK_SIZE, (elevation - WORLD_MIN_HEIGHT) * WORLD_BLOCK_SIZE));
+    if(!isempty(c) && c.texture[0] == stonetexture) setworldcubetype(c, ctx, orecube);
+}
+
+static void placeworldorevein(worldgencontext &ctx, cube *root, const worldoredefinition &ore, int chunkx, int chunky, long long cellx, long long celly, int cellz, int centerx, int centery, int centerz, int stonetexture, int orecube)
+{
+    const uint sizehash = hashworldfeature(uint(ctx.seed), cellx, celly, cellz, ore.salt ^ 0xA511E9B3U),
+               shapehash = hashworldfeature(uint(ctx.seed), cellx, celly, cellz, ore.salt ^ 0x63D83595U);
+    const bool rare = ore.rareminvein > 0 && (sizehash & 0xFFU) < 8U;
+    const int minvein = rare ? ore.rareminvein : ore.minvein,
+              maxvein = rare ? ore.raremaxvein : ore.maxvein,
+              veinrange = max(maxvein - minvein + 1, 1),
+              veinsize = minvein + int((sizehash >> 8) % uint(veinrange)),
+              radius = max(2, int(ceilf(powf(max(float(veinsize), 1.0f), 1.0f / 3.0f) * 2.0f))),
+              verticalradius = max(1, radius * 3 / 4);
+    static const int directions[6][3] =
+    {
+        { -1, 0, 0 }, { 1, 0, 0 }, { 0, -1, 0 },
+        { 0, 1, 0 }, { 0, 0, -1 }, { 0, 0, 1 }
+    };
+    vector<ivec> blocks, frontier;
+    blocks.add(ivec(centerx, centery, centerz));
+    frontier.add(ivec(centerx, centery, centerz));
+
+    loop(step, veinsize - 1)
+    {
+        bool added = false;
+        loop(attempt, 24)
+        {
+            const uint offsethash = hashworldfeature(uint(ctx.seed), cellx + step * 17 + attempt, celly - step * 31 - attempt, cellz + step, ore.salt ^ shapehash);
+            const ivec &parent = frontier[offsethash % uint(frontier.length())];
+            const int *direction = directions[(offsethash >> 8) % 6];
+            const ivec block(parent.x + direction[0], parent.y + direction[1], parent.z + direction[2]);
+            const int offsetx = block.x - centerx, offsety = block.y - centery, offsetz = block.z - centerz;
+            const float horizontal = (offsetx * offsetx + offsety * offsety) / float(radius * radius), vertical = offsetz * offsetz / float(verticalradius * verticalradius);
+            if(horizontal + vertical > 1.0f) continue;
+
+            bool duplicate = false;
+            loopv(blocks) if(blocks[i] == block)
+            {
+                duplicate = true;
+                break;
+            }
+            if(duplicate) continue;
+            blocks.add(block);
+            frontier.add(block);
+            added = true;
+            break;
+        }
+        if(!added) break;
+    }
+
+    loopv(blocks) placeworldoreblock(ctx, root, ore, chunkx, chunky, blocks[i].x, blocks[i].y, blocks[i].z, stonetexture, orecube);
+}
+
+static bool placeworldores(worldgencontext &ctx, cube *root, int chunkx, int chunky)
+{
+    const long long chunkstartx = (long long)chunkx * WORLD_CHUNK_BLOCKS,
+                    chunkstarty = (long long)chunky * WORLD_CHUNK_BLOCKS;
+    const int stonecube = ctx.worldcube("stone"),
+              stonetexture = ctx.cubetextures.inrange(stonecube) ? ctx.cubetextures[stonecube].side : -1;
+
+    if(stonetexture < 0) return true;
+
+    loopi(int(sizeof(worldores) / sizeof(worldores[0])))
+    {
+        const worldoredefinition &ore = worldores[i];
+        const int orecube = ctx.worldcube(ore.id),
+                  radius = worldoreveinradius(ore), cellsize = max(ore.cellsize, 1);
+        if(!ctx.cubetextures.inrange(orecube)) continue;
+
+        const long long mincellx = worldfloordiv(chunkstartx - radius, cellsize),
+                        maxcellx = worldfloordiv(chunkstartx + WORLD_CHUNK_BLOCKS - 1 + radius, cellsize),
+                        mincelly = worldfloordiv(chunkstarty - radius, cellsize),
+                        maxcelly = worldfloordiv(chunkstarty + WORLD_CHUNK_BLOCKS - 1 + radius, cellsize);
+        const int mincellz = int(worldfloordiv(ore.minheight - radius, cellsize)),
+                  maxcellz = int(worldfloordiv(ore.maxheight + radius, cellsize));
+
+        for(long long celly = mincelly; celly <= maxcelly; ++celly)
+        for(long long cellx = mincellx; cellx <= maxcellx; ++cellx)
+        for(int cellz = mincellz; cellz <= maxcellz; ++cellz)
+        {
+            if(ctx.iscanceled()) return false;
+            const uint positionhash = hashworldfeature(uint(ctx.seed), cellx, celly, cellz, ore.salt),
+                       chancehash = hashworldfeature(uint(ctx.seed), cellx, celly, cellz, ore.salt ^ 0xC13FA9A9U);
+            const int centerpadding = ore.uniformdistribution ? radius : 0,
+                      centerspan = max(cellsize - centerpadding * 2, 1),
+                      centerx = int(cellx * cellsize + centerpadding + positionhash % uint(centerspan)),
+                      centery = int(celly * cellsize + centerpadding + (positionhash >> 8) % uint(centerspan)),
+                      centerz = int(cellz * cellsize + centerpadding + (positionhash >> 16) % uint(centerspan));
+
+            if(centerz < ore.minheight || centerz > ore.maxheight) continue;
+
+            const int surfaceheight = ctx.generator.height(centerx, centery);
+            const int depth = surfaceheight - centerz;
+            if(depth < ore.mindepth || depth > ore.maxdepth) continue;
+
+            const game::worldtectonicsample tectonics = ctx.generator.tectonics(centerx, centery);
+            const float caveweight = ore.uniformdistribution ? 1.0f : worldorecaveedge(ctx, centerx, centery, centerz) ? 2.5f : 0.75f;
+            const float chance = clamp(ore.chance * worldoreelevationweight(ore, centerz) * worldoregeologicalweight(ore, tectonics, centerz) * caveweight, 0.0f, 1.0f);
+            if(worldtreeunit(chancehash) >= chance) continue;
+
+            placeworldorevein(ctx, root, ore, chunkx, chunky, cellx, celly, cellz, centerx, centery, centerz, stonetexture, orecube);
+        }
+    }
+    return !ctx.iscanceled();
 }
 
 static bool placeworldtrees(worldgencontext &ctx, cube *root, int chunkx, int chunky)
@@ -5666,6 +5920,15 @@ static cube *generateworldchunk(int chunkx, int chunky, worldgencontext &ctx)
     {
         ZoneScopedN("Chunks/Generate caves");
         if(!placeworldcaves(ctx, root, chunkx, chunky))
+        {
+            ZoneScopedN("Chunks/Free failed generation");
+            freepreparedworldchunk(root);
+            return NULL;
+        }
+    }
+    {
+        ZoneScopedN("Chunks/Generate ores");
+        if(!placeworldores(ctx, root, chunkx, chunky))
         {
             ZoneScopedN("Chunks/Free failed generation");
             freepreparedworldchunk(root);
