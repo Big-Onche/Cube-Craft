@@ -72,6 +72,29 @@ struct QuadNode
     }
 };
 
+static int waterrenderlevel(const ivec &position)
+{
+    bool falling = false;
+    const int level = getwatercelllevel(position, falling);
+    return level >= 0 ? level : 0;
+}
+
+static bool waterfacevisible(const cube &c, int orient, const ivec &co, int size)
+{
+    if(orient == O_TOP || orient == O_BOTTOM) return false;
+
+    ivec no;
+    int nsize;
+    neighbourcube(c, orient, co, size, no, nsize);
+    if((lookupmaterial(vec(no).add(nsize / 2))&MATF_VOLUME) != MAT_WATER) return false;
+
+    const int currentlevel = waterrenderlevel(ivec(co).add(size / 2)),
+              neighborlevel = waterrenderlevel(ivec(no).add(nsize / 2));
+    const float currentheight = co.z + size - min(currentlevel, 7) * 2.0f,
+                neighborheight = no.z + nsize - min(neighborlevel, 7) * 2.0f;
+    return currentheight > neighborheight;
+}
+
 static void drawmaterial(const materialsurface &m, float offset, const bvec4 &color = bvec4(0, 0, 0, 0))
 {
     if(gle::attribbuf.empty())
@@ -231,7 +254,7 @@ int visiblematerial(const cube &c, int orient, const ivec &co, int size, ushort 
          break;
 
     case MAT_WATER:
-        if(visibleface(c, orient, co, size, mat, MAT_AIR, matmask))
+        if(visibleface(c, orient, co, size, mat, MAT_AIR, matmask) || waterfacevisible(c, orient, co, size))
             return MATSURF_VISIBLE;
         break;
 
