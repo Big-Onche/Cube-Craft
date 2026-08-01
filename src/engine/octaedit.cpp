@@ -2880,13 +2880,13 @@ void setmat(cube &c, ushort mat, ushort matmask, ushort filtermat, ushort filter
     }
 }
 
-void mpeditmat(int matid, int filter, selinfo &sel, bool local)
+void mpeditmat(int matid, int filter, selinfo &sel, bool local, bool persist)
 {
     if(local) game::edittrigger(sel, EDIT_MAT, matid, filter);
     if(local && game::waitforserveredit()) return;
 
     const int requestedmaterial = matid;
-    beginworldedit(WORLD_EDIT_SET_MATERIAL, sel, matid, filter);
+    if(persist) beginworldedit(WORLD_EDIT_SET_MATERIAL, sel, matid, filter);
     ushort filtermat = 0, filtermask = 0, matmask;
     int filtergeom = 0;
     if(filter >= 0)
@@ -2909,7 +2909,7 @@ void mpeditmat(int matid, int filter, selinfo &sel, bool local)
         if(isdeadly(matid&MATF_VOLUME)) matid |= MAT_DEATH;
     }
     loopselxyz(setmat(c, matid, matmask, filtermat, filtermask, filtergeom));
-    commitworldedit();
+    if(persist) commitworldedit();
     if(requestedmaterial < 0 || requestedmaterial == MAT_AIR || (requestedmaterial&MATF_VOLUME) == MAT_WATER)
         game::watermaterialchanged(sel, requestedmaterial);
 }

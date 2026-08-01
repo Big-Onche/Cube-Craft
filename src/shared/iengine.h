@@ -33,7 +33,10 @@ enum // cube empty-space materials
 
     MAT_DEATH    = 1 << MATF_FLAG_SHIFT,  // force player suicide
     MAT_NOGI     = 2 << MATF_FLAG_SHIFT,  // disable global illumination
-    MAT_ALPHA    = 4 << MATF_FLAG_SHIFT   // alpha blended
+    MAT_ALPHA    = 4 << MATF_FLAG_SHIFT,  // alpha blended
+
+    MAT_WATER_SOURCE_MANUAL = 8 << MATF_FLAG_SHIFT,
+    MAT_WATER_SOURCE_NATURAL_ACTIVE = 16 << MATF_FLAG_SHIFT
 };
 
 #define isliquid(mat) ((mat)==MAT_WATER || (mat)==MAT_LAVA)
@@ -106,7 +109,7 @@ extern void setworldeditrevision(uint revision);
 extern void mpeditface(int dir, int mode, selinfo &sel, bool local);
 extern void mpedittex(int tex, int allfaces, selinfo &sel, bool local);
 extern bool mpedittex(int tex, int allfaces, selinfo &sel, ucharbuf &buf);
-extern void mpeditmat(int matid, int filter, selinfo &sel, bool local);
+extern void mpeditmat(int matid, int filter, selinfo &sel, bool local, bool persist = true);
 extern void mpflip(selinfo &sel, bool local);
 extern void mpcopy(editinfo *&e, selinfo &sel, bool local);
 extern void mppaste(editinfo *&e, selinfo &sel, bool local);
@@ -144,6 +147,7 @@ extern const char *getworlditemmodel(int index);
 extern const char *getworlditemicon(int index);
 extern bool worldcellacceptswater(const ivec &position);
 extern bool worldcellhaswater(const ivec &position);
+extern int worldcellmaterial(const ivec &position);
 extern bool worldcellsolid(const ivec &position);
 extern void worldwaterchanged();
 extern bool worldtorchincell(const ivec &cell);

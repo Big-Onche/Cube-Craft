@@ -71,6 +71,8 @@ namespace game
     extern void initclient();
     extern void physicstrigger(physent *d, bool local, int floorlevel, int waterlevel, int material = 0);
     extern int getwatercelllevel(const ivec &position, bool &falling);
+    extern void getflowingwatercells(vector<ivec> &cells);
+    extern void watermaterialloaded(const ivec &position, int material);
     extern void watergeometryopening(const selinfo &selection);
     extern void watermaterialchanged(const selinfo &selection, int material);
     extern void bounced(physent *d, const vec &surface);

@@ -391,6 +391,11 @@ bool worldcellhaswater(const ivec &position)
     return (c.material&MATF_VOLUME) == MAT_WATER;
 }
 
+int worldcellmaterial(const ivec &position)
+{
+    return lookupcube(ivec(position).add(WORLD_BLOCK_SIZE / 2)).material;
+}
+
 bool worldcellsolid(const ivec &position)
 {
     const cube &c = lookupcube(ivec(position).add(WORLD_BLOCK_SIZE / 2));
@@ -1211,6 +1216,53 @@ static void copyworldcube(const cube &src, cube &dst)
     }
 }
 
+static cube &lookupworldchunkrootcube(cube *root, const ivec &pos, int size)
+{
+    int scale = WORLD_CHUNK_SCALE - 1;
+    cube *c = &root[octastep(pos.x, pos.y, pos.z, scale)];
+    while(!(size >> scale))
+    {
+        if(!c->children) subdividecube(*c);
+        --scale;
+        c = &c->children[octastep(pos.x, pos.y, pos.z, scale)];
+    }
+    return *c;
+}
+
+static void setworldcubetreematerial(cube &c, int material)
+{
+    if(c.children)
+    {
+        loopi(8) setworldcubetreematerial(c.children[i], material);
+        return;
+    }
+    emptyfaces(c);
+    c.material = material;
+}
+
+static cube *copyworldchunkforsave(const worldchunk &chunk)
+{
+    cube *root = newcubes(F_EMPTY);
+    loopi(8) copyworldcube(chunk.root[i], root[i]);
+
+    vector<ivec> flowing;
+    game::getflowingwatercells(flowing);
+    const int absolutex = chunk.x * WORLD_CHUNK_SIZE,
+              absolutey = chunk.y * WORLD_CHUNK_SIZE;
+    loopv(flowing)
+    {
+        const ivec &position = flowing[i];
+        if(position.x < absolutex || position.x >= absolutex + WORLD_CHUNK_SIZE ||
+           position.y < absolutey || position.y >= absolutey + WORLD_CHUNK_SIZE ||
+           position.z < 0 || position.z >= WORLD_MAP_SIZE)
+            continue;
+        const ivec local(position.x - absolutex, position.y - absolutey, position.z);
+        cube &cell = lookupworldchunkrootcube(root, local, WORLD_BLOCK_SIZE);
+        setworldcubetreematerial(cell, MAT_AIR);
+    }
+    return root;
+}
+
 static void pasteworldcube(const cube &src, cube &dst)
 {
     discardchildren(dst);
@@ -1850,6 +1902,31 @@ static bool worldchunkmounted(const worldchunk &chunk)
     return false;
 }
 
+static void restoreworldwatersources(const cube &c, const ivec &origin, int size)
+{
+    if(c.children)
+    {
+        const int childsize = size >> 1;
+        loopi(8) restoreworldwatersources(c.children[i], ivec(i, origin, childsize), childsize);
+        return;
+    }
+    if((c.material&MATF_VOLUME) != MAT_WATER ||
+       !(c.material&(MAT_WATER_SOURCE_MANUAL|MAT_WATER_SOURCE_NATURAL_ACTIVE)))
+        return;
+    const ivec end = ivec(origin).add(size);
+    for(int z = origin.z; z < end.z; z += WORLD_BLOCK_SIZE)
+    for(int y = origin.y; y < end.y; y += WORLD_BLOCK_SIZE)
+    for(int x = origin.x; x < end.x; x += WORLD_BLOCK_SIZE)
+        game::watermaterialloaded(ivec(x, y, z), c.material);
+}
+
+static void restoreworldwatersources()
+{
+    if(!worldroot) return;
+    const int rootsize = worldsize >> 1;
+    loopi(8) restoreworldwatersources(worldroot[i], ivec(i, ivec(0, 0, 0), rootsize), rootsize);
+}
+
 static bool worldchunkfullymounted(const worldchunk &chunk)
 {
     const uint alltiles = (1U << WORLD_SECTION_TILES) - 1;
@@ -1927,6 +2004,7 @@ static bool mountworldchunktile(worldchunk &chunk, int section, int tile)
     }
     moveworldcube(lookupworldchunkcube(chunk, pos, WORLD_SECTION_SIZE),
                   lookupcube(runtimepos, WORLD_SECTION_SIZE));
+    restoreworldwatersources(lookupcube(runtimepos, WORLD_SECTION_SIZE), runtimepos, WORLD_SECTION_SIZE);
     invalidateworldskyexposure(runtimepos, ivec(runtimepos).add(WORLD_SECTION_SIZE));
     worldsectionowners[key] = worldsectionowner(chunk.x, chunk.y, section, tile);
     chunk.mountedtiles[section] |= tilebit;
@@ -5318,16 +5396,23 @@ void savec(cube *c, const ivec &o, int size, stream *f)
         }
         else
         {
+            ushort material = c[i].material;
+            if((material&MATF_VOLUME) == MAT_WATER)
+            {
+                bool falling = false;
+                const int level = game::getwatercelllevel(co, falling);
+                if(level > 0 || falling) material = MAT_AIR;
+            }
             int octsav = isempty(c[i]) ? OCTSAV_EMPTY :
                          isentirelysolid(c[i]) ? OCTSAV_SOLID : OCTSAV_NORMAL;
-            if(c[i].material != MAT_AIR) octsav |= 0x40;
+            if(material != MAT_AIR) octsav |= 0x40;
             f->putchar(octsav);
             if((octsav & 0x7) == OCTSAV_NORMAL) f->write(c[i].edges, sizeof(c[i].edges));
             if((octsav & 0x7) != OCTSAV_EMPTY)
             {
                 loopj(6) f->putlil<ushort>(c[i].texture[j]);
             }
-            if(octsav & 0x40) f->putlil<ushort>(c[i].material);
+            if(octsav & 0x40) f->putlil<ushort>(material);
         }
     }
 }
@@ -5825,19 +5910,21 @@ static bool compactworldchunkdiff(worldchunk &chunk)
     vector<worldscatterinstance> basescatter;
     generateworldscatter(base, chunk.x, chunk.y, game::worldsettings(),
                          basescatter);
+    cube *savedroot = copyworldchunkforsave(chunk);
     int families = 0;
     if(chunkremip)
     {
-        remipworldchunk(chunk.root, false, families);
+        remipworldchunk(savedroot, false, families);
         remipworldchunk(base, false, families);
     }
 
     vector<worlddiffnode> overrides;
     loopi(8)
-        collectworldchunkoverrides(chunk.root[i], base[i],
+        collectworldchunkoverrides(savedroot[i], base[i],
                                    ivec(i, ivec(0, 0, 0), WORLD_CHUNK_ROOT_SIZE),
                                    WORLD_CHUNK_ROOT_SIZE, overrides);
-    ullong finalhash = hashworldchunk(chunk.root);
+    ullong finalhash = hashworldchunk(savedroot);
+    freeocta(savedroot);
     freeocta(base);
 
     vector<worldscatterinstance> scatterremoved, scatteradded;
@@ -7274,6 +7361,7 @@ static bool loadseedworld(const char *mname, const char *cname)
     allchanged(true);
     clearmainmenu();
     startmap(cname ? cname : mname);
+    restoreworldwatersources();
     applypreparedworldspawn();
     mapcrc = 0;
     conoutf("reconstructed world %s from seed %d and chunk diffs", folder, metadata.seed);
@@ -7402,6 +7490,7 @@ bool load_world(const char *mname, const char *cname)
     if(maptitle[0] && strcmp(maptitle, "Untitled Map by Unknown")) conoutf(CON_ECHO, "%s", maptitle);
 
     startmap(cname ? cname : mname);
+    restoreworldwatersources();
 
     if(streamedworld) applypreparedworldspawn();
 

@@ -50,6 +50,26 @@ namespace game
     VARP(simulationmaxdist, 1, 12, 64);
     FVARP(waterflowspeed, 0.1f, 1.0f, 20.0f);
 
+    static void schedulewater(const ivec &position, int delay = -1);
+
+    static int watersourcematerial(int sourcekind)
+    {
+        switch(sourcekind)
+        {
+            case WATER_SOURCE_MANUAL: return MAT_WATER | MAT_WATER_SOURCE_MANUAL;
+            case WATER_SOURCE_NATURAL_ACTIVE: return MAT_WATER | MAT_WATER_SOURCE_NATURAL_ACTIVE;
+            default: return MAT_WATER;
+        }
+    }
+
+    static int watermaterialsource(int material)
+    {
+        if((material&MATF_VOLUME) != MAT_WATER) return WATER_SOURCE_NONE;
+        if(material&MAT_WATER_SOURCE_MANUAL) return WATER_SOURCE_MANUAL;
+        if(material&MAT_WATER_SOURCE_NATURAL_ACTIVE) return WATER_SOURCE_NATURAL_ACTIVE;
+        return WATER_SOURCE_NONE;
+    }
+
     static void resetwaterphysics()
     {
         fluidcells.clear();
@@ -78,17 +98,51 @@ namespace game
 
     int getwatercelllevel(const ivec &position, bool &falling)
     {
+        const ivec local = ivec(position).mask(~(WATER_BLOCK_SIZE - 1));
+        selinfo absolute;
+        absolute.o = local;
+        worldselectiontoabsolute(absolute);
+        fluidcell *cell = fluidcells.access(absolute.o);
+        if(!cell)
+        {
+            const int sourcekind = watermaterialsource(worldcellmaterial(local));
+            if(sourcekind == WATER_SOURCE_NONE)
+            {
+                falling = false;
+                return -1;
+            }
+            cell = &fluidcells.access(absolute.o, fluidcell(0, sourcekind, false));
+            schedulewater(absolute.o);
+        }
+        falling = cell->falling;
+        return cell->source() ? 0 : cell->level;
+    }
+
+    void watermaterialloaded(const ivec &position, int material)
+    {
+        const int sourcekind = watermaterialsource(material);
+        if(sourcekind == WATER_SOURCE_NONE) return;
         selinfo absolute;
         absolute.o = ivec(position).mask(~(WATER_BLOCK_SIZE - 1));
         worldselectiontoabsolute(absolute);
         fluidcell *cell = fluidcells.access(absolute.o);
         if(!cell)
+            cell = &fluidcells.access(absolute.o, fluidcell(0, sourcekind, false));
+        else
         {
-            falling = false;
-            return -1;
+            cell->level = 0;
+            cell->sourcekind = uchar(sourcekind);
+            cell->falling = false;
         }
-        falling = cell->falling;
-        return cell->source() ? 0 : cell->level;
+        schedulewater(absolute.o);
+    }
+
+    void getflowingwatercells(vector<ivec> &cells)
+    {
+        enumeratekt(fluidcells, ivec, position, fluidcell, cell,
+        {
+            if(!cell.source()) cells.add(position);
+        });
     }
 
     static bool wateraccepts(const ivec &absolute)
@@ -99,24 +153,26 @@ namespace game
         return worldcellacceptswater(sel.o);
     }
 
-    static bool setwatermaterial(const ivec &absolute, bool water)
+    static bool setwatermaterial(const ivec &absolute, bool water, bool persist = true, int sourcekind = WATER_SOURCE_NONE)
     {
         selinfo sel;
         waterselection(sel, absolute);
         if(!sel.validate() || !worldselectionready(sel)) return false;
+        const int existingmaterial = worldcellmaterial(sel.o);
         if(water)
         {
             if(!worldcellacceptswater(sel.o)) return false;
-            if(worldcellhaswater(sel.o)) return true;
+            const int material = watersourcematerial(sourcekind);
+            if(existingmaterial == material) return true;
             changingwatermaterial = true;
-            mpeditmat(MAT_WATER, -1, sel, false);
+            mpeditmat(material, (existingmaterial&MATF_VOLUME) == MAT_WATER ? existingmaterial : -1, sel, false, persist);
             changingwatermaterial = false;
         }
         else
         {
-            if(!worldcellhaswater(sel.o)) return true;
+            if((existingmaterial&MATF_VOLUME) != MAT_WATER) return true;
             changingwatermaterial = true;
-            mpeditmat(MAT_AIR, MAT_WATER, sel, false);
+            mpeditmat(MAT_AIR, existingmaterial, sel, false, persist);
             changingwatermaterial = false;
         }
         return true;
@@ -127,7 +183,7 @@ namespace game
         return max(int(1000.0f / max(waterflowspeed, 0.1f)), 1);
     }
 
-    static void schedulewater(const ivec &position, int delay = -1)
+    static void schedulewater(const ivec &position, int delay)
     {
         fluidcell *cell = fluidcells.access(position);
         if(!cell) return;
@@ -167,7 +223,8 @@ namespace game
         const bool materialexists = watermaterial(position);
         if(materialexists && sourcekind == WATER_SOURCE_NONE) return false;
         fluidcells.access(position, fluidcell(min(level, int(WATER_MAX_LEVEL)), sourcekind, falling));
-        if(!materialexists && !setwatermaterial(position, true))
+        if((!materialexists || sourcekind != WATER_SOURCE_NONE) &&
+           !setwatermaterial(position, true, sourcekind != WATER_SOURCE_NONE, sourcekind))
         {
             fluidcells.remove(position);
             return false;
@@ -200,8 +257,11 @@ namespace game
 
     static void removewatercell(const ivec &position)
     {
-        if(!fluidcells.remove(position)) return;
-        setwatermaterial(position, false);
+        fluidcell *cell = fluidcells.access(position);
+        if(!cell) return;
+        const bool persist = cell->source();
+        fluidcells.remove(position);
+        setwatermaterial(position, false, persist);
         schedulewaterneighbors(position);
     }
 
@@ -389,6 +449,7 @@ namespace game
                 cell->sourcekind = WATER_SOURCE_NATURAL_ACTIVE;
                 cell->falling = false;
                 cell->level = 0;
+                setwatermaterial(position, true, true, WATER_SOURCE_NATURAL_ACTIVE);
             }
         }
 
