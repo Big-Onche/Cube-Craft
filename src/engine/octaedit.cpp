@@ -2174,7 +2174,7 @@ void mpdelcube(selinfo &sel, bool local)
 {
     if(local) game::edittrigger(sel, EDIT_DELCUBE);
     if(local && game::waitforserveredit()) return;
-    game::watergeometryopening(sel);
+    watergeometryopening(sel);
     beginworldedit(WORLD_EDIT_DELETE_CUBE, sel);
     loopselxyz(discardchildren(c, true); emptyfaces(c));
     commitworldedit();
@@ -2911,7 +2911,7 @@ void mpeditmat(int matid, int filter, selinfo &sel, bool local, bool persist)
     loopselxyz(setmat(c, matid, matmask, filtermat, filtermask, filtergeom));
     if(persist) commitworldedit();
     if(requestedmaterial < 0 || requestedmaterial == MAT_AIR || (requestedmaterial&MATF_VOLUME) == MAT_WATER)
-        game::watermaterialchanged(sel, requestedmaterial);
+        watermaterialchanged(sel, requestedmaterial);
 }
 
 void editmat(char *name, char *filtername)

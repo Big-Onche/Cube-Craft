@@ -139,7 +139,7 @@ int getwatermateriallevel(const materialsurface &m, bool &falling)
     sample[R[dim]] += m.rsize / 2;
     sample[C[dim]] += m.csize / 2;
     sample[dim] += dimcoord(m.orient) ? -1 : 1;
-    return game::getwatercelllevel(sample, falling);
+    return getwatercelllevel(sample, falling);
 }
 
 float getwatermaterialdrop(const materialsurface &m)
@@ -157,7 +157,7 @@ float getwatercornerdrop(int x, int y, int z)
     {
         const ivec sample(x - i, y - j, z - 1);
         bool falling = false;
-        const int level = game::getwatercelllevel(sample, falling);
+        const int level = getwatercelllevel(sample, falling);
         if(level >= 0)
         {
             drop = min(drop, level > 0 && !falling ? min(level, 7) * 2.0f : 0.0f);

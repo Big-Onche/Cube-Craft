@@ -1508,7 +1508,7 @@ static bool liquidatheight(int material, const vec &position)
     if(!isliquid(volume)) return false;
     if(volume != MAT_WATER) return true;
     bool falling = false;
-    const int level = game::getwatercelllevel(ivec(position), falling);
+    const int level = getwatercelllevel(ivec(position), falling);
     if(level < 0 || falling) return true;
     const float top = floorf(position.z / 16.0f) * 16.0f + 16.0f - min(level, 7) * 2.0f - WATER_OFFSET;
     return position.z < top;

@@ -70,11 +70,6 @@ namespace game
     extern void updateworld();
     extern void initclient();
     extern void physicstrigger(physent *d, bool local, int floorlevel, int waterlevel, int material = 0);
-    extern int getwatercelllevel(const ivec &position, bool &falling);
-    extern void getflowingwatercells(vector<ivec> &cells);
-    extern void watermaterialloaded(const ivec &position, int material);
-    extern void watergeometryopening(const selinfo &selection);
-    extern void watermaterialchanged(const selinfo &selection, int material);
     extern void bounced(physent *d, const vec &surface);
     extern void edittrigger(const selinfo &sel, int op, int arg1 = 0, int arg2 = 0, int arg3 = 0, const VSlot *vs = NULL);
     extern void vartrigger(ident *id);

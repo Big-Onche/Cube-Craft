@@ -1,5 +1,563 @@
 #include "engine.h"
 
+enum
+{
+    WATER_BLOCK_SIZE = 16,
+    WATER_MAX_LEVEL = 7,
+    WATER_DROP_SEARCH = 4,
+    WATER_SOURCE_NONE = 0,
+    WATER_SOURCE_MANUAL,
+    WATER_SOURCE_NATURAL_ACTIVE
+};
+
+struct fluidcell
+{
+    uchar level;
+    uchar sourcekind;
+    bool falling, queued;
+    int update;
+    ivec origin;
+
+    fluidcell() : level(0), sourcekind(WATER_SOURCE_NONE), falling(false), queued(false), update(0), origin(0, 0, 0) {}
+    fluidcell(int level, int sourcekind, bool falling, const ivec &origin)
+        : level(uchar(level)), sourcekind(uchar(sourcekind)), falling(falling), queued(false), update(0), origin(origin) {}
+
+    bool source() const { return sourcekind != WATER_SOURCE_NONE; }
+};
+
+static hashtable<ivec, fluidcell> fluidcells(1<<14);
+static vector<ivec> fluidupdates;
+static int fluidupdatecursor = 0;
+static bool changingwatermaterial = false;
+VARP(fluidupdatespertick, 1, 1024, 16384);
+VARP(simulationmaxdist, 1, 128, 1024);
+FVARP(waterflowspeed, 0.1f, 4.0f, 20.0f);
+static bool authoritativewatersettings = false;
+static int authoritativewaterupdates = 1024, authoritativewaterdistance = 128, authoritativewaterspeed = 4000;
+
+static void schedulewater(const ivec &position, int delay = -1);
+
+static int watersourcematerial(int sourcekind)
+{
+    switch(sourcekind)
+    {
+        case WATER_SOURCE_MANUAL: return MAT_WATER | MAT_WATER_SOURCE_MANUAL;
+        case WATER_SOURCE_NATURAL_ACTIVE: return MAT_WATER | MAT_WATER_SOURCE_NATURAL_ACTIVE;
+        default: return MAT_WATER;
+    }
+}
+
+static int watermaterialsource(int material)
+{
+    if((material&MATF_VOLUME) != MAT_WATER) return WATER_SOURCE_NONE;
+    if(material&MAT_WATER_SOURCE_MANUAL) return WATER_SOURCE_MANUAL;
+    if(material&MAT_WATER_SOURCE_NATURAL_ACTIVE) return WATER_SOURCE_NATURAL_ACTIVE;
+    return WATER_SOURCE_NONE;
+}
+
+static bool waterpositionless(const ivec &a, const ivec &b)
+{
+    return a.x < b.x || (a.x == b.x && (a.y < b.y || (a.y == b.y && a.z < b.z)));
+}
+
+void resetwatersimulation()
+{
+    fluidcells.clear();
+    fluidupdates.setsize(0);
+    fluidupdatecursor = 0;
+}
+
+void setwatersimulationsettings(int updates, int distance, int speed)
+{
+    authoritativewaterupdates = clamp(updates, 1, 16384);
+    authoritativewaterdistance = clamp(distance, 1, 1024);
+    authoritativewaterspeed = clamp(speed, 100, 20000);
+    authoritativewatersettings = true;
+}
+
+void resetwatersimulationsettings()
+{
+    authoritativewatersettings = false;
+}
+
+static void waterselection(selinfo &sel, const ivec &absolute)
+{
+    sel.o = absolute;
+    sel.s = ivec(1, 1, 1);
+    sel.grid = WATER_BLOCK_SIZE;
+    sel.orient = WORLD_ORIENT_TOP;
+    sel.cx = sel.cy = sel.corner = 0;
+    sel.cxs = sel.cys = 2;
+    worldselectiontolocal(sel);
+}
+
+static bool watermaterial(const ivec &absolute)
+{
+    selinfo sel;
+    waterselection(sel, absolute);
+    if(!sel.validate() || !worldselectionready(sel)) return false;
+    return worldcellacceptswater(sel.o) && worldcellhaswater(sel.o);
+}
+
+int getwatercelllevel(const ivec &position, bool &falling)
+{
+    const ivec local = ivec(position).mask(~(WATER_BLOCK_SIZE - 1));
+    selinfo absolute;
+    absolute.o = local;
+    worldselectiontoabsolute(absolute);
+    fluidcell *cell = fluidcells.access(absolute.o);
+    if(!cell)
+    {
+        const int sourcekind = watermaterialsource(worldcellmaterial(local));
+        if(sourcekind == WATER_SOURCE_NONE)
+        {
+            falling = false;
+            return -1;
+        }
+        cell = &fluidcells.access(absolute.o, fluidcell(0, sourcekind, false, absolute.o));
+        schedulewater(absolute.o);
+    }
+    falling = cell->falling;
+    return cell->source() ? 0 : cell->level;
+}
+
+void watermaterialloaded(const ivec &position, int material)
+{
+    const int sourcekind = watermaterialsource(material);
+    if(sourcekind == WATER_SOURCE_NONE) return;
+    selinfo absolute;
+    absolute.o = ivec(position).mask(~(WATER_BLOCK_SIZE - 1));
+    worldselectiontoabsolute(absolute);
+    fluidcell *cell = fluidcells.access(absolute.o);
+    if(!cell)
+        cell = &fluidcells.access(absolute.o, fluidcell(0, sourcekind, false, absolute.o));
+    else
+    {
+        cell->level = 0;
+        cell->sourcekind = uchar(sourcekind);
+        cell->falling = false;
+        cell->origin = absolute.o;
+    }
+    schedulewater(absolute.o);
+}
+
+void getflowingwatercells(vector<ivec> &cells)
+{
+    enumeratekt(fluidcells, ivec, position, fluidcell, cell,
+    {
+        if(!cell.source()) cells.add(position);
+    });
+}
+
+static bool wateraccepts(const ivec &absolute)
+{
+    selinfo sel;
+    waterselection(sel, absolute);
+    if(!sel.validate() || !worldselectionready(sel)) return false;
+    return worldcellacceptswater(sel.o);
+}
+
+static bool setwatermaterial(const ivec &absolute, bool water, bool persist = true, int sourcekind = WATER_SOURCE_NONE)
+{
+    selinfo sel;
+    waterselection(sel, absolute);
+    if(!sel.validate() || !worldselectionready(sel)) return false;
+    const int existingmaterial = worldcellmaterial(sel.o);
+    if(water)
+    {
+        if(!worldcellacceptswater(sel.o)) return false;
+        const int material = watersourcematerial(sourcekind);
+        if(existingmaterial == material) return true;
+        changingwatermaterial = true;
+        mpeditmat(material, (existingmaterial&MATF_VOLUME) == MAT_WATER ? existingmaterial : -1, sel, false, persist);
+        changingwatermaterial = false;
+    }
+    else
+    {
+        if((existingmaterial&MATF_VOLUME) != MAT_WATER) return true;
+        changingwatermaterial = true;
+        mpeditmat(MAT_AIR, existingmaterial, sel, false, persist);
+        changingwatermaterial = false;
+    }
+    return true;
+}
+
+static int effectivewaterspeed()
+{
+    return authoritativewatersettings ? authoritativewaterspeed : clamp(int(waterflowspeed * 1000.0f + 0.5f), 100, 20000);
+}
+
+static int waterstepmillis()
+{
+    return max(1000000 / effectivewaterspeed(), 1);
+}
+
+static void schedulewater(const ivec &position, int delay)
+{
+    fluidcell *cell = fluidcells.access(position);
+    if(!cell) return;
+    const int due = totalmillis + (delay >= 0 ? delay : waterstepmillis());
+    if(cell->queued)
+    {
+        cell->update = min(cell->update, due);
+        return;
+    }
+    cell->queued = true;
+    cell->update = due;
+    fluidupdates.add(position);
+}
+
+static bool addwatercell(const ivec &position, int level, int sourcekind, bool falling, int delay = -1, bool refresh = true,
+                         const ivec *floworigin = NULL)
+{
+    const ivec origin = sourcekind != WATER_SOURCE_NONE || !floworigin ? position : *floworigin;
+    fluidcell *existing = fluidcells.access(position);
+    if(existing)
+    {
+        bool changed = sourcekind != WATER_SOURCE_NONE && !existing->source();
+        if(sourcekind != WATER_SOURCE_NONE)
+        {
+            existing->sourcekind = uchar(sourcekind);
+            existing->falling = false;
+            existing->level = 0;
+            existing->origin = position;
+        }
+        else if(!existing->source() &&
+                (level < existing->level ||
+                 (level == existing->level && (falling < existing->falling ||
+                  (falling == existing->falling && waterpositionless(origin, existing->origin))))))
+        {
+            existing->level = uchar(min(level, int(WATER_MAX_LEVEL)));
+            existing->falling = falling;
+            existing->origin = origin;
+            changed = true;
+        }
+        if(changed) schedulewater(position, delay);
+        return changed;
+    }
+    if(!wateraccepts(position)) return false;
+    const bool materialexists = watermaterial(position);
+    if(materialexists && sourcekind == WATER_SOURCE_NONE) return false;
+    fluidcells.access(position, fluidcell(min(level, int(WATER_MAX_LEVEL)), sourcekind, falling, origin));
+    if((!materialexists || sourcekind != WATER_SOURCE_NONE) &&
+       !setwatermaterial(position, true, sourcekind != WATER_SOURCE_NONE, sourcekind))
+    {
+        fluidcells.remove(position);
+        return false;
+    }
+    if(materialexists && refresh) worldwaterchanged();
+    schedulewater(position, delay);
+    return true;
+}
+
+bool addmanualwatersource(const ivec &position)
+{
+    fluidcell *existing = fluidcells.access(position);
+    if(existing && existing->source()) return true;
+    return addwatercell(position, 0, WATER_SOURCE_MANUAL, false);
+}
+
+static void removewatercell(const ivec &position);
+
+bool removewatersource(const ivec &position)
+{
+    fluidcell *cell = fluidcells.access(position);
+    if(!cell || !cell->source()) return false;
+    removewatercell(position);
+    return true;
+}
+
+static void schedulewaterneighbors(const ivec &position, int delay = -1)
+{
+    static const ivec offsets[] =
+    {
+        ivec(-WATER_BLOCK_SIZE, 0, 0), ivec(WATER_BLOCK_SIZE, 0, 0),
+        ivec(0, -WATER_BLOCK_SIZE, 0), ivec(0, WATER_BLOCK_SIZE, 0),
+        ivec(0, 0, -WATER_BLOCK_SIZE), ivec(0, 0, WATER_BLOCK_SIZE)
+    };
+    loopi(6) schedulewater(ivec(position).add(offsets[i]), delay);
+}
+
+static void removewatercell(const ivec &position)
+{
+    fluidcell *cell = fluidcells.access(position);
+    if(!cell) return;
+    const bool persist = cell->source();
+    fluidcells.remove(position);
+    setwatermaterial(position, false, persist);
+    schedulewaterneighbors(position);
+}
+
+static void activatenaturalwaterneighbors(const ivec &position)
+{
+    static const ivec offsets[] =
+    {
+        ivec(-WATER_BLOCK_SIZE, 0, 0), ivec(WATER_BLOCK_SIZE, 0, 0),
+        ivec(0, -WATER_BLOCK_SIZE, 0), ivec(0, WATER_BLOCK_SIZE, 0),
+        ivec(0, 0, -WATER_BLOCK_SIZE), ivec(0, 0, WATER_BLOCK_SIZE)
+    };
+    loopi(6)
+    {
+        const ivec neighbor = ivec(position).add(offsets[i]);
+        if(!fluidcells.access(neighbor) && watermaterial(neighbor))
+            addwatercell(neighbor, 0, WATER_SOURCE_NATURAL_ACTIVE, false, -1, false);
+    }
+}
+
+void watergeometryopening(const selinfo &selection)
+{
+    selinfo absolute = selection;
+    worldselectiontoabsolute(absolute);
+    const ivec end = ivec(absolute.o).add(ivec(absolute.s).mul(absolute.grid));
+    const ivec first = ivec(absolute.o).mask(~(WATER_BLOCK_SIZE - 1));
+    const ivec last = ivec(end).sub(1).mask(~(WATER_BLOCK_SIZE - 1));
+    for(int z = first.z; z <= last.z; z += WATER_BLOCK_SIZE)
+    for(int y = first.y; y <= last.y; y += WATER_BLOCK_SIZE)
+    for(int x = first.x; x <= last.x; x += WATER_BLOCK_SIZE)
+        activatenaturalwaterneighbors(ivec(x, y, z));
+}
+
+void waterterrainchanged(const ivec &position)
+{
+    static const ivec offsets[] =
+    {
+        ivec(0, 0, 0), ivec(-WATER_BLOCK_SIZE, 0, 0), ivec(WATER_BLOCK_SIZE, 0, 0),
+        ivec(0, -WATER_BLOCK_SIZE, 0), ivec(0, WATER_BLOCK_SIZE, 0),
+        ivec(0, 0, -WATER_BLOCK_SIZE), ivec(0, 0, WATER_BLOCK_SIZE)
+    };
+    loopi(7)
+    {
+        const ivec neighbor = ivec(position).add(offsets[i]);
+        fluidcell *cell = fluidcells.access(neighbor);
+        if(neighbor == position && (!watermaterial(neighbor) || !wateraccepts(neighbor)))
+        {
+            if(cell) removewatercell(neighbor);
+            else if(!wateraccepts(neighbor)) setwatermaterial(neighbor, false);
+            continue;
+        }
+        if(cell) schedulewater(neighbor);
+    }
+}
+
+void watermaterialchanged(const selinfo &selection, int material)
+{
+    if(changingwatermaterial) return;
+    selinfo absolute = selection;
+    worldselectiontoabsolute(absolute);
+    const ivec end = ivec(absolute.o).add(ivec(absolute.s).mul(absolute.grid));
+    bool activated = false;
+    for(int z = absolute.o.z; z < end.z; z += WATER_BLOCK_SIZE)
+    for(int y = absolute.o.y; y < end.y; y += WATER_BLOCK_SIZE)
+    for(int x = absolute.o.x; x < end.x; x += WATER_BLOCK_SIZE)
+    {
+        const ivec position = ivec(x, y, z).mask(~(WATER_BLOCK_SIZE - 1));
+        if(material >= 0 && (material&MATF_VOLUME) == MAT_WATER)
+            activated |= addwatercell(position, 0, WATER_SOURCE_MANUAL, false, 0, false);
+        else waterterrainchanged(position);
+    }
+    if(activated) worldwaterchanged();
+}
+
+static bool watercanflowinto(const ivec &position)
+{
+    if(!wateraccepts(position)) return false;
+    if(fluidcells.access(position)) return true;
+    return !watermaterial(position);
+}
+
+static int waterlevel(const ivec &position)
+{
+    fluidcell *cell = fluidcells.access(position);
+    if(cell) return cell->source() ? 0 : cell->level;
+    return watermaterial(position) ? 0 : WATER_MAX_LEVEL + 1;
+}
+
+static bool watersupported(const ivec &position)
+{
+    ivec below = position;
+    below.z -= WATER_BLOCK_SIZE;
+    if(below.z < 0) return true;
+    selinfo sel;
+    waterselection(sel, below);
+    if(!sel.validate() || !worldselectionready(sel)) return false;
+    return worldcellsolid(sel.o);
+}
+
+static int waterdropcost(const ivec &position, const ivec &direction)
+{
+    ivec cursor = position;
+    loopi(WATER_DROP_SEARCH)
+    {
+        cursor.add(direction);
+        if(!watercanflowinto(cursor)) return WATER_DROP_SEARCH + 1;
+        ivec below = cursor;
+        below.z -= WATER_BLOCK_SIZE;
+        if(below.z >= 0 && watercanflowinto(below)) return i;
+    }
+    return WATER_DROP_SEARCH + 1;
+}
+
+static void updatewatercell(const ivec &position)
+{
+    fluidcell *cell = fluidcells.access(position);
+    if(!cell) return;
+    if(!watermaterial(position))
+    {
+        removewatercell(position);
+        return;
+    }
+
+    static const ivec directions[] =
+    {
+        ivec(-WATER_BLOCK_SIZE, 0, 0), ivec(WATER_BLOCK_SIZE, 0, 0),
+        ivec(0, -WATER_BLOCK_SIZE, 0), ivec(0, WATER_BLOCK_SIZE, 0)
+    };
+    if(!cell->source())
+    {
+        int desiredlevel = WATER_MAX_LEVEL + 1;
+        bool desiredfalling = false;
+        ivec desiredorigin = cell->origin;
+        ivec above = position;
+        above.z += WATER_BLOCK_SIZE;
+        fluidcell *abovefluid = fluidcells.access(above);
+        if(abovefluid)
+        {
+            desiredlevel = abovefluid->source() ? 0 : abovefluid->level;
+            desiredfalling = true;
+            desiredorigin = abovefluid->origin;
+        }
+        loopi(4)
+        {
+            const ivec neighborposition = ivec(position).add(directions[i]);
+            fluidcell *neighbor = fluidcells.access(neighborposition);
+            // Falling water only feeds sideways from the cell where the waterfall lands.
+            if(!neighbor || (neighbor->falling && !watersupported(neighborposition))) continue;
+            const int neighborlevel = neighbor->source() ? 0 : neighbor->level;
+            const int candidatelevel = neighborlevel + 1;
+            if(candidatelevel < desiredlevel ||
+               (candidatelevel == desiredlevel && (desiredfalling || waterpositionless(neighbor->origin, desiredorigin))))
+            {
+                desiredlevel = candidatelevel;
+                desiredfalling = false;
+                desiredorigin = neighbor->origin;
+            }
+        }
+        if(desiredlevel > WATER_MAX_LEVEL)
+        {
+            removewatercell(position);
+            return;
+        }
+        if(cell->level != desiredlevel || cell->falling != desiredfalling || cell->origin != desiredorigin)
+        {
+            cell->level = uchar(desiredlevel);
+            cell->falling = desiredfalling;
+            cell->origin = desiredorigin;
+            schedulewaterneighbors(position);
+        }
+    }
+
+    ivec below = position;
+    below.z -= WATER_BLOCK_SIZE;
+    if(below.z >= 0 && watercanflowinto(below))
+    {
+        const ivec origin = cell->origin;
+        addwatercell(below, cell->level, WATER_SOURCE_NONE, true, -1, true, &origin);
+        return;
+    }
+
+    if(!cell->source() && watersupported(position))
+    {
+        int sources = 0;
+        loopi(4)
+        {
+            fluidcell *neighbor = fluidcells.access(ivec(position).add(directions[i]));
+            if(neighbor && neighbor->source()) ++sources;
+        }
+        if(sources >= 2)
+        {
+            cell->sourcekind = WATER_SOURCE_NATURAL_ACTIVE;
+            cell->falling = false;
+            cell->level = 0;
+            cell->origin = position;
+            setwatermaterial(position, true, true, WATER_SOURCE_NATURAL_ACTIVE);
+        }
+    }
+
+    const int nextlevel = cell->source() ? 1 : cell->falling ? 1 : int(cell->level) + 1;
+    if(nextlevel > WATER_MAX_LEVEL) return;
+    const ivec floworigin = cell->origin;
+    int costs[4], best = WATER_DROP_SEARCH + 1;
+    loopi(4)
+    {
+        const ivec neighbor = ivec(position).add(directions[i]);
+        costs[i] = watercanflowinto(neighbor) ? waterdropcost(position, directions[i]) : WATER_DROP_SEARCH + 1;
+        best = min(best, costs[i]);
+    }
+    loopi(4)
+    {
+        const ivec neighbor = ivec(position).add(directions[i]);
+        if(!watercanflowinto(neighbor) || (best <= WATER_DROP_SEARCH && costs[i] != best)) continue;
+        addwatercell(neighbor, nextlevel, WATER_SOURCE_NONE, false, -1, true, &floworigin);
+    }
+}
+
+static bool waterinsimulationrange(const ivec &position)
+{
+    if(!camera1 && !player) return false;
+    vec focus = camera1 ? camera1->o : player->o;
+    worldpositiontoabsolute(focus);
+    const int distance = authoritativewatersettings ? authoritativewaterdistance : simulationmaxdist;
+    const float range = distance * float(WATER_BLOCK_SIZE);
+    return vec(position).add(WATER_BLOCK_SIZE * 0.5f).squaredist(focus) <= range * range;
+}
+
+void updatewatersimulation()
+{
+    const int updatebudget = authoritativewatersettings ? authoritativewaterupdates : fluidupdatespertick;
+    int processed = 0, inspected = 0;
+    const int inspectionlimit = min(fluidupdates.length(), max(updatebudget * 4, 256));
+    while(fluidupdates.length() && processed < updatebudget && inspected < inspectionlimit)
+    {
+        if(fluidupdatecursor >= fluidupdates.length()) fluidupdatecursor = 0;
+        const ivec position = fluidupdates[fluidupdatecursor];
+        fluidcell *cell = fluidcells.access(position);
+        if(!cell)
+        {
+            fluidupdates.removeunordered(fluidupdatecursor);
+            continue;
+        }
+        if(cell->update > totalmillis || !waterinsimulationrange(position))
+        {
+            ++fluidupdatecursor;
+            ++inspected;
+            continue;
+        }
+        cell->queued = false;
+        fluidupdates.removeunordered(fluidupdatecursor);
+        updatewatercell(position);
+        ++processed;
+        ++inspected;
+    }
+
+    if(!player || !player->inwater) return;
+    vec absolute = player->o;
+    worldpositiontoabsolute(absolute);
+    ivec cell = ivec(absolute).mask(~(WATER_BLOCK_SIZE - 1));
+    const int west = waterlevel(ivec(cell).add(ivec(-WATER_BLOCK_SIZE, 0, 0))),
+              east = waterlevel(ivec(cell).add(ivec(WATER_BLOCK_SIZE, 0, 0))),
+              south = waterlevel(ivec(cell).add(ivec(0, -WATER_BLOCK_SIZE, 0))),
+              north = waterlevel(ivec(cell).add(ivec(0, WATER_BLOCK_SIZE, 0)));
+    vec flow(float(west - east), float(south - north), 0);
+    fluidcell *current = fluidcells.access(cell);
+    if(current && current->falling) flow.z = -2;
+    if(!flow.iszero())
+    {
+        flow.normalize().mul(min(curtime / 1000.0f, 0.05f) * 12.0f * effectivewaterspeed() / 1000.0f);
+        player->vel.add(flow);
+    }
+    player->falling.z = max(player->falling.z, -20.0f);
+}
+
 #define NUMCAUSTICS 32
 
 static Texture *caustictex[NUMCAUSTICS] = { NULL };

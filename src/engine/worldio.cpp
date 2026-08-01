@@ -1246,7 +1246,7 @@ static cube *copyworldchunkforsave(const worldchunk &chunk)
     loopi(8) copyworldcube(chunk.root[i], root[i]);
 
     vector<ivec> flowing;
-    game::getflowingwatercells(flowing);
+    getflowingwatercells(flowing);
     const int absolutex = chunk.x * WORLD_CHUNK_SIZE,
               absolutey = chunk.y * WORLD_CHUNK_SIZE;
     loopv(flowing)
@@ -1917,7 +1917,7 @@ static void restoreworldwatersources(const cube &c, const ivec &origin, int size
     for(int z = origin.z; z < end.z; z += WORLD_BLOCK_SIZE)
     for(int y = origin.y; y < end.y; y += WORLD_BLOCK_SIZE)
     for(int x = origin.x; x < end.x; x += WORLD_BLOCK_SIZE)
-        game::watermaterialloaded(ivec(x, y, z), c.material);
+        watermaterialloaded(ivec(x, y, z), c.material);
 }
 
 static void restoreworldwatersources()
@@ -5400,7 +5400,7 @@ void savec(cube *c, const ivec &o, int size, stream *f)
             if((material&MATF_VOLUME) == MAT_WATER)
             {
                 bool falling = false;
-                const int level = game::getwatercelllevel(co, falling);
+                const int level = getwatercelllevel(co, falling);
                 if(level > 0 || falling) material = MAT_AIR;
             }
             int octsav = isempty(c[i]) ? OCTSAV_EMPTY :
