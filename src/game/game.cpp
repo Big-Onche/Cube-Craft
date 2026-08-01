@@ -205,6 +205,35 @@ namespace game
         schedulewaterneighbors(position);
     }
 
+    static void activatenaturalwaterneighbors(const ivec &position)
+    {
+        static const ivec offsets[] =
+        {
+            ivec(-WATER_BLOCK_SIZE, 0, 0), ivec(WATER_BLOCK_SIZE, 0, 0),
+            ivec(0, -WATER_BLOCK_SIZE, 0), ivec(0, WATER_BLOCK_SIZE, 0),
+            ivec(0, 0, -WATER_BLOCK_SIZE), ivec(0, 0, WATER_BLOCK_SIZE)
+        };
+        loopi(6)
+        {
+            const ivec neighbor = ivec(position).add(offsets[i]);
+            if(!fluidcells.access(neighbor) && watermaterial(neighbor))
+                addwatercell(neighbor, 0, WATER_SOURCE_NATURAL_ACTIVE, false, 0, false);
+        }
+    }
+
+    void watergeometryopening(const selinfo &selection)
+    {
+        selinfo absolute = selection;
+        worldselectiontoabsolute(absolute);
+        const ivec end = ivec(absolute.o).add(ivec(absolute.s).mul(absolute.grid));
+        const ivec first = ivec(absolute.o).mask(~(WATER_BLOCK_SIZE - 1));
+        const ivec last = ivec(end).sub(1).mask(~(WATER_BLOCK_SIZE - 1));
+        for(int z = first.z; z <= last.z; z += WATER_BLOCK_SIZE)
+        for(int y = first.y; y <= last.y; y += WATER_BLOCK_SIZE)
+        for(int x = first.x; x <= last.x; x += WATER_BLOCK_SIZE)
+            activatenaturalwaterneighbors(ivec(x, y, z));
+    }
+
     static void waterterrainchanged(const ivec &position)
     {
         static const ivec offsets[] =
@@ -214,7 +243,7 @@ namespace game
             ivec(0, 0, -WATER_BLOCK_SIZE), ivec(0, 0, WATER_BLOCK_SIZE)
         };
         const bool opened = wateraccepts(position) && !watermaterial(position);
-        bool activated = false, removedactive = false;
+        bool removedactive = false;
         loopi(7)
         {
             const ivec neighbor = ivec(position).add(offsets[i]);
@@ -230,10 +259,7 @@ namespace game
                 continue;
             }
             if(cell) schedulewater(neighbor, opened && !removedactive ? 0 : -1);
-            else if(opened && i > 0 && watermaterial(neighbor))
-                activated |= addwatercell(neighbor, 0, WATER_SOURCE_NATURAL_ACTIVE, false, 0, false);
         }
-        if(activated) worldwaterchanged();
     }
 
     void watermaterialchanged(const selinfo &selection, int material)

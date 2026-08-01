@@ -2174,6 +2174,7 @@ void mpdelcube(selinfo &sel, bool local)
 {
     if(local) game::edittrigger(sel, EDIT_DELCUBE);
     if(local && game::waitforserveredit()) return;
+    game::watergeometryopening(sel);
     beginworldedit(WORLD_EDIT_DELETE_CUBE, sel);
     loopselxyz(discardchildren(c, true); emptyfaces(c));
     commitworldedit();
