@@ -1805,7 +1805,11 @@ bool moveplayer(physent *pl, int moveres, bool local, int curtime)
     // apply gravity
     if(!floating) modifygravity(pl, water, curtime);
     // apply any player generated changes in velocity
+    const float maxspeed = pl->maxspeed;
+    if(!floating) pl->maxspeed *= watermovementscale(pl);
     modifyvelocity(pl, local, water, floating, curtime);
+    pl->maxspeed = maxspeed;
+    applywaterflow(pl, water, curtime);
 
     vec d(pl->vel);
     if(!floating && water) d.mul(0.5f);

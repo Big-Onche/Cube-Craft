@@ -372,6 +372,99 @@ static int waterlevel(const ivec &position)
     return watermaterial(position) ? 0 : WATER_MAX_LEVEL + 1;
 }
 
+static bool waterflow(const ivec &position, vec &flow)
+{
+    const int west = waterlevel(ivec(position).add(ivec(-WATER_BLOCK_SIZE, 0, 0))),
+              east = waterlevel(ivec(position).add(ivec(WATER_BLOCK_SIZE, 0, 0))),
+              south = waterlevel(ivec(position).add(ivec(0, -WATER_BLOCK_SIZE, 0))),
+              north = waterlevel(ivec(position).add(ivec(0, WATER_BLOCK_SIZE, 0)));
+    fluidcell *current = fluidcells.access(position);
+    if(current && current->falling)
+    {
+        flow = vec(0, 0, -1);
+        return true;
+    }
+    flow = vec(float(east - west), float(north - south), 0);
+    if(flow.iszero()) return false;
+    flow.normalize();
+    return true;
+}
+
+static bool waterflowforplayer(const physent *pl, vec &flow, float &immersion)
+{
+    const float feet = pl->o.z - pl->eyeheight,
+                head = pl->o.z + pl->aboveeye,
+                height = max(head - feet, 1.0f);
+    const int firstcell = int(floorf(feet / float(WATER_BLOCK_SIZE))) * WATER_BLOCK_SIZE,
+              lastcell = int(ceilf(head / float(WATER_BLOCK_SIZE))) * WATER_BLOCK_SIZE;
+    float waterdepth = 0.0f;
+    vec weightedflow(0, 0, 0);
+
+    for(int z = firstcell; z < lastcell; z += WATER_BLOCK_SIZE)
+    {
+        const vec sample(pl->o.x, pl->o.y, z + 1.0f);
+        bool falling = false;
+        const int level = getwatercelllevel(ivec(sample), falling);
+        if(level < 0) continue;
+
+        const int levelclamped = min(level, int(WATER_MAX_LEVEL));
+        const float celltop = z + (falling ? WATER_BLOCK_SIZE : WATER_BLOCK_SIZE - levelclamped * 2.0f - WATER_OFFSET),
+                    waterbottom = max(feet, float(z)),
+                    watertop = min(head, celltop),
+                    depth = max(watertop - waterbottom, 0.0f);
+        if(depth <= 0.0f) continue;
+
+        waterdepth += depth;
+        vec cellflow;
+        vec absolute(pl->o.x, pl->o.y, z);
+        worldpositiontoabsolute(absolute);
+        if(waterflow(ivec(absolute).mask(~(WATER_BLOCK_SIZE - 1)), cellflow)) weightedflow.add(vec(cellflow).mul(depth));
+    }
+
+    // A player is about two cubes tall, so 24 units of water coverage is the
+    // threshold at which the current should overpower player movement.
+    immersion = waterdepth >= height ? 1.0f : clamp(waterdepth / (2.0f * WATER_BLOCK_SIZE), 0.0f, 1.0f);
+    if(waterdepth <= 0.0f || weightedflow.iszero()) return false;
+    flow = weightedflow.div(waterdepth);
+    return !flow.iszero();
+}
+
+float watermovementscale(const physent *pl)
+{
+    if(!pl || pl->type != ENT_PLAYER || pl->state == CS_EDITING || pl->state == CS_SPECTATOR) return 1.0f;
+
+    vec flow;
+    float immersion;
+    waterflowforplayer(pl, flow, immersion);
+
+    // Water resistance starts quickly and then tapers off logarithmically,
+    // leaving only 5% of normal player control at full immersion.
+    const float resistance = logf(1.0f + 7.0f * immersion) / logf(8.0f);
+    return 1.0f - 0.95f * resistance;
+}
+
+void applywaterflow(physent *pl, bool water, int timestep)
+{
+    if(!pl || pl->type != ENT_PLAYER || pl->state == CS_EDITING || pl->state == CS_SPECTATOR || timestep <= 0) return;
+
+    vec flow;
+    float immersion;
+    if(!waterflowforplayer(pl, flow, immersion)) return;
+
+    // Calibrate the impulse against the player-control blend. This makes the
+    // 75% immersion point meaningful regardless of the physics timestep or
+    // whether the player is just entering the water.
+    const float control = 1.0f - pow(1.0f - 1.0f / (water ? 20.0f : 30.0f), timestep / 20.0f),
+                threshold = 0.75f,
+                belowthreshold = immersion / threshold,
+                abovethreshold = (immersion - threshold) / (1.0f - threshold),
+                strength = immersion < threshold ?
+                           0.95f * logf(1.0f + 9.0f * belowthreshold) / logf(10.0f) :
+                           1.05f + 0.95f * logf(1.0f + abovethreshold) / logf(2.0f),
+                impulse = pl->maxspeed * control * strength * clamp(flow.magnitude(), 0.0f, 1.0f);
+    pl->vel.add(flow.mul(impulse));
+}
+
 static bool watersupported(const ivec &position)
 {
     ivec below = position;
@@ -539,23 +632,6 @@ void updatewatersimulation()
         ++inspected;
     }
 
-    if(!player || !player->inwater) return;
-    vec absolute = player->o;
-    worldpositiontoabsolute(absolute);
-    ivec cell = ivec(absolute).mask(~(WATER_BLOCK_SIZE - 1));
-    const int west = waterlevel(ivec(cell).add(ivec(-WATER_BLOCK_SIZE, 0, 0))),
-              east = waterlevel(ivec(cell).add(ivec(WATER_BLOCK_SIZE, 0, 0))),
-              south = waterlevel(ivec(cell).add(ivec(0, -WATER_BLOCK_SIZE, 0))),
-              north = waterlevel(ivec(cell).add(ivec(0, WATER_BLOCK_SIZE, 0)));
-    vec flow(float(west - east), float(south - north), 0);
-    fluidcell *current = fluidcells.access(cell);
-    if(current && current->falling) flow.z = -2;
-    if(!flow.iszero())
-    {
-        flow.normalize().mul(min(curtime / 1000.0f, 0.05f) * 12.0f * effectivewaterspeed() / 1000.0f);
-        player->vel.add(flow);
-    }
-    player->falling.z = max(player->falling.z, -20.0f);
 }
 
 #define NUMCAUSTICS 32

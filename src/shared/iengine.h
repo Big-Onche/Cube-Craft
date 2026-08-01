@@ -155,6 +155,8 @@ extern void setwatersimulationsettings(int updates, int distance, int speed);
 extern void resetwatersimulationsettings();
 extern void updatewatersimulation();
 extern int getwatercelllevel(const ivec &position, bool &falling);
+extern float watermovementscale(const physent *pl);
+extern void applywaterflow(physent *pl, bool water, int curtime);
 extern void getflowingwatercells(vector<ivec> &cells);
 extern void watermaterialloaded(const ivec &position, int material);
 extern void watergeometryopening(const selinfo &selection);
