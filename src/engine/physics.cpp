@@ -1702,7 +1702,17 @@ FVAR(straferoll, 0, 0.033f, 90);
 FVAR(faderoll, 0, 0.95f, 1);
 VAR(floatspeed, 1, 100, 10000);
 
-void modifyvelocity(physent *pl, bool local, bool water, bool floating, int curtime)
+static float watermovementscale(float immersion)
+{
+    if(immersion <= 0.0f) return 1.0f;
+
+    // Water resistance starts quickly and then tapers off logarithmically,
+    // leaving only 5% of normal player control at full immersion.
+    const float resistance = logf(1.0f + 7.0f * clamp(immersion, 0.0f, 1.0f)) / logf(8.0f);
+    return 1.0f - 0.95f * resistance;
+}
+
+void modifyvelocity(physent *pl, bool local, bool water, float immersion, bool floating, int curtime)
 {
     bool allowmove = game::allowmove(pl);
     if(floating)
@@ -1755,6 +1765,7 @@ void modifyvelocity(physent *pl, bool local, bool water, bool floating, int curt
         }
         else if(pl->crouching) d.mul(0.4f);
     }
+    if(pl->type==ENT_PLAYER && !floating) d.mul(watermovementscale(immersion));
     float fric = water && !floating ? 20.0f : (pl->physstate >= PHYS_SLOPE || floating ? 6.0f : 30.0f);
     pl->vel.lerp(d, pl->vel, pow(1 - 1/fric, curtime/20.0f));
 // old fps friction
@@ -1800,15 +1811,13 @@ bool moveplayer(physent *pl, int moveres, bool local, int curtime)
     int material = lookupmaterial(materialposition);
     bool water = liquidatheight(material, materialposition);
     bool floating = pl->type==ENT_PLAYER && (pl->state==CS_EDITING || pl->state==CS_SPECTATOR);
+    const float immersion = floating ? 0.0f : getwaterimmersion(pl);
     float secs = curtime/1000.f;
 
     // apply gravity
     if(!floating) modifygravity(pl, water, curtime);
     // apply any player generated changes in velocity
-    const float maxspeed = pl->maxspeed;
-    if(!floating) pl->maxspeed *= watermovementscale(pl);
-    modifyvelocity(pl, local, water, floating, curtime);
-    pl->maxspeed = maxspeed;
+    modifyvelocity(pl, local, water, immersion, floating, curtime);
     applywaterflow(pl, water, curtime);
 
     vec d(pl->vel);
