@@ -5207,6 +5207,37 @@ static void addworldpinetree(vector<ivec> &pinewood, vector<ivec> &needles,
     }
 }
 
+struct worldtreecandidate
+{
+    int blockx, blocky, worldx, worldy, basez, height;
+    uint priority, shape;
+    bool pine;
+
+    worldtreecandidate(int blockx, int blocky, int worldx, int worldy, int basez, int height, uint priority, uint shape, bool pine)
+        : blockx(blockx), blocky(blocky), worldx(worldx), worldy(worldy), basez(basez), height(height),
+          priority(priority), shape(shape), pine(pine)
+    {
+    }
+};
+
+static bool worldtreecandidateallowed(const vector<worldtreecandidate> &candidates, const worldtreecandidate &candidate)
+{
+    loopv(candidates)
+    {
+        const worldtreecandidate &other = candidates[i];
+        if(other.blockx == candidate.blockx && other.blocky == candidate.blocky) continue;
+        if(abs(other.worldx - candidate.worldx) > 1 || abs(other.worldy - candidate.worldy) > 1) continue;
+        const bool lowerpriority = other.priority < candidate.priority;
+        const bool samepriority = other.priority == candidate.priority;
+        const bool lowery = other.worldy < candidate.worldy;
+        const bool samey = other.worldy == candidate.worldy;
+        const bool lowerx = other.worldx < candidate.worldx;
+
+        if(lowerpriority || (samepriority && (lowery || (samey && lowerx)))) return false;
+    }
+    return true;
+}
+
 static void subdivideworldgencube(worldgencontext &ctx, cube &c)
 {
     if(c.children) return;
@@ -5525,11 +5556,10 @@ static bool placeworldcaves(worldgencontext &ctx, cube *root, int chunkx, int ch
 static bool placeworldtrees(worldgencontext &ctx, cube *root, int chunkx, int chunky)
 {
     vector<ivec> wood, pinewood, leaves, needles;
-    const int halo = 3,
-              beachmin = (ctx.settings.sealevel
-                        + min(ctx.settings.beachminheight, ctx.settings.beachmaxheight)) * WORLD_BLOCK_SIZE,
-              beachmax = (ctx.settings.sealevel
-                        + max(ctx.settings.beachminheight, ctx.settings.beachmaxheight)) * WORLD_BLOCK_SIZE,
+    vector<worldtreecandidate> candidates;
+    const int halo = 4,
+              beachmin = (ctx.settings.sealevel + min(ctx.settings.beachminheight, ctx.settings.beachmaxheight)) * WORLD_BLOCK_SIZE,
+              beachmax = (ctx.settings.sealevel + max(ctx.settings.beachminheight, ctx.settings.beachmaxheight)) * WORLD_BLOCK_SIZE,
               coasttreemax = (ctx.settings.sealevel + 2) * WORLD_BLOCK_SIZE;
 
     {
@@ -5538,17 +5568,13 @@ static bool placeworldtrees(worldgencontext &ctx, cube *root, int chunkx, int ch
         for(int x = -halo; x < WORLD_CHUNK_BLOCKS + halo; ++x)
         {
             if(x == -halo && ctx.iscanceled()) return false;
-            const bool inside = x >= 0 && x < WORLD_CHUNK_BLOCKS &&
-                                y >= 0 && y < WORLD_CHUNK_BLOCKS;
+            const bool inside = x >= 0 && x < WORLD_CHUNK_BLOCKS && y >= 0 && y < WORLD_CHUNK_BLOCKS;
             const int index = inside ? y * WORLD_CHUNK_BLOCKS + x : 0;
             game::worldtectonicsample terrain;
-            const int height = inside ? ctx.heightmap[index]
-                                      : generateworldheight(ctx, chunkx, chunky, x, y, &terrain),
-                      biome = inside ? ctx.biomemap[index]
-                                     : generateworldbiome(ctx, chunkx, chunky, x, y, height);
+            const int height = inside ? ctx.heightmap[index] : generateworldheight(ctx, chunkx, chunky, x, y, &terrain),
+                      biome = inside ? ctx.biomemap[index] : generateworldbiome(ctx, chunkx, chunky, x, y, height);
             if(biome != game::WORLD_BIOME_FOREST && biome != game::WORLD_BIOME_PLAINS) continue;
-            if(ctx.settings.coastwidth > 0 && height >= beachmin
-            && height <= max(beachmax, coasttreemax)) continue;
+            if(ctx.settings.coastwidth > 0 && height >= beachmin && height <= max(beachmax, coasttreemax)) continue;
             if(inside)
             {
                 if(!worldtreegrowablesurface(ctx, x, y, height, biome)) continue;
@@ -5558,9 +5584,7 @@ static bool placeworldtrees(worldgencontext &ctx, cube *root, int chunkx, int ch
                  || generateworldrock(ctx, chunkx, chunky, x, y, height)) continue;
             if(generateworldcaveentrance(ctx, chunkx, chunky, x, y, height)) continue;
 
-            const float density = biome == game::WORLD_BIOME_FOREST
-                                ? ctx.settings.foresttreedensity
-                                : ctx.settings.plainstreedensity;
+            const float density = biome == game::WORLD_BIOME_FOREST ? ctx.settings.foresttreedensity : ctx.settings.plainstreedensity;
             const uint spawn = hashworldtree(uint(ctx.seed), chunkx, chunky, x, y, 0xD1B54A35U);
             if(worldtreeunit(spawn) >= density) continue;
 
@@ -5570,18 +5594,25 @@ static bool placeworldtrees(worldgencontext &ctx, cube *root, int chunkx, int ch
                         pinechance = worldsmoothstep(pinelow, pinehigh, heightblocks);
             const uint shape = hashworldtree(uint(ctx.seed), chunkx, chunky, x, y, 0x94D049BBU);
             const bool pine = worldtreeunit(shape) < pinechance;
-            const int treeheight = pine ? 6 + int((shape >> 24) & 3U)
-                                        : 4 + int((shape >> 24) % 3U),
+            const int treeheight = pine ? 6 + int((shape >> 24) & 3U) : 4 + int((shape >> 24) % 3U),
                       basez = WORLD_GROUND_HEIGHT / WORLD_BLOCK_SIZE + height / WORLD_BLOCK_SIZE;
+
             if(basez + treeheight >= WORLD_HEIGHT_BLOCKS) continue;
 
-            if(pine) addworldpinetree(pinewood, needles, x, y, basez, treeheight);
-            else addworldregulartree(wood, leaves, x, y, basez, treeheight, shape);
+            candidates.add(worldtreecandidate(x, y, chunkx * WORLD_CHUNK_BLOCKS + x, chunky * WORLD_CHUNK_BLOCKS + y, basez, treeheight, spawn, shape, pine));
         }
     }
 
     {
         ZoneScopedN("Chunks/Apply tree blocks");
+        loopv(candidates)
+        {
+            if(!worldtreecandidateallowed(candidates, candidates[i])) continue;
+            if(candidates[i].pine)
+                addworldpinetree(pinewood, needles, candidates[i].blockx, candidates[i].blocky, candidates[i].basez, candidates[i].height);
+            else
+                addworldregulartree(wood, leaves, candidates[i].blockx, candidates[i].blocky, candidates[i].basez, candidates[i].height, candidates[i].shape);
+        }
         ZoneValue(wood.length() + pinewood.length() + leaves.length() + needles.length());
         const int leafcube = ctx.worldcube("leaves"), needlescube = ctx.worldcube("needles"),
                   woodcube = ctx.worldcube("wood"), pinewoodcube = ctx.worldcube("dark_wood"),
@@ -5589,27 +5620,23 @@ static bool placeworldtrees(worldgencontext &ctx, cube *root, int chunkx, int ch
         loopv(leaves)
         {
             cube &c = lookupworldgenblock(ctx, root, leaves[i]);
-            if(isempty(c) && c.material == MAT_AIR)
-                setworldcubetype(c, ctx, leafcube, leavesalpha ? MAT_ALPHA : MAT_AIR);
+            if(isempty(c) && c.material == MAT_AIR) setworldcubetype(c, ctx, leafcube, leavesalpha ? MAT_ALPHA : MAT_AIR);
         }
         loopv(needles)
         {
             cube &c = lookupworldgenblock(ctx, root, needles[i]);
-            if(isempty(c) && c.material == MAT_AIR)
-                setworldcubetype(c, ctx, needlescube, leavesalpha ? MAT_ALPHA : MAT_AIR);
+            if(isempty(c) && c.material == MAT_AIR) setworldcubetype(c, ctx, needlescube, leavesalpha ? MAT_ALPHA : MAT_AIR);
         }
         loopv(wood)
         {
             cube &c = lookupworldgenblock(ctx, root, wood[i]);
-            if((isempty(c) && c.material == MAT_AIR) ||
-               c.texture[0] == leaftexture || c.texture[0] == needlestexture)
+            if((isempty(c) && c.material == MAT_AIR) || c.texture[0] == leaftexture || c.texture[0] == needlestexture)
                 setworldcubetype(c, ctx, woodcube);
         }
         loopv(pinewood)
         {
             cube &c = lookupworldgenblock(ctx, root, pinewood[i]);
-            if((isempty(c) && c.material == MAT_AIR) ||
-               c.texture[0] == leaftexture || c.texture[0] == needlestexture)
+            if((isempty(c) && c.material == MAT_AIR) || c.texture[0] == leaftexture || c.texture[0] == needlestexture)
                 setworldcubetype(c, ctx, pinewoodcube);
         }
     }
