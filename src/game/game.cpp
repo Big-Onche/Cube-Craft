@@ -14,6 +14,16 @@ const gamemodeinfo gamemodes[3] =
 
 namespace game
 {
+    static void paintworldcube(int worldindex, const selinfo &selection, bool local)
+    {
+        loopi(6)
+        {
+            selinfo face = selection;
+            face.orient = i;
+            mpedittex(getworldcubefaceslot(worldindex, i), 0, face, local);
+        }
+    }
+
     int gamemode = STARTGAMEMODE;
     string clientmap = "";
     bool connected = false, remote = false, gamepaused = false;
@@ -112,7 +122,7 @@ namespace game
                 selinfo placed;
                 worldactionselection(placed, placedorigin, orient);
                 mpeditface(-1, 1, sel, false);
-                mpedittex(getworldcubeslot(type), 1, placed, false);
+                paintworldcube(type, placed, false);
                 waterterrainchanged(absoluteplacedorigin);
                 return true;
             }
@@ -1148,7 +1158,7 @@ namespace game
         if(!waitforserveredit())
         {
             mpeditface(-1, 1, hit, true);
-            mpedittex(getworldcubeslot(worldindex), 1, placed, true);
+            paintworldcube(worldindex, placed, true);
             selinfo absolute = placed;
             worldselectiontoabsolute(absolute);
             waterterrainchanged(absolute.o);
@@ -1158,7 +1168,7 @@ namespace game
             // mpeditface advances hit.o to the placed cell, while the protocol carries the support cell.
             const ivec support = hit.o;
             mpeditface(-1, 1, hit, false);
-            mpedittex(getworldcubeslot(worldindex), 1, placed, false);
+            paintworldcube(worldindex, placed, false);
             selinfo absolute = placed;
             worldselectiontoabsolute(absolute);
             waterterrainchanged(absolute.o);

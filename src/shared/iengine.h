@@ -132,6 +132,7 @@ enum
 };
 extern int numworldcubes();
 extern int getworldcubeslot(int index);
+extern int getworldcubefaceslot(int index, int orient);
 extern int getworldcubeindex(int slot);
 extern int getworldcubeindexat(const ivec &position, int orient);
 extern int getworldcubetextureslotat(const ivec &position, int orient);
