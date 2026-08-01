@@ -230,10 +230,14 @@ int visiblematerial(const cube &c, int orient, const ivec &co, int size, ushort 
     case MAT_AIR:
          break;
 
-    case MAT_LAVA:
     case MAT_WATER:
         if(visibleface(c, orient, co, size, mat, MAT_AIR, matmask))
-            return (orient != O_BOTTOM ? MATSURF_VISIBLE : MATSURF_EDIT_ONLY);
+            return MATSURF_VISIBLE;
+        break;
+
+    case MAT_LAVA:
+        if(visibleface(c, orient, co, size, mat, MAT_AIR, matmask))
+            return orient != O_BOTTOM ? MATSURF_VISIBLE : MATSURF_EDIT_ONLY;
         break;
 
     case MAT_GLASS:

@@ -82,7 +82,7 @@ void renderwaterfog(int mat, float surface)
 {
     glDepthFunc(GL_NOTEQUAL);
     glDepthMask(GL_FALSE);
-    glDepthRange(1, 1); 
+    glDepthRange(1, 1);
 
     glEnable(GL_BLEND);
 
@@ -136,7 +136,7 @@ void renderwaterfog(int mat, float surface)
     gle::end();
 
     glDisable(GL_BLEND);
-        
+
     glDepthFunc(GL_LESS);
     glDepthMask(GL_TRUE);
     glDepthRange(0, 1);
@@ -377,11 +377,11 @@ static inline void renderwater(const materialsurface &m, int mat = MAT_WATER)
 }
 
 #define WATERVARS(name) \
-    CVAR0R(name##colour, 0x01212C); \
-    CVAR0R(name##deepcolour, 0x010A10); \
+    CVAR0R(name##colour, 0x6495FF); \
+    CVAR0R(name##deepcolour, 0x021420); \
     CVAR0R(name##deepfade, 0x60BFFF); \
     CVAR0R(name##refractcolour, 0xFFFFFF); \
-    VARR(name##fog, 0, 30, 10000); \
+    VARR(name##fog, 0, 300, 10000); \
     VARR(name##deep, 0, 50, 10000); \
     VARR(name##spec, 0, 150, 200); \
     FVARR(name##refract, 0, 0.1f, 1e3f); \
@@ -469,6 +469,15 @@ static void renderwaterfall(const materialsurface &m, float offset)
         gle::defvertex();
         gle::defnormal(4, GL_BYTE);
         gle::begin(GL_QUADS);
+    }
+    if(m.orient == O_BOTTOM)
+    {
+        const float x = m.o.x, y = m.o.y, z = m.o.z - offset;
+        gle::attribf(x,           y,           z); gle::attrib(matnormals[O_BOTTOM]);
+        gle::attribf(x,           y + m.csize, z); gle::attrib(matnormals[O_BOTTOM]);
+        gle::attribf(x + m.rsize, y + m.csize, z); gle::attrib(matnormals[O_BOTTOM]);
+        gle::attribf(x + m.rsize, y,           z); gle::attrib(matnormals[O_BOTTOM]);
+        return;
     }
     float x = m.o.x, y = m.o.y, zmin = m.o.z, zmax = zmin - getwatermaterialdrop(m);
     bool falling = false;
