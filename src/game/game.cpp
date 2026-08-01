@@ -5,6 +5,13 @@ extern int mainmenu;
 extern int initing;
 #endif
 
+const gamemodeinfo gamemodes[3] =
+{
+    { "creative", "Creative", M_CREATIVE, "Build freely with fixed-size voxel blocks." },
+    { "edit", "Edit", M_EDIT, "Cooperative map editing." },
+    { "survival", "Survival", M_SURVIVAL, "Gather resources and break blocks by hand." }
+};
+
 namespace game
 {
     int gamemode = STARTGAMEMODE;
@@ -98,33 +105,30 @@ namespace game
         {
             case WORLD_ACTION_PLACE_CUBE:
             {
-                if(item < 0 || item >= numworldcubes()) return false;
+                if(getworlditemtype(item) != WORLD_ITEM_CUBE) return false;
+                const int type = getworlditemindex(item);
                 const ivec placedorigin = worldactionplacecell(target, orient),
                            absoluteplacedorigin = worldactionplacecell(absolutetarget, orient);
                 selinfo placed;
                 worldactionselection(placed, placedorigin, orient);
                 mpeditface(-1, 1, sel, false);
-                mpedittex(getworldcubeslot(item), 1, placed, false);
+                mpedittex(getworldcubeslot(type), 1, placed, false);
                 waterterrainchanged(absoluteplacedorigin);
                 return true;
             }
             case WORLD_ACTION_PLACE_SCATTER:
-                return item >= numworldcubes() &&
-                       editworldscatter(item - numworldcubes(), target, orient, true);
+                return getworlditemtype(item) == WORLD_ITEM_SCATTER && editworldscatter(getworlditemindex(item), target, orient, true);
             case WORLD_ACTION_PLACE_ITEM:
             {
-                const int itemoffset = numworldcubes() + numworldscatters();
-                if(item < itemoffset || item >= itemoffset + numworlditems()) return false;
-                const ivec placedorigin = worldactionplacecell(absolutetarget, orient);
-                return addmanualwatersource(placedorigin);
+                return getworlditemtype(item) == WORLD_ITEM_PLACEABLE && editworldscatter(getworlditemindex(item), target, orient, true);
             }
             case WORLD_ACTION_BREAK_CUBE_START:
                 mpdelcube(sel, false);
                 waterterrainchanged(absolutetarget);
                 return true;
             case WORLD_ACTION_BREAK_SCATTER_START:
-                return item >= numworldcubes() &&
-                       editworldscatter(item - numworldcubes(), target, orient, false);
+                return (getworlditemtype(item) == WORLD_ITEM_SCATTER || getworlditemtype(item) == WORLD_ITEM_PLACEABLE) &&
+                       editworldscatter(getworlditemindex(item), target, orient, false);
             default:
                 return false;
         }
@@ -146,12 +150,11 @@ namespace game
             selinfo sel;
             worldactionselection(sel, prediction.target, prediction.orient);
             worldselectiontolocal(sel);
-            editworldscatter(prediction.item - numworldcubes(), sel.o, prediction.orient, false);
+            editworldscatter(getworlditemindex(prediction.item), sel.o, prediction.orient, false);
         }
         else if(prediction.action == WORLD_ACTION_PLACE_ITEM)
         {
-            ivec target = worldactionplacecell(prediction.target, prediction.orient);
-            removewatersource(target);
+            editworldscatter(getworlditemindex(prediction.item), prediction.target, prediction.orient, false);
         }
         else if(prediction.action == WORLD_ACTION_BREAK_CUBE_START)
         {
@@ -162,7 +165,13 @@ namespace game
             applyworldaction(WORLD_ACTION_PLACE_CUBE, support, prediction.orient, prediction.item);
         }
         else if(prediction.action == WORLD_ACTION_BREAK_SCATTER_START)
-            applyworldaction(WORLD_ACTION_PLACE_SCATTER, prediction.target, prediction.orient, prediction.item);
+        {
+            const int type = prediction.item >= 0 ? getworlditemtype(prediction.item) : WORLD_ITEM_NONE;
+            if(type == WORLD_ITEM_SCATTER || type == WORLD_ITEM_PLACEABLE)
+                applyworldaction(WORLD_ACTION_PLACE_SCATTER, prediction.target, prediction.orient, prediction.item);
+            else
+                editworldscatter(getworldscatterindexat(prediction.target, prediction.orient), prediction.target, prediction.orient, true);
+        }
     }
 #endif
 
@@ -808,7 +817,7 @@ namespace game
     {
         const int slot = clampcreativehotbarslot(),
                   item = m_survival ? survivalitems[slot] : creativehotbar[slot],
-                  count = numworldcubes() + numworldscatters() + numworlditems();
+                  count = numinventoryitems();
         if(m_survival && survivalcounts[slot] <= 0) return -1;
         return item >= 0 && item < count ? item : -1;
     }
@@ -830,7 +839,7 @@ namespace game
         {
             if(items[i] < 0 || counts[i] <= 0) continue;
             survivalitems[i] = items[i];
-            survivalcounts[i] = clamp(counts[i], 1, int(SURVIVAL_STACK_SIZE));
+            survivalcounts[i] = clamp(counts[i], 1, max(getinventoryitemmaxstack(items[i]), 1));
         }
     }
 
@@ -923,10 +932,10 @@ namespace game
 
     static bool addsurvivalitem(int item)
     {
-        if(item < 0 || item >= numworldcubes() + numworldscatters() + numworlditems()) return false;
+        if(item < 0 || item >= numinventoryitems()) return false;
         loopi(SURVIVAL_USABLE_SLOTS)
         {
-            if(survivalitems[i] != item || survivalcounts[i] >= SURVIVAL_STACK_SIZE) continue;
+            if(survivalitems[i] != item || survivalcounts[i] >= max(getinventoryitemmaxstack(item), 1)) continue;
             ++survivalcounts[i];
             return true;
         }
@@ -937,6 +946,21 @@ namespace game
             return true;
         }
         return false;
+    }
+
+    static bool addsurvivaldrops(int item)
+    {
+        const int type = getworlditemtype(item), index = getworlditemindex(item), count = getworldobjectdropcount(type, index);
+        bool room = true;
+        loopi(count)
+        {
+            int dropitem, mincount, maxcount;
+            float chance;
+            if(!getworldobjectdrop(type, index, i, dropitem, mincount, maxcount, chance) || rndscale(1.0f) > chance) continue;
+            const int quantity = mincount >= maxcount ? mincount : mincount + rnd(maxcount - mincount + 1);
+            loopj(quantity) if(!addsurvivalitem(dropitem)) room = false;
+        }
+        return room;
     }
 
     static void consumesurvivalitem()
@@ -1083,49 +1107,35 @@ namespace game
         selinfo hit;
         if(!creativehit(hit)) return;
 
-        const int selected = selectedcreativeblock(),
-                  cubecount = numworldcubes(),
-                  scattercount = numworldscatters(),
-                  itemoffset = cubecount + scattercount;
+        const int selected = selectedcreativeblock(), type = getworlditemtype(selected), worldindex = getworlditemindex(selected);
         if(selected < 0) return;
-        if(selected >= itemoffset)
+        if(type == WORLD_ITEM_PLACEABLE)
         {
-            ivec target = creativeplacecell(hit);
-            if(!insideworld(target) || !insideworld(ivec(target).add(CREATIVE_GRID - 1))) return;
-            selinfo absolute;
-            worldactionselection(absolute, target, hit.orient);
-            worldselectiontoabsolute(absolute);
-            if(!addmanualwatersource(absolute.o)) return;
-            if(waitforserveredit())
-                predictworldaction(WORLD_ACTION_PLACE_ITEM, hit.o, hit.orient, selected, clampcreativehotbarslot());
+            if(hit.orient == WORLD_ORIENT_BOTTOM || !editworldscatter(worldindex, hit.o, hit.orient, true)) return;
+            if(waitforserveredit()) predictworldaction(WORLD_ACTION_PLACE_ITEM, hit.o, hit.orient, selected, clampcreativehotbarslot());
             player1->renderplacemillis = lastmillis;
             player1->renderplacetoggle = !player1->renderplacetoggle;
             return;
         }
-        if(selected >= cubecount)
+        if(type == WORLD_ITEM_SCATTER)
         {
-            const int type = selected - cubecount;
-            if(isworldtorch(type))
-            {
-                if(hit.orient == WORLD_ORIENT_BOTTOM) return;
-            }
-            else if(hit.orient != WORLD_ORIENT_TOP) return;
+            if(hit.orient != WORLD_ORIENT_TOP) return;
             if(!waitforserveredit())
             {
-                scatteredittrigger(type, hit.o, hit.orient, true);
+                scatteredittrigger(worldindex, hit.o, hit.orient, true);
                 if(m_survival) consumesurvivalitem();
                 player1->renderplacemillis = lastmillis;
                 player1->renderplacetoggle = !player1->renderplacetoggle;
                 return;
             }
-            if(!editworldscatter(type, hit.o, hit.orient, true)) return;
+            if(!editworldscatter(worldindex, hit.o, hit.orient, true)) return;
             predictworldaction(WORLD_ACTION_PLACE_SCATTER, hit.o, hit.orient, selected, clampcreativehotbarslot());
             if(m_survival) consumesurvivalitem();
             player1->renderplacemillis = lastmillis;
             player1->renderplacetoggle = !player1->renderplacetoggle;
             return;
         }
-        if(cubecount <= 0) return;
+        if(type != WORLD_ITEM_CUBE) return;
 
         ivec target = creativeplacecell(hit);
         if(!insideworld(target) || !insideworld(ivec(target).add(CREATIVE_GRID - 1)) ||
@@ -1138,7 +1148,7 @@ namespace game
         if(!waitforserveredit())
         {
             mpeditface(-1, 1, hit, true);
-            mpedittex(getworldcubeslot(selected), 1, placed, true);
+            mpedittex(getworldcubeslot(worldindex), 1, placed, true);
             selinfo absolute = placed;
             worldselectiontoabsolute(absolute);
             waterterrainchanged(absolute.o);
@@ -1148,7 +1158,7 @@ namespace game
             // mpeditface advances hit.o to the placed cell, while the protocol carries the support cell.
             const ivec support = hit.o;
             mpeditface(-1, 1, hit, false);
-            mpedittex(getworldcubeslot(selected), 1, placed, false);
+            mpedittex(getworldcubeslot(worldindex), 1, placed, false);
             selinfo absolute = placed;
             worldselectiontoabsolute(absolute);
             waterterrainchanged(absolute.o);
@@ -1173,9 +1183,9 @@ namespace game
                 else
                 {
                     editworldscatter(type, support, mountorient, false);
-                    predictworldaction(WORLD_ACTION_BREAK_SCATTER_START, support, mountorient, numworldcubes() + type, -1);
+                    predictworldaction(WORLD_ACTION_BREAK_SCATTER_START, support, mountorient, getworldscatteritem(type), -1);
                     sendworldaction(predictedworldactions.last()->requestid, WORLD_ACTION_BREAK_COMPLETE,
-                                    support, mountorient, numworldcubes() + type, -1);
+                                    support, mountorient, getworldscatteritem(type), -1);
                 }
             }
             return;
@@ -1189,7 +1199,7 @@ namespace game
         }
         else
         {
-            const int item = getworldcubeindexat(ivec(target.cube.o).add(target.cube.grid / 2), target.cube.orient);
+            const int item = getworldcubeitem(getworldcubeindexat(ivec(target.cube.o).add(target.cube.grid / 2), target.cube.orient));
             mpdelcube(target.cube, false);
             selinfo absolute = target.cube;
             worldselectiontoabsolute(absolute);
@@ -1216,7 +1226,7 @@ namespace game
                 int type, orient;
                 ivec support;
                 if(getworldscatterentityedit(survivalbreaktarget.entity, type, support, orient))
-                    sendworldaction(survivalbreakrequestid, WORLD_ACTION_BREAK_CANCEL, support, orient, numworldcubes() + type, -1);
+                    sendworldaction(survivalbreakrequestid, WORLD_ACTION_BREAK_CANCEL, support, orient, getworldscatteritem(type), -1);
             }
             else
                 sendworldaction(survivalbreakrequestid, WORLD_ACTION_BREAK_CANCEL, survivalbreaktarget.cube.o,
@@ -1248,9 +1258,8 @@ namespace game
 
     static int survivalblockitem(const creativetarget &target)
     {
-        return getworldcubeindexat(
-            ivec(target.cube.o).add(target.cube.grid / 2),
-            target.cube.orient);
+        const int cube = getworldcubeindexat(ivec(target.cube.o).add(target.cube.grid / 2), target.cube.orient);
+        return getworldcubeitem(cube);
     }
 
     static void emitsurvivalblockchips(const creativetarget &target, int num)
@@ -1297,7 +1306,7 @@ namespace game
                     int type, mountorient;
                     ivec support;
                     if(getworldscatterentityedit(target.entity, type, support, mountorient))
-                        sendworldaction(survivalbreakrequestid, WORLD_ACTION_BREAK_SCATTER_START, support, mountorient, numworldcubes() + type, -1);
+                        sendworldaction(survivalbreakrequestid, WORLD_ACTION_BREAK_SCATTER_START, support, mountorient, getworldscatteritem(type), -1);
                 }
                 else
                     sendworldaction(survivalbreakrequestid, WORLD_ACTION_BREAK_CUBE_START, target.cube.o, target.cube.orient,
@@ -1353,7 +1362,7 @@ namespace game
             ivec support;
             if(getworldscatterentityedit(survivalbreaktarget.entity, type, support, mountorient))
             {
-                item = numworldcubes() + type;
+                item = getworldscatteritem(type);
                 if(!waitforserveredit()) scatteredittrigger(type, support, mountorient, false);
                 else
                 {
@@ -1385,7 +1394,7 @@ namespace game
             }
             broken = true;
         }
-        if(broken && !addsurvivalitem(item)) conoutf(CON_WARN, "inventory is full; the broken block was not collected");
+        if(broken && !addsurvivaldrops(item)) conoutf(CON_WARN, "inventory is full; the broken object was not collected");
         survivalbreakactive = false;
         survivalbreakparticlemillis = -1;
         survivalbreakrequestid = 0;
@@ -1443,7 +1452,7 @@ namespace game
     ICOMMAND(creativeplaceblock, "D", (int *down), { if(*down) creativeplace(); });
     ICOMMAND(creativeselect, "i", (int *index),
     {
-        int count = numworldcubes() + numworldscatters() + numworlditems();
+        int count = numinventoryitems();
         creativehotbar[clampcreativehotbarslot()] = *index >= 0 && *index < count ? *index : -1;
     });
     ICOMMAND(creativecycle, "i", (int *dir),
@@ -1461,7 +1470,7 @@ namespace game
     });
     ICOMMAND(creativehotbarassign, "ii", (int *slot, int *item),
     {
-        const int count = numworldcubes() + numworldscatters() + numworlditems();
+        const int count = numinventoryitems();
         if(*slot >= 0 && *slot < CREATIVE_HOTBAR_SLOTS)
             creativehotbar[*slot] = *item >= 0 && *item < count ? *item : -1;
     });
@@ -1498,31 +1507,24 @@ namespace game
                 addmsg(N_INVENTORYACTION, "ri4", int(newworldrequestid()), INVENTORY_ACTION_SWAP, *from, *to);
         }
     });
-    ICOMMAND(creativeblockcount, "", (), intret(numworldcubes() + numworldscatters() + numworlditems()));
+    ICOMMAND(creativeblockcount, "", (), intret(numinventoryitems()));
     ICOMMAND(creativecubecount, "", (), intret(numworldcubes()));
-    ICOMMAND(creativeblockslot, "i", (int *index), intret(*index < numworldcubes() ? getworldcubeslot(*index) : getworldcubeslot(0)));
+    ICOMMAND(creativeblockiscube, "i", (int *index), intret(getworlditemtype(*index) == WORLD_ITEM_CUBE ? 1 : 0));
+    ICOMMAND(creativeblockslot, "i", (int *index),
+             intret(getworlditemtype(*index) == WORLD_ITEM_CUBE ? getworldcubeslot(getworlditemindex(*index)) : getworldcubeslot(0)));
     ICOMMAND(creativeblockname, "i", (int *index),
     {
-        const int cubecount = numworldcubes();
-        const int scattercount = numworldscatters();
-        if(*index < cubecount) result(getworldcubename(*index));
-        else if(*index < cubecount + scattercount) result(getworldscattername(*index - cubecount));
-        else result(getworlditemname(*index - cubecount - scattercount));
+        result(getinventoryitemname(*index));
     });
     ICOMMAND(creativeblockmodel, "i", (int *index),
     {
-        const int cubecount = numworldcubes();
-        const int scattercount = numworldscatters();
-        result(*index < cubecount + scattercount ? getworldscattermodel(*index - cubecount)
-                                                 : getworlditemmodel(*index - cubecount - scattercount));
+        const int type = getworlditemtype(*index);
+        const int worldindex = getworlditemindex(*index);
+        result(type == WORLD_ITEM_CUBE || type == WORLD_ITEM_NONE ? "" : getworldscattermodel(worldindex));
     });
     ICOMMAND(creativeblockicon, "i", (int *index),
     {
-        const int cubecount = numworldcubes();
-        const int scattercount = numworldscatters();
-        result(*index < cubecount ? getworldcubetexture(*index)
-               : *index < cubecount + scattercount ? getworldscattericon(*index - cubecount)
-                                                   : getworlditemicon(*index - cubecount - scattercount));
+        result(getinventoryitemicon(*index));
     });
 
     void gameplayhud(int w, int h) {}

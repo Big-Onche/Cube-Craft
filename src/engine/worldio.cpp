@@ -217,44 +217,63 @@ struct worldspawnmetadata
 
 VARP(maxchunkdist, 2, 3, WORLD_MAX_CHUNK_DIST);
 
+struct worlddropdefinition
+{
+    string itemid;
+    int item, mincount, maxcount;
+    float chance;
+
+    worlddropdefinition() : item(-1), mincount(0), maxcount(0), chance(1.0f)
+    {
+        itemid[0] = '\0';
+    }
+};
+
 struct worldcubedefinition
 {
-    string name, texture, sidetexture, bottom, bottomtexture;
+    string id, itemid, texture, sidetexture, bottom, bottomtexture;
     float texsize;
-    int slot, sideslot, bottomslot;
+    int item, slot, sideslot, bottomslot;
+    vector<worlddropdefinition> drops;
+    bool explicitdrops;
 
     worldcubedefinition()
-        : texsize(1), slot(DEFAULT_GEOM), sideslot(DEFAULT_GEOM), bottomslot(DEFAULT_GEOM)
+        : texsize(1), item(-1), slot(DEFAULT_GEOM), sideslot(DEFAULT_GEOM), bottomslot(DEFAULT_GEOM), explicitdrops(false)
     {
-        name[0] = texture[0] = sidetexture[0] = bottom[0] = bottomtexture[0] = '\0';
+        id[0] = itemid[0] = texture[0] = sidetexture[0] = bottom[0] = bottomtexture[0] = '\0';
     }
 };
 
 struct worldscatterdefinition
 {
-    string name, model, icon;
+    string id, itemid, model, icon, lightcolor;
+    int item;
     int mapmodel;
-    bool torch;
+    float lightradius;
+    bool placeable;
+    vector<worlddropdefinition> drops;
+    bool explicitdrops;
 
-    worldscatterdefinition() : mapmodel(-1), torch(false)
+    worldscatterdefinition() : item(-1), mapmodel(-1), lightradius(0), placeable(false), explicitdrops(false)
     {
-        name[0] = model[0] = icon[0] = '\0';
+        id[0] = itemid[0] = model[0] = icon[0] = lightcolor[0] = '\0';
     }
 };
 
-struct worlditemdefinition
+struct inventoryitemdefinition
 {
-    string name, model, icon;
+    string id, name, icon;
+    int maxstack;
 
-    worlditemdefinition()
+    inventoryitemdefinition() : maxstack(64)
     {
-        name[0] = model[0] = icon[0] = '\0';
+        id[0] = name[0] = icon[0] = '\0';
     }
 };
 
 static vector<worldcubedefinition *> worldcubedefinitions;
 static vector<worldscatterdefinition *> worldscatterdefinitions;
-static vector<worlditemdefinition *> worlditemdefinitions;
+static vector<inventoryitemdefinition *> inventoryitemdefinitions;
 static int worldgrassscatter = -1, worldrosescatter = -1,
            worldtulipscatter = -1, worlddandelionscatter = -1;
 static int worldgrasstexture = DEFAULT_GEOM, worldgrasssidetexture = DEFAULT_GEOM,
@@ -305,7 +324,12 @@ int getworldcubetextureslotat(const ivec &position, int orient)
 
 const char *getworldcubename(int index)
 {
-    return worldcubedefinitions.inrange(index) ? worldcubedefinitions[index]->name : "";
+    return worldcubedefinitions.inrange(index) ? worldcubedefinitions[index]->id : "";
+}
+
+int getworldcubeitem(int index)
+{
+    return worldcubedefinitions.inrange(index) ? worldcubedefinitions[index]->item : -1;
 }
 
 const char *getworldcubetexture(int index, int face)
@@ -330,7 +354,7 @@ int numworldscatters()
 
 const char *getworldscattername(int index)
 {
-    return worldscatterdefinitions.inrange(index) ? worldscatterdefinitions[index]->name : "";
+    return worldscatterdefinitions.inrange(index) ? worldscatterdefinitions[index]->id : "";
 }
 
 const char *getworldscattermodel(int index)
@@ -350,32 +374,124 @@ const char *getworldscattericon(int index)
 
 bool isworldtorch(int index)
 {
-    return worldscatterdefinitions.inrange(index) && worldscatterdefinitions[index]->torch;
+    return worldscatterdefinitions.inrange(index) && worldscatterdefinitions[index]->lightradius > 0;
 }
 
-int numworlditems()
+int getworldscatteritem(int index)
 {
-    return worlditemdefinitions.length();
+    return worldscatterdefinitions.inrange(index) ? worldscatterdefinitions[index]->item : -1;
 }
 
-const char *getworlditemname(int index)
+bool isworldplaceable(int index)
 {
-    return worlditemdefinitions.inrange(index) ? worlditemdefinitions[index]->name : "";
+    return worldscatterdefinitions.inrange(index) && worldscatterdefinitions[index]->placeable;
 }
 
-const char *getworlditemmodel(int index)
+int numworldplaceables()
 {
-    return worlditemdefinitions.inrange(index) ? worlditemdefinitions[index]->model : "";
+    int count = 0;
+    loopv(worldscatterdefinitions) if(worldscatterdefinitions[i]->placeable) ++count;
+    return count;
 }
 
-const char *getworlditemicon(int index)
+int getworldplaceableindex(int index)
+{
+    loopv(worldscatterdefinitions) if(worldscatterdefinitions[i]->placeable && index-- == 0) return i;
+    return -1;
+}
+
+int numinventoryitems()
+{
+    return inventoryitemdefinitions.length();
+}
+
+const char *getinventoryitemname(int index)
+{
+    return inventoryitemdefinitions.inrange(index) ? inventoryitemdefinitions[index]->name : "";
+}
+
+const char *getinventoryitemid(int index)
+{
+    return inventoryitemdefinitions.inrange(index) ? inventoryitemdefinitions[index]->id : "";
+}
+
+int getinventoryitemmaxstack(int index)
+{
+    return inventoryitemdefinitions.inrange(index) ? inventoryitemdefinitions[index]->maxstack : 0;
+}
+
+const char *getinventoryitemicon(int index)
 {
     static string iconpath;
-    if(!worlditemdefinitions.inrange(index)) return "";
-    const worlditemdefinition &type = *worlditemdefinitions[index];
-    if(type.icon[0]) return type.icon;
-    formatstring(iconpath, "media/model/%s/diffuse.png", type.model);
-    return iconpath;
+    if(!inventoryitemdefinitions.inrange(index)) return "";
+    loopv(worldcubedefinitions) if(worldcubedefinitions[i]->item == index)
+    {
+        formatstring(iconpath, "media/texture/%s", worldcubedefinitions[i]->texture);
+        return iconpath;
+    }
+    loopv(worldscatterdefinitions) if(worldscatterdefinitions[i]->item == index)
+    {
+        return getworldscattericon(i);
+    }
+    return "";
+}
+
+int getworlditemtype(int item)
+{
+    loopv(worldcubedefinitions) if(worldcubedefinitions[i]->item == item) return WORLD_ITEM_CUBE;
+    loopv(worldscatterdefinitions) if(worldscatterdefinitions[i]->item == item)
+        return worldscatterdefinitions[i]->placeable ? WORLD_ITEM_PLACEABLE : WORLD_ITEM_SCATTER;
+    return WORLD_ITEM_NONE;
+}
+
+int getworlditemindex(int item)
+{
+    loopv(worldcubedefinitions) if(worldcubedefinitions[i]->item == item) return i;
+    loopv(worldscatterdefinitions) if(worldscatterdefinitions[i]->item == item) return i;
+    return -1;
+}
+
+static vector<worlddropdefinition> &worldobjectdrops(int type, int index)
+{
+    static vector<worlddropdefinition> empty;
+    if(type == WORLD_ITEM_CUBE && worldcubedefinitions.inrange(index)) return worldcubedefinitions[index]->drops;
+    if((type == WORLD_ITEM_SCATTER || type == WORLD_ITEM_PLACEABLE) && worldscatterdefinitions.inrange(index))
+        return worldscatterdefinitions[index]->drops;
+    return empty;
+}
+
+int getworldobjectdropcount(int type, int index)
+{
+    vector<worlddropdefinition> &drops = worldobjectdrops(type, index);
+    if(!drops.empty())
+    {
+        loopv(drops) if(drops[i].item >= 0) return drops.length();
+        return 0;
+    }
+    int item = type == WORLD_ITEM_CUBE && worldcubedefinitions.inrange(index) ? worldcubedefinitions[index]->item
+             : (type != WORLD_ITEM_CUBE && worldscatterdefinitions.inrange(index) ? worldscatterdefinitions[index]->item : -1);
+    return item >= 0 ? 1 : 0;
+}
+
+bool getworldobjectdrop(int type, int index, int drop, int &item, int &mincount, int &maxcount, float &chance)
+{
+    vector<worlddropdefinition> &drops = worldobjectdrops(type, index);
+    if(!drops.empty())
+    {
+        if(!drops.inrange(drop)) return false;
+        const worlddropdefinition &entry = drops[drop];
+        item = entry.item;
+        mincount = entry.mincount;
+        maxcount = entry.maxcount;
+        chance = entry.chance;
+        return item >= 0;
+    }
+    if(drop != 0) return false;
+    item = type == WORLD_ITEM_CUBE && worldcubedefinitions.inrange(index) ? worldcubedefinitions[index]->item
+         : (type != WORLD_ITEM_CUBE && worldscatterdefinitions.inrange(index) ? worldscatterdefinitions[index]->item : -1);
+    mincount = maxcount = 1;
+    chance = 1.0f;
+    return item >= 0;
 }
 
 bool worldcellacceptswater(const ivec &position)
@@ -427,21 +543,21 @@ bool isworldleafcube(const cube &c)
 
 static worldcubedefinition *findworldcube(const char *name)
 {
-    loopv(worldcubedefinitions) if(!cubecasecmp(worldcubedefinitions[i]->name, name)) return worldcubedefinitions[i];
+    loopv(worldcubedefinitions) if(!cubecasecmp(worldcubedefinitions[i]->id, name)) return worldcubedefinitions[i];
     return NULL;
 }
 
 static worldscatterdefinition *findworldscatter(const char *name)
 {
     loopv(worldscatterdefinitions)
-        if(!cubecasecmp(worldscatterdefinitions[i]->name, name))
+        if(!cubecasecmp(worldscatterdefinitions[i]->id, name))
             return worldscatterdefinitions[i];
     return NULL;
 }
 
-static worlditemdefinition *findworlditem(const char *name)
+static inventoryitemdefinition *findinventoryitem(const char *id)
 {
-    loopv(worlditemdefinitions) if(!cubecasecmp(worlditemdefinitions[i]->name, name)) return worlditemdefinitions[i];
+    loopv(inventoryitemdefinitions) if(!cubecasecmp(inventoryitemdefinitions[i]->id, id)) return inventoryitemdefinitions[i];
     return NULL;
 }
 
@@ -449,7 +565,7 @@ void worldreset()
 {
     worldcubedefinitions.deletecontents();
     worldscatterdefinitions.deletecontents();
-    worlditemdefinitions.deletecontents();
+    inventoryitemdefinitions.deletecontents();
     worldgrassscatter = worldrosescatter = worldtulipscatter = worlddandelionscatter = -1;
     worldgrasstexture = worldgrasssidetexture = worldgrassbottomtexture = worlddirttexture =
         worldstonetexture = worldsandtexture = worldsnowtexture = worldwoodtexture =
@@ -458,85 +574,121 @@ void worldreset()
 
 COMMAND(worldreset, "");
 
-static void defineworldcube(const char *name, const char *texture, float texsize,
-                              const char *side, const char *bottom, int numargs)
+static void defineinventoryitem(const char *id, const char *name, int maxstack)
 {
-    if(!name[0] || !texture[0])
+    if(!id[0] || !name[0] || maxstack <= 0)
     {
-        conoutf(CON_ERROR, "worldcube requires a cube name and texture path");
+        conoutf(CON_ERROR, "inventoryitem requires an id, display name, and positive max stack");
         return;
     }
 
-    worldcubedefinition *type = findworldcube(name);
+    inventoryitemdefinition *type = findinventoryitem(id);
+    if(!type) type = inventoryitemdefinitions.add(new inventoryitemdefinition);
+    copystring(type->id, id);
+    copystring(type->name, name);
+    type->maxstack = maxstack;
+}
+
+ICOMMAND(inventoryitem, "ssi", (char *id, char *name, int *maxstack),
+{
+    defineinventoryitem(id, name, *maxstack);
+});
+
+static void defineworldcube(const char *id, const char *itemid, const char *texture, float texsize, const char *side, const char *bottom, const char *bottomalternate, int numargs)
+{
+    if(!id[0] || !texture[0])
+    {
+        conoutf(CON_ERROR, "worldcube requires a world id and texture path");
+        return;
+    }
+
+    worldcubedefinition *type = findworldcube(id);
     if(!type) type = worldcubedefinitions.add(new worldcubedefinition);
-    copystring(type->name, name);
+    copystring(type->id, id);
+    copystring(type->itemid, itemid ? itemid : "");
     copystring(type->texture, texture);
-    copystring(type->sidetexture, numargs >= 4 && side ? side : "");
-    copystring(type->bottom, numargs >= 5 && bottom ? bottom : "");
+    copystring(type->sidetexture, numargs >= 5 && side ? side : "");
+    copystring(type->bottom, numargs >= 6 && bottom ? bottom : numargs >= 7 && bottomalternate ? bottomalternate : "");
     type->bottomtexture[0] = '\0';
-    type->texsize = texsize > 0 ? texsize : 1;
+    type->texsize = texsize > 0 ? texsize : 16;
 }
 
-ICOMMAND(worldcube, "ssfssN", (char *name, char *texture, float *texsize,
-                                char *side, char *bottom, int *numargs),
+ICOMMAND(worldcube, "sssfsssN", (char *id, char *itemid, char *texture, float *texsize, char *side, char *bottom, char *bottomalternate, int *numargs),
 {
-    defineworldcube(name, texture, *texsize, side, bottom, *numargs);
+    defineworldcube(id, itemid, texture, *texsize, side, bottom, bottomalternate, *numargs);
 });
 
-static void defineworldscatter(const char *name, const char *model, bool torch)
+static void defineworldscatter(const char *id, const char *itemid, const char *model, bool placeable, float lightradius = 0, const char *lightcolor = "")
 {
-    if(!name[0] || !model[0])
+    if(!id[0] || !model[0])
     {
-        conoutf(CON_ERROR, "worldscatter requires a name and model path");
+        conoutf(CON_ERROR, "worldscatter requires a world id and model path");
         return;
     }
-    worldscatterdefinition *type = findworldscatter(name);
+    worldscatterdefinition *type = findworldscatter(id);
     if(!type) type = worldscatterdefinitions.add(new worldscatterdefinition);
-    copystring(type->name, name);
+    copystring(type->id, id);
+    copystring(type->itemid, itemid ? itemid : "");
     copystring(type->model, model);
     type->icon[0] = '\0';
-    type->torch = torch;
+    type->placeable = placeable;
+    type->lightradius = placeable ? max(lightradius, 0.0f) : 0.0f;
+    copystring(type->lightcolor, lightcolor ? lightcolor : "");
 }
 
-ICOMMAND(worldscatter, "ss", (char *name, char *model),
+ICOMMAND(worldscatter, "sss", (char *id, char *itemid, char *model),
 {
-    defineworldscatter(name, model, false);
+    defineworldscatter(id, itemid, model, false);
 });
 
-ICOMMAND(worldtorch, "ss", (char *name, char *model),
+ICOMMAND(worldplaceable, "sssfsN", (char *id, char *itemid, char *model, float *lightradius, char *lightcolor, int *numargs),
 {
-    defineworldscatter(name, model, true);
+    defineworldscatter(id, itemid, model, true, *lightradius, *numargs >= 5 && lightcolor ? lightcolor : "");
 });
 
-static void defineworlditem(const char *name, const char *model)
+static bool addworlddrop(const char *worldid, const char *itemid, int mincount, int maxcount, float chance)
 {
-    if(!name[0] || !model[0])
+    worlddropdefinition drop;
+    worldcubedefinition *cube = findworldcube(worldid);
+    worldscatterdefinition *scatter = findworldscatter(worldid);
+    if(!cube && !scatter)
     {
-        conoutf(CON_ERROR, "worlditem requires a name and model path");
-        return;
+        conoutf(CON_ERROR, "worlddrop references unknown world object %s", worldid);
+        return false;
     }
-    worlditemdefinition *type = findworlditem(name);
-    if(!type) type = worlditemdefinitions.add(new worlditemdefinition);
-    copystring(type->name, name);
-    copystring(type->model, model);
-    type->icon[0] = '\0';
+    copystring(drop.itemid, itemid ? itemid : "");
+    if(!itemid[0] || !cubecasecmp(itemid, "false")) drop.item = -1;
+    else if(!cubecasecmp(itemid, "self")) drop.item = -2;
+    else drop.item = -2;
+    drop.mincount = max(mincount, 0);
+    drop.maxcount = max(maxcount, drop.mincount);
+    drop.chance = clamp(chance, 0.0f, 1.0f);
+    if(cube)
+    {
+        if(!cube->explicitdrops) cube->drops.shrink(0);
+        cube->explicitdrops = true;
+        cube->drops.add(drop);
+    }
+    else
+    {
+        if(!scatter->explicitdrops) scatter->drops.shrink(0);
+        scatter->explicitdrops = true;
+        scatter->drops.add(drop);
+    }
+    return true;
 }
 
-ICOMMAND(worlditem, "ss", (char *name, char *model),
+ICOMMAND(worlddrop, "ssiifN", (char *worldid, char *itemid, int *mincount, int *maxcount, float *chance, int *numargs),
 {
-    defineworlditem(name, model);
+    addworlddrop(worldid, itemid, *mincount, *maxcount, *numargs >= 5 ? *chance : 1.0f);
 });
 
 static int loadworldtextureslot(const char *path, float texsize, bool alpha)
 {
     const char *texture = escapestring(path);
     string command;
-    if(alpha)
-        formatstring(command, "setshader leafworld; texture 0 %s; texture a %s; texscale %.9g; texalpha 1 1",
-                     texture, texture, texsize);
-    else
-        formatstring(command, "setshader stdworld; texture 0 %s; texscale %.9g",
-                     texture, texsize);
+    if(alpha) formatstring(command, "setshader leafworld; texture 0 %s; texture a %s; texscale %.9g; texalpha 1 1", texture, texture, texsize);
+    else formatstring(command, "setshader stdworld; texture 0 %s; texscale %.9g", texture, texsize);
     execute(command);
     return slots.last()->variants->index;
 }
@@ -552,9 +704,7 @@ static bool findworldscatterimage(const char *model, const char *basename, strin
     loopv(files)
     {
         const char *filename = files[i];
-        if(cubecasecmp(filename, basename, baselen) ||
-           filename[baselen] != '.' || !filename[baselen + 1])
-            continue;
+        if(cubecasecmp(filename, basename, baselen) || filename[baselen] != '.' || !filename[baselen + 1]) continue;
 
         defformatstring(candidate, "%s/%s", directory, filename);
         if(textureload(candidate, 3, true, false) == notexture) continue;
@@ -583,15 +733,74 @@ static bool loadworlddefinitions()
         return false;
     }
 
-    worldcubedefinition *grass = findworldcube("Grass"), *dirt = findworldcube("Dirt"),
-                    *stone = findworldcube("Stone"), *sand = findworldcube("Sand"),
-                    *snow = findworldcube("Snow"), *wood = findworldcube("Wood"),
-                    *pinewood = findworldcube("Pine Wood"),
-                    *leaves = findworldcube("Leaves"), *needles = findworldcube("Needles");
+    worldcubedefinition *grass = findworldcube("grass"), *dirt = findworldcube("dirt"),
+                    *stone = findworldcube("stone"), *sand = findworldcube("sand"),
+                    *snow = findworldcube("snow"), *wood = findworldcube("wood"),
+                    *pinewood = findworldcube("dark_wood"),
+                    *leaves = findworldcube("leaves"), *needles = findworldcube("needles");
     if(!grass || !dirt || !stone || !sand || !snow || !wood || !pinewood || !leaves || !needles)
     {
-        conoutf(CON_ERROR, "world.cfg must define Grass, Dirt, Stone, Sand, Snow, Wood, Pine Wood, Leaves, and Needles cubes");
+        conoutf(CON_ERROR, "world.cfg must define grass, dirt, stone, sand, snow, oak_wood, pine_wood, leaves, and needles cubes");
         return false;
+    }
+
+    loopv(worldcubedefinitions)
+    {
+        worldcubedefinition &type = *worldcubedefinitions[i];
+        inventoryitemdefinition *item = type.itemid[0] ? findinventoryitem(type.itemid) : NULL;
+        type.item = item ? inventoryitemdefinitions.find(item) : -1;
+        if(type.itemid[0] && type.item < 0)
+        {
+            conoutf(CON_ERROR, "world cube %s references unknown inventory item %s", type.id, type.itemid);
+            return false;
+        }
+    }
+    loopv(worldscatterdefinitions)
+    {
+        worldscatterdefinition &type = *worldscatterdefinitions[i];
+        inventoryitemdefinition *item = type.itemid[0] ? findinventoryitem(type.itemid) : NULL;
+        type.item = item ? inventoryitemdefinitions.find(item) : -1;
+        if(type.itemid[0] && type.item < 0)
+        {
+            conoutf(CON_ERROR, "world object %s references unknown inventory item %s", type.id, type.itemid);
+            return false;
+        }
+    }
+    loopv(worldcubedefinitions)
+    {
+        worldcubedefinition &type = *worldcubedefinitions[i];
+        loopv(type.drops) if(type.drops[i].item == -2)
+        {
+            if(!cubecasecmp(type.drops[i].itemid, "self")) type.drops[i].item = type.item;
+            else
+            {
+                inventoryitemdefinition *item = findinventoryitem(type.drops[i].itemid);
+                if(!item)
+                {
+                    conoutf(CON_ERROR, "worlddrop for %s references unknown inventory item %s", type.id, type.drops[i].itemid);
+                    return false;
+                }
+                type.drops[i].item = inventoryitemdefinitions.find(item);
+            }
+        }
+    }
+    loopv(worldscatterdefinitions)
+    {
+        worldscatterdefinition &type = *worldscatterdefinitions[i];
+        loopv(type.drops) if(type.drops[i].item == -2)
+        {
+            if(!cubecasecmp(type.drops[i].itemid, "self")) type.drops[i].item = type.item;
+            else
+            {
+                inventoryitemdefinition *item = findinventoryitem(type.drops[i].itemid);
+                if(!item)
+                {
+                    conoutf(CON_ERROR, "worlddrop for %s references unknown inventory item %s", type.id, type.drops[i].itemid);
+                    return false;
+                }
+                type.drops[i].item = inventoryitemdefinitions.find(item);
+            }
+        }
     }
 
     execute("texturereset; texsky; setshader stdworld");
@@ -608,13 +817,21 @@ static bool loadworlddefinitions()
     {
         worldcubedefinition &type = *worldcubedefinitions[i];
         worldcubedefinition *bottomtype = type.bottom[0] ? findworldcube(type.bottom) : NULL;
-        if(type.bottom[0] && !bottomtype)
+        if(bottomtype)
         {
-            conoutf(CON_ERROR, "world cube %s references unknown bottom cube %s", type.name, type.bottom);
-            return false;
+            type.bottomslot = bottomtype->slot;
+            copystring(type.bottomtexture, bottomtype->texture);
         }
-        type.bottomslot = bottomtype ? bottomtype->slot : type.sideslot;
-        copystring(type.bottomtexture, bottomtype ? bottomtype->texture : type.sidetexture[0] ? type.sidetexture : type.texture);
+        else if(type.bottom[0])
+        {
+            type.bottomslot = loadworldtextureslot(type.bottom, type.texsize, &type == leaves || &type == needles);
+            copystring(type.bottomtexture, type.bottom);
+        }
+        else
+        {
+            type.bottomslot = type.sideslot;
+            copystring(type.bottomtexture, type.sidetexture[0] ? type.sidetexture : type.texture);
+        }
     }
 
     worldgrasstexture = grass->slot;
@@ -639,20 +856,21 @@ static bool loadworlddefinitions()
             type.mapmodel = -1;
         }
     }
-    loopv(worlditemdefinitions)
+    loopv(worldscatterdefinitions)
     {
-        worlditemdefinition &type = *worlditemdefinitions[i];
-        defformatstring(icon, "media/model/%s/diffuse.png", type.model);
-        copystring(type.icon, icon);
-        if(!loadmodel(type.model, -1, true)) conoutf(CON_ERROR, "could not load world item model %s", type.model);
+        worldscatterdefinition &type = *worldscatterdefinitions[i];
+        if(type.placeable)
+        {
+            defformatstring(icon, "media/model/%s/diffuse.png", type.model);
+            copystring(type.icon, icon);
+        }
     }
-    worldgrassscatter = worldscatterdefinitions.find(findworldscatter("Grass"));
-    worldrosescatter = worldscatterdefinitions.find(findworldscatter("Rose"));
-    worldtulipscatter = worldscatterdefinitions.find(findworldscatter("Tulip"));
-    worlddandelionscatter = worldscatterdefinitions.find(findworldscatter("Dandelion"));
+    worldgrassscatter = worldscatterdefinitions.find(findworldscatter("grass"));
+    worldrosescatter = worldscatterdefinitions.find(findworldscatter("rose"));
+    worldtulipscatter = worldscatterdefinitions.find(findworldscatter("tulip"));
+    worlddandelionscatter = worldscatterdefinitions.find(findworldscatter("dandelion"));
     setworldleavesalpha(worldroot, leavesalpha != 0);
-    conoutf(CON_DEBUG, "loaded %d world cube, %d world scatter, and %d world item definitions", worldcubedefinitions.length(),
-            worldscatterdefinitions.length(), worlditemdefinitions.length());
+    conoutf(CON_DEBUG, "loaded %d inventory item, %d world cube, and %d world object definitions", inventoryitemdefinitions.length(), worldcubedefinitions.length(), worldscatterdefinitions.length());
     return true;
 }
 
@@ -697,8 +915,7 @@ struct worldsectionowner
 
     bool matches(const worldchunk &chunk, int section, int tile) const
     {
-        return chunkx == chunk.x && chunky == chunk.y &&
-               this->section == section && this->tile == tile;
+        return chunkx == chunk.x && chunky == chunk.y && this->section == section && this->tile == tile;
     }
 };
 
@@ -1469,9 +1686,9 @@ static bool validworldscatter(const worldchunk &chunk, const worldscatterinstanc
     const cube &occupied = lookupcube(center, 0, cubeorigin, cubesize);
     if(!isempty(occupied) || occupied.material != MAT_AIR) return false;
 
-    const bool torch = isworldtorch(scatter.type);
-    if((!torch && scatter.orient != O_TOP) ||
-       (torch && scatter.orient == O_BOTTOM))
+    const bool placeable = isworldplaceable(scatter.type);
+    if((!placeable && scatter.orient != O_TOP) ||
+       (placeable && scatter.orient == O_BOTTOM))
         return false;
     const cube &support = lookupcube(supportcenter, 0, cubeorigin, cubesize);
     if(isempty(support) || !isentirelysolid(support) ||
@@ -4161,9 +4378,9 @@ static bool validgeneratedworldscatter(const cube *root,
     const cube &occupied = lookupgeneratedworldcube(root, center);
     if(!isempty(occupied) || occupied.material != MAT_AIR) return false;
 
-    const bool torch = isworldtorch(scatter.type);
-    if((!torch && scatter.orient != O_TOP) ||
-       (torch && scatter.orient == O_BOTTOM))
+    const bool placeable = isworldplaceable(scatter.type);
+    if((!placeable && scatter.orient != O_TOP) ||
+       (placeable && scatter.orient == O_BOTTOM))
         return false;
     const ivec supportcenter = ivec(center).sub(
         ivec(worldorientnormal(scatter.orient)).mul(WORLD_BLOCK_SIZE));
@@ -4171,7 +4388,7 @@ static bool validgeneratedworldscatter(const cube *root,
     // is checked once both chunks are mounted in the runtime world.
     if(supportcenter.x < 0 || supportcenter.x >= WORLD_CHUNK_SIZE ||
        supportcenter.y < 0 || supportcenter.y >= WORLD_CHUNK_SIZE)
-        return torch;
+        return placeable;
     const cube &support = lookupgeneratedworldcube(
         root, supportcenter);
     if(isempty(support) || !isentirelysolid(support) ||
@@ -4382,7 +4599,7 @@ static void worldscattertransform(const worldchunk &chunk, const worldscatterins
 {
     pitch = roll = 0;
     const ivec origin = worldchunkorigin(chunk);
-    if(isworldtorch(scatter.type))
+    if(isworldplaceable(scatter.type))
     {
         yaw = 0;
         position = vec(origin.x + scatter.x + WORLD_BLOCK_SIZE * 0.5f,
@@ -4417,6 +4634,17 @@ static bool worldtorchflameposition(const worldchunk &chunk, const worldscatteri
     int yaw, pitch, roll;
     worldscattertransform(chunk, scatter, maxoffset, position, yaw, pitch, roll);
     return worldscatterdefinitions.inrange(scatter.type) && modeltagposition(worldscatterdefinitions[scatter.type]->model, "tag_emitter", flame, position, yaw, pitch, roll);
+}
+
+static vec worldplacelightcolor(const worldscatterdefinition &type)
+{
+    if(!type.lightcolor[0]) return vec(1.0f, 0.58f, 0.24f);
+    char *end = NULL;
+    const long value = strtol(type.lightcolor, &end, 16);
+    if(!end || *end || value < 0 || value > 0xFFFFFF) return vec(1.0f, 0.58f, 0.24f);
+    return vec(float((value >> 16) & 0xFF) / 255.0f,
+               float((value >> 8) & 0xFF) / 255.0f,
+               float(value & 0xFF) / 255.0f);
 }
 
 static bool worldscattermounted(const worldchunk &chunk, const worldscatterinstance &scatter)
@@ -4521,7 +4749,6 @@ void addworldtorchlights()
 {
     if(staticlightmaxdistance <= 0 || !camera1 || worldchunks.empty()) return;
 
-    static const float TORCH_LIGHT_RADIUS = 14.0f * WORLD_BLOCK_SIZE;
     const float maxdistance = staticlightmaxdistance * WORLD_BLOCK_SIZE,
                 maxdistancesquared = maxdistance * maxdistance,
                 fullshadowdistance = maxdistance / 3.0f,
@@ -4544,7 +4771,8 @@ void addworldtorchlights()
             if(distancesquared > maxdistancesquared) continue;
             const float distance = sqrtf(distancesquared);
             const int flags = distance <= fullshadowdistance ? 0 : distance <= dynshadowdistance ? L_NODYNSHADOW : L_NOSHADOW;
-            adddynlight(flame, TORCH_LIGHT_RADIUS, vec(1.0f, 0.58f, 0.24f), 0, 0, flags | DL_NODIST);
+            const worldscatterdefinition &type = *worldscatterdefinitions[scatter.type];
+            adddynlight(flame, type.lightradius * WORLD_BLOCK_SIZE, worldplacelightcolor(type), 0, 0, flags | DL_NODIST);
         }
     }
 }
@@ -4718,7 +4946,7 @@ bool worldtorchincell(const ivec &cell)
     loopv(chunk.scatter)
     {
         const worldscatterinstance &scatter = chunk.scatter[i];
-        if(isworldtorch(scatter.type) &&
+        if(isworldplaceable(scatter.type) &&
            scatter.x == cell.x - origin.x &&
            scatter.y == cell.y - origin.y &&
            scatter.z == cell.z)
@@ -4727,9 +4955,31 @@ bool worldtorchincell(const ivec &cell)
     return false;
 }
 
+int getworldscatterindexat(const ivec &support, int orient)
+{
+    const ivec target = ivec(support).add(ivec(worldorientnormal(orient)).mul(WORLD_BLOCK_SIZE));
+    if(target.x < 0 || target.y < 0 || target.z < 0 || target.x >= worldsize || target.y >= worldsize ||
+       target.z + WORLD_BLOCK_SIZE > WORLD_MAP_SIZE)
+        return -1;
+    const int chunkx = worldfirstchunkx + target.x / WORLD_CHUNK_SIZE,
+              chunky = worldfirstchunky + target.y / WORLD_CHUNK_SIZE,
+              chunkindex = findworldchunk(chunkx, chunky);
+    if(!worldchunks.inrange(chunkindex)) return -1;
+    const worldchunk &chunk = worldchunks[chunkindex];
+    const ivec origin = worldchunkorigin(chunk);
+    loopv(chunk.scatter)
+    {
+        const worldscatterinstance &scatter = chunk.scatter[i];
+        if(scatter.x == target.x - origin.x && scatter.y == target.y - origin.y && scatter.z == target.z && scatter.orient == orient)
+            return scatter.type;
+    }
+    return -1;
+}
+
 bool editworldscatter(int type, const ivec &support, int orient, bool place)
 {
-    if(!worldscatterdefinitions.inrange(type) || orient < O_LEFT || orient > O_TOP || (!isworldtorch(type) && orient != O_TOP) || (isworldtorch(type) && orient == O_BOTTOM))
+    if(!worldscatterdefinitions.inrange(type) || orient < O_LEFT || orient > O_TOP ||
+       (!isworldplaceable(type) && orient != O_TOP) || (isworldplaceable(type) && orient == O_BOTTOM))
         return false;
 
     const ivec target = ivec(support).add(ivec(worldorientnormal(orient)).mul(WORLD_BLOCK_SIZE));

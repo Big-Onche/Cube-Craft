@@ -56,9 +56,6 @@ namespace server
     FVAR(serverwaterflowspeed, 0.1f, 4.0f, 20.0f);
     VAR(breaktimetolerance, 0, 125, 2000);
     VAR(breakcancelgrace, 0, 125, 2000);
-    VAR(servercubetypes, 1, 9, 0xFFFF);
-    VAR(serverscattertypes, 0, 5, 0xFFFF);
-    VAR(serveritemtypes, 0, 1, 0xFFFF);
     VAR(breaknetworkrange, 16, 512, 4096);
     VAR(desynctolerance, 0, 4, 100);
     VAR(violationresetinterval, 1, 60, 3600);
@@ -653,8 +650,8 @@ namespace server
             else if(sscanf(line, "slot %d %d %d", &slot, &item, &count) == 3)
             {
                 if(slot < 0 || slot >= SURVIVAL_USABLE_SLOTS || slotsseen[slot] ||
-                   count < 0 || count > 64 || (count == 0 && item != -1) ||
-                   (count > 0 && (item < 0 || item >= servercubetypes + serverscattertypes + serveritemtypes)))
+                   count < 0 || (item >= 0 && count > getinventoryitemmaxstack(item)) || (count == 0 && item != -1) ||
+                   (count > 0 && (item < 0 || item >= numinventoryitems())))
                     valid = false;
                 else
                 {
@@ -752,7 +749,8 @@ namespace server
     static bool addinventoryitem(clientinfo &ci, int item)
     {
         if(item < 0) return false;
-        loopi(SURVIVAL_USABLE_SLOTS) if(ci.inventoryitems[i] == item && ci.inventorycounts[i] > 0 && ci.inventorycounts[i] < 64)
+        const int maxstack = max(getinventoryitemmaxstack(item), 1);
+        loopi(SURVIVAL_USABLE_SLOTS) if(ci.inventoryitems[i] == item && ci.inventorycounts[i] > 0 && ci.inventorycounts[i] < maxstack)
         {
             ++ci.inventorycounts[i];
             markinventorydirty(ci);
@@ -768,13 +766,28 @@ namespace server
         return false;
     }
 
+    static void addworlddrops(clientinfo &ci, int item)
+    {
+        const int type = getworlditemtype(item), index = getworlditemindex(item), count = getworldobjectdropcount(type, index);
+        loopi(count)
+        {
+            int dropitem, mincount, maxcount;
+            float chance;
+            if(!getworldobjectdrop(type, index, i, dropitem, mincount, maxcount, chance) || rndscale(1.0f) > chance) continue;
+            const int quantity = mincount >= maxcount ? mincount : mincount + rnd(maxcount - mincount + 1);
+            loopj(quantity) if(!addinventoryitem(ci, dropitem)) break;
+        }
+    }
+
     static serverworldaction *findworldaction(const ivec &target, int action)
     {
-        const bool scatter = action == WORLD_ACTION_PLACE_SCATTER || action == WORLD_ACTION_BREAK_SCATTER_START;
+        const bool scatter = action == WORLD_ACTION_PLACE_SCATTER || action == WORLD_ACTION_PLACE_ITEM ||
+                             action == WORLD_ACTION_BREAK_SCATTER_START;
         loopvrev(serverworldactions)
         {
             serverworldaction *state = serverworldactions[i];
-            const bool statescatter = state->action == WORLD_ACTION_PLACE_SCATTER || state->action == WORLD_ACTION_BREAK_SCATTER_START;
+            const bool statescatter = state->action == WORLD_ACTION_PLACE_SCATTER || state->action == WORLD_ACTION_PLACE_ITEM ||
+                                      state->action == WORLD_ACTION_BREAK_SCATTER_START;
             if(state->target == target && scatter == statescatter) return state;
         }
         return NULL;
@@ -1290,23 +1303,25 @@ namespace server
         return ++count <= limit;
     }
 
-    static bool inventoryhasroom(const clientinfo &ci, int item)
+    static bool inventoryhasroom(const clientinfo &ci)
     {
         loopi(SURVIVAL_USABLE_SLOTS)
-            if((ci.inventoryitems[i] == item && ci.inventorycounts[i] > 0 && ci.inventorycounts[i] < 64) ||
-               ci.inventorycounts[i] <= 0)
+            if(ci.inventorycounts[i] <= 0 ||
+               ci.inventorycounts[i] < max(getinventoryitemmaxstack(ci.inventoryitems[i]), 1))
                 return true;
         return false;
     }
 
     static bool validactionitem(int action, int item)
     {
-        if(action == WORLD_ACTION_PLACE_CUBE || action == WORLD_ACTION_BREAK_CUBE_START)
-            return item >= 0 && item < servercubetypes;
-        if(action == WORLD_ACTION_PLACE_SCATTER || action == WORLD_ACTION_BREAK_SCATTER_START)
-            return item >= servercubetypes && item < servercubetypes + serverscattertypes;
-        if(action == WORLD_ACTION_PLACE_ITEM)
-            return item >= servercubetypes + serverscattertypes && item < servercubetypes + serverscattertypes + serveritemtypes;
+        if(item < 0)
+            return action == WORLD_ACTION_BREAK_SCATTER_START;
+        if(item >= numinventoryitems()) return false;
+        const int type = getworlditemtype(item);
+        if(action == WORLD_ACTION_PLACE_CUBE || action == WORLD_ACTION_BREAK_CUBE_START) return type == WORLD_ITEM_CUBE;
+        if(action == WORLD_ACTION_PLACE_SCATTER) return type == WORLD_ITEM_SCATTER;
+        if(action == WORLD_ACTION_BREAK_SCATTER_START) return type == WORLD_ITEM_SCATTER || type == WORLD_ITEM_PLACEABLE;
+        if(action == WORLD_ACTION_PLACE_ITEM) return type == WORLD_ITEM_PLACEABLE;
         return false;
     }
 
@@ -1386,7 +1401,7 @@ namespace server
         correction.type = N_WORLDAUTH;
         int action = state.action;
         ivec target = state.target;
-        if(action == WORLD_ACTION_PLACE_CUBE || action == WORLD_ACTION_PLACE_ITEM)
+        if(action == WORLD_ACTION_PLACE_CUBE)
             target[state.orient >> 1] += state.orient&1 ? -16 : 16;
         packetbuf payload(MAXTRANS);
         putint(payload, action);
@@ -1404,7 +1419,7 @@ namespace server
         if(action != WORLD_ACTION_PLACE_CUBE && action != WORLD_ACTION_PLACE_SCATTER && action != WORLD_ACTION_PLACE_ITEM)
             return rejectaction(ci, requestid, "invalid placement action", true, true);
         if(!validactiontarget(ci, support, orient, error)) return rejectaction(ci, requestid, error, true);
-        const bool voxelplacement = action == WORLD_ACTION_PLACE_CUBE || action == WORLD_ACTION_PLACE_ITEM;
+        const bool voxelplacement = action == WORLD_ACTION_PLACE_CUBE;
         const ivec occupied = voxelplacement ? actionplacecell(support, orient) : support;
         if(voxelplacement && !validactiontarget(ci, occupied, orient, error)) return rejectaction(ci, requestid, error, true);
         if(!actionrate(ci, true)) return rejectaction(ci, requestid, "excessive placement rate", true);
@@ -1421,7 +1436,7 @@ namespace server
         if(!servercreative())
         {
             if(slot < 0 || slot >= SURVIVAL_HOTBAR_SLOTS || slot != ci.selectedslot || ci.inventorycounts[slot] <= 0 ||
-               ci.inventorycounts[slot] > 64 || ci.inventoryitems[slot] != item)
+               ci.inventorycounts[slot] > getinventoryitemmaxstack(item) || ci.inventoryitems[slot] != item)
                 return rejectaction(ci, requestid, "placed item is not owned in the requested inventory slot", true, true);
         }
         if(!validactionitem(action, item))
@@ -1429,7 +1444,7 @@ namespace server
         if(!acceptworldaction(ci, requestid, action, support, orient, item))
             return rejectaction(ci, requestid, "server could not persist the placement");
         setworldactionstate(occupied, action, orient, item);
-        if(!servercreative() && action != WORLD_ACTION_PLACE_ITEM)
+        if(!servercreative())
         {
             if(--ci.inventorycounts[slot] <= 0)
             {
@@ -1451,7 +1466,9 @@ namespace server
         if(action != WORLD_ACTION_BREAK_CUBE_START && action != WORLD_ACTION_BREAK_SCATTER_START)
             return rejectaction(ci, requestid, "invalid destruction action", true, true);
         if(!validactiontarget(ci, target, orient, error)) return rejectaction(ci, requestid, error, true);
-        if(!validactionitem(action, item)) return rejectaction(ci, requestid, "invalid destroyed item type", true, true);
+        if(!validactionitem(action, item) ||
+           (item < 0 && getworldscatterindexat(target, orient) < 0))
+            return rejectaction(ci, requestid, "invalid destroyed item type", true, true);
         if(ci.breakactive) cancelbreak(ci);
         serverworldaction *state = findworldaction(target, action);
         if(state && (state->action == WORLD_ACTION_BREAK_CUBE_START || state->action == WORLD_ACTION_BREAK_SCATTER_START))
@@ -1548,7 +1565,8 @@ namespace server
             return rejectaction(ci, requestid, "excessive destruction rate", true);
         }
         const int action = ci.breakaction;
-        if(!servercreative() && !inventoryhasroom(ci, item))
+        const int objecttype = getworlditemtype(item), objectindex = getworlditemindex(item);
+        if(!servercreative() && getworldobjectdropcount(objecttype, objectindex) > 0 && !inventoryhasroom(ci))
         {
             cancelbreak(ci);
             return rejectaction(ci, requestid, "inventory is full");
@@ -1559,7 +1577,7 @@ namespace server
             return rejectaction(ci, requestid, "server could not persist the destruction");
         }
         setworldactionstate(target, action, ci.breakorient, item);
-        if(!servercreative()) addinventoryitem(ci, item);
+        if(!servercreative()) addworlddrops(ci, item);
         sendbreakstate(ci, BREAK_STATE_COMPLETE, 7);
         ci.breakactive = false;
         ci.breakrequestid = 0;

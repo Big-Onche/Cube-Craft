@@ -35,20 +35,16 @@ enum
     M_SURVIVAL = 1<<3
 };
 
-static struct gamemodeinfo
+struct gamemodeinfo
 {
     const char *name, *prettyname;
     int flags;
     const char *info;
-} gamemodes[] =
-{
-    { "creative", "Creative", M_CREATIVE, "Build freely with fixed-size voxel blocks." },
-    { "edit", "Edit", M_EDIT, "Cooperative map editing." },
-    { "survival", "Survival", M_SURVIVAL, "Gather resources and break blocks by hand." }
 };
+extern const gamemodeinfo gamemodes[3];
 
 #define STARTGAMEMODE 0
-#define NUMGAMEMODES ((int)(sizeof(gamemodes)/sizeof(gamemodes[0])))
+#define NUMGAMEMODES 3
 #define m_valid(mode) ((mode) >= STARTGAMEMODE && (mode) < STARTGAMEMODE + NUMGAMEMODES)
 #define m_edit (m_valid(game::gamemode) && (gamemodes[game::gamemode - STARTGAMEMODE].flags&M_EDIT))
 #define m_creative (m_valid(game::gamemode) && (gamemodes[game::gamemode - STARTGAMEMODE].flags&M_CREATIVE))

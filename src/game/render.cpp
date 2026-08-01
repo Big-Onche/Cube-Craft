@@ -177,7 +177,7 @@ namespace game
     {
         if(!d || (!m_creative && !m_survival) || d->state != CS_ALIVE) return -1;
         const int selected = d == player1 ? (editmode ? -1 : selectedcreativeblock()) : d->selectedcreative,
-                  count = numworldcubes() + numworldscatters() + numworlditems();
+                  count = numinventoryitems();
         return selected >= 0 && selected < count ? selected : -1;
     }
 
@@ -341,13 +341,6 @@ namespace game
         rendermodel(model, ANIM_MAPMODEL | ANIM_LOOP, pose.origin, pose.yaw, pose.pitch, pose.roll, flags, d, NULL, 0, 0, size);
     }
 
-    static void renderheldworlditem(gameent *d, int selected, const helditempose &pose, int flags, float size)
-    {
-        const char *model = getworlditemmodel(selected);
-        if(!model[0]) return;
-        rendermodel(model, ANIM_MAPMODEL | ANIM_LOOP, pose.origin, pose.yaw, pose.pitch, pose.roll, flags, d, NULL, 0, 0, size);
-    }
-
     static void renderhelditem(gameent *d, int selected, const vec &origin, float yaw, float pitch, float roll, int flags, bool hud)
     {
         helditempose pose;
@@ -355,22 +348,21 @@ namespace game
         pose.yaw = yaw;
         pose.pitch = pitch;
         pose.roll = roll;
-        const int cubecount = numworldcubes(), scattercount = numworldscatters();
-        if(selected < cubecount) renderheldcube(d, selected, pose, flags, hud ? HUD_HELD_CUBE_SIZE : WORLD_HELD_CUBE_SIZE, hud);
-        else if(selected < cubecount + scattercount)
-            renderheldscatter(d, selected - cubecount, pose, flags, hud ? HUD_HELD_SCATTER_SIZE : WORLD_HELD_SCATTER_SIZE);
-        else renderheldworlditem(d, selected - cubecount - scattercount, pose, flags,
-                                 hud ? HUD_HELD_SCATTER_SIZE : WORLD_HELD_SCATTER_SIZE);
+        const int type = getworlditemtype(selected), worldindex = getworlditemindex(selected);
+        if(type == WORLD_ITEM_CUBE)
+            renderheldcube(d, worldindex, pose, flags, hud ? HUD_HELD_CUBE_SIZE : WORLD_HELD_CUBE_SIZE, hud);
+        else if(type == WORLD_ITEM_SCATTER || type == WORLD_ITEM_PLACEABLE)
+            renderheldscatter(d, worldindex, pose, flags, hud ? HUD_HELD_SCATTER_SIZE : WORLD_HELD_SCATTER_SIZE);
     }
 
     bool heldtorchemitterposition(gameent *d, vec &position)
     {
-        const int selected = heldcreativeitem(d), cubecount = numworldcubes();
-        if(selected < cubecount || !isworldtorch(selected - cubecount)) return false;
+        const int selected = heldcreativeitem(d), worldindex = getworlditemindex(selected);
+        if(getworlditemtype(selected) != WORLD_ITEM_PLACEABLE || !isworldtorch(worldindex)) return false;
         const bool hud = d == player1 && !isthirdperson();
         if(hud && !hudgun) return false;
 
-        const char *model = getworldscattermodel(selected - cubecount);
+        const char *model = getworldscattermodel(worldindex);
         if(!model[0]) return false;
 
         helditempose item, arm;
