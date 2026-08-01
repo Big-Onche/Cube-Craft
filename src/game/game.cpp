@@ -217,7 +217,7 @@ namespace game
         {
             const ivec neighbor = ivec(position).add(offsets[i]);
             if(!fluidcells.access(neighbor) && watermaterial(neighbor))
-                addwatercell(neighbor, 0, WATER_SOURCE_NATURAL_ACTIVE, false, 0, false);
+                addwatercell(neighbor, 0, WATER_SOURCE_NATURAL_ACTIVE, false, -1, false);
         }
     }
 
@@ -242,8 +242,6 @@ namespace game
             ivec(0, -WATER_BLOCK_SIZE, 0), ivec(0, WATER_BLOCK_SIZE, 0),
             ivec(0, 0, -WATER_BLOCK_SIZE), ivec(0, 0, WATER_BLOCK_SIZE)
         };
-        const bool opened = wateraccepts(position) && !watermaterial(position);
-        bool removedactive = false;
         loopi(7)
         {
             const ivec neighbor = ivec(position).add(offsets[i]);
@@ -252,13 +250,12 @@ namespace game
             {
                 if(cell)
                 {
-                    removedactive = true;
                     removewatercell(neighbor);
                 }
                 else if(!wateraccepts(neighbor)) setwatermaterial(neighbor, false);
                 continue;
             }
-            if(cell) schedulewater(neighbor, opened && !removedactive ? 0 : -1);
+            if(cell) schedulewater(neighbor);
         }
     }
 
