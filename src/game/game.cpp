@@ -429,8 +429,10 @@ namespace game
             }
             loopi(4)
             {
-                fluidcell *neighbor = fluidcells.access(ivec(position).add(directions[i]));
-                if(!neighbor || neighbor->falling) continue;
+                const ivec neighborposition = ivec(position).add(directions[i]);
+                fluidcell *neighbor = fluidcells.access(neighborposition);
+                // Falling water only feeds sideways from the cell where the waterfall lands.
+                if(!neighbor || (neighbor->falling && !watersupported(neighborposition))) continue;
                 const int neighborlevel = neighbor->source() ? 0 : neighbor->level;
                 const int candidatelevel = neighborlevel + 1;
                 if(candidatelevel < desiredlevel ||
@@ -500,14 +502,14 @@ namespace game
         }
     }
 
-    static bool waterinsimulationrange(const ivec &position, const fluidcell &cell)
+    static bool waterinsimulationrange(const ivec &position)
     {
+        if(!camera1 && !player1) return false;
+        vec focus = camera1 ? camera1->o : player1->o;
+        worldpositiontoabsolute(focus);
         const int distance = authoritativewatersettings ? authoritativewaterdistance : simulationmaxdist;
-        const long long range = static_cast<long long>(distance) * WATER_BLOCK_SIZE,
-                        dx = position.x - cell.origin.x,
-                        dy = position.y - cell.origin.y,
-                        dz = position.z - cell.origin.z;
-        return dx * dx + dy * dy + dz * dz <= range * range;
+        const float range = distance * float(WATER_BLOCK_SIZE);
+        return vec(position).add(WATER_BLOCK_SIZE * 0.5f).squaredist(focus) <= range * range;
     }
 
     static void updatewaterphysics()
@@ -525,7 +527,7 @@ namespace game
                 fluidupdates.removeunordered(fluidupdatecursor);
                 continue;
             }
-            if(cell->update > totalmillis || !waterinsimulationrange(position, *cell))
+            if(cell->update > totalmillis || !waterinsimulationrange(position))
             {
                 ++fluidupdatecursor;
                 ++inspected;
