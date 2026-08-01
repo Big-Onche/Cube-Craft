@@ -1502,12 +1502,25 @@ void crouchplayer(physent *pl, int moveres, bool local)
     }
 }
 
+static bool liquidatheight(int material, const vec &position)
+{
+    const int volume = material&MATF_VOLUME;
+    if(!isliquid(volume)) return false;
+    if(volume != MAT_WATER) return true;
+    bool falling = false;
+    const int level = game::getwatercelllevel(ivec(position), falling);
+    if(level < 0 || falling) return true;
+    const float top = floorf(position.z / 16.0f) * 16.0f + 16.0f - min(level, 7) * 2.0f - WATER_OFFSET;
+    return position.z < top;
+}
+
 bool bounce(physent *d, float secs, float elasticity, float waterfric, float grav)
 {
     // make sure bouncers don't start inside geometry
     if(d->physstate!=PHYS_BOUNCE && collide(d, vec(0, 0, 0), 0, false)) return true;
-    int mat = lookupmaterial(vec(d->o.x, d->o.y, d->o.z + (d->aboveeye - d->eyeheight)/2));
-    bool water = isliquid(mat);
+    const vec materialposition(d->o.x, d->o.y, d->o.z + (d->aboveeye - d->eyeheight)/2);
+    int mat = lookupmaterial(materialposition);
+    bool water = liquidatheight(mat, materialposition);
     if(water)
     {
         d->vel.z -= grav*GRAVITY/16*secs;
@@ -1783,8 +1796,9 @@ void modifygravity(physent *pl, bool water, int curtime)
 
 bool moveplayer(physent *pl, int moveres, bool local, int curtime)
 {
-    int material = lookupmaterial(vec(pl->o.x, pl->o.y, pl->o.z + (3*pl->aboveeye - pl->eyeheight)/4));
-    bool water = isliquid(material&MATF_VOLUME);
+    vec materialposition(pl->o.x, pl->o.y, pl->o.z + (3*pl->aboveeye - pl->eyeheight)/4);
+    int material = lookupmaterial(materialposition);
+    bool water = liquidatheight(material, materialposition);
     bool floating = pl->type==ENT_PLAYER && (pl->state==CS_EDITING || pl->state==CS_SPECTATOR);
     float secs = curtime/1000.f;
 
@@ -1835,8 +1849,9 @@ bool moveplayer(physent *pl, int moveres, bool local, int curtime)
 
     if(pl->inwater && !water)
     {
-        material = lookupmaterial(vec(pl->o.x, pl->o.y, pl->o.z + (pl->aboveeye - pl->eyeheight)/2));
-        water = isliquid(material&MATF_VOLUME);
+        materialposition = vec(pl->o.x, pl->o.y, pl->o.z + (pl->aboveeye - pl->eyeheight)/2);
+        material = lookupmaterial(materialposition);
+        water = liquidatheight(material, materialposition);
     }
     if(!pl->inwater && water) game::physicstrigger(pl, local, 0, -1, material&MATF_VOLUME);
     else if(pl->inwater && !water) game::physicstrigger(pl, local, 0, 1, pl->inwater);

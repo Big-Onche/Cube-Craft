@@ -397,6 +397,11 @@ bool worldcellsolid(const ivec &position)
     return !isempty(c);
 }
 
+void worldwaterchanged()
+{
+    if(worldroot) allchanged();
+}
+
 VARFP(leavesalpha, 0, 1, 1, updateleavesalpha());
 
 static bool isworldleaftexture(const cube &c)

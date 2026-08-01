@@ -81,6 +81,40 @@ static void drawmaterial(const materialsurface &m, float offset, const bvec4 &co
         gle::begin(GL_QUADS);
     }
     float x = m.o.x, y = m.o.y, z = m.o.z, csize = m.csize, rsize = m.rsize;
+    const float waterdrop = getwatermaterialdrop(m);
+    bool falling = false;
+    const bool flowingtop = m.orient == O_TOP && getwatermateriallevel(m, falling) >= 0 && !falling;
+    if(flowingtop)
+    {
+        gle::attribf(x,         y,         z - getwatercornerdrop(x,         y,         z) - offset);
+        gle::attrib(color);
+        gle::attribf(x + rsize, y,         z - getwatercornerdrop(x + rsize, y,         z) - offset);
+        gle::attrib(color);
+        gle::attribf(x + rsize, y + csize, z - getwatercornerdrop(x + rsize, y + csize, z) - offset);
+        gle::attrib(color);
+        gle::attribf(x,         y + csize, z - getwatercornerdrop(x,         y + csize, z) - offset);
+        gle::attrib(color);
+        return;
+    }
+    if(m.orient == O_TOP) z -= waterdrop;
+    if(waterdrop > 0 && (m.material&MATF_VOLUME) == MAT_WATER && m.orient != O_BOTTOM && m.orient != O_TOP)
+    {
+        const float zmax = z - waterdrop;
+        switch(m.orient)
+        {
+        #define GENFACEORIENT(orient, v0, v1, v2, v3) \
+            case orient: v0 v1 v2 v3 break;
+        #define GENFACEVERT(orient, vert, mx,my,mz, sx,sy,sz) \
+            { \
+                gle::attribf(mx sx, my sy, mz sz); \
+                gle::attrib(color); \
+            }
+            GENFACEVERTSXY(x, x, y, y, z, zmax, /**/, + csize, /**/, + rsize, + offset, - offset)
+        #undef GENFACEORIENT
+        #undef GENFACEVERT
+        }
+        return;
+    }
     switch(m.orient)
     {
     #define GENFACEORIENT(orient, v0, v1, v2, v3) \
@@ -94,6 +128,48 @@ static void drawmaterial(const materialsurface &m, float offset, const bvec4 &co
     #undef GENFACEORIENT
     #undef GENFACEVERT
     }
+}
+
+int getwatermateriallevel(const materialsurface &m, bool &falling)
+{
+    falling = false;
+    if((m.material&MATF_VOLUME) != MAT_WATER) return -1;
+    const int dim = dimension(m.orient);
+    ivec sample(m.o);
+    sample[R[dim]] += m.rsize / 2;
+    sample[C[dim]] += m.csize / 2;
+    sample[dim] += dimcoord(m.orient) ? -1 : 1;
+    return game::getwatercelllevel(sample, falling);
+}
+
+float getwatermaterialdrop(const materialsurface &m)
+{
+    bool falling = false;
+    const int level = getwatermateriallevel(m, falling);
+    return level > 0 && !falling ? min(level, 7) * 2.0f : 0.0f;
+}
+
+float getwatercornerdrop(int x, int y, int z)
+{
+    float drop = 16.0f;
+    bool found = false;
+    loopi(2) loopj(2)
+    {
+        const ivec sample(x - i, y - j, z - 1);
+        bool falling = false;
+        const int level = game::getwatercelllevel(sample, falling);
+        if(level >= 0)
+        {
+            drop = min(drop, level > 0 && !falling ? min(level, 7) * 2.0f : 0.0f);
+            found = true;
+        }
+        else if((lookupmaterial(vec(sample))&MATF_VOLUME) == MAT_WATER)
+        {
+            drop = 0.0f;
+            found = true;
+        }
+    }
+    return found ? drop : 16.0f;
 }
 
 const struct material
@@ -327,7 +403,25 @@ int optimizematsurfs(materialsurface *matbuf, int matsurfs)
                cur->visible == start->visible &&
                cur->o[dim] == start->o[dim])
             ++cur;
-         if(!isliquid(start->material&MATF_VOLUME) || start->orient != O_TOP || !vertwater)
+         bool dynamicwater = false;
+         if((start->material&MATF_VOLUME) == MAT_WATER)
+         {
+            for(materialsurface *surface = start; surface < cur; ++surface)
+            {
+                bool falling = false;
+                if(getwatermateriallevel(*surface, falling) >= 0)
+                {
+                    dynamicwater = true;
+                    break;
+                }
+            }
+         }
+         if(dynamicwater)
+         {
+            if(start != matbuf) memmove(matbuf, start, (cur-start)*sizeof(materialsurface));
+            matbuf += cur-start;
+         }
+         else if(!isliquid(start->material&MATF_VOLUME) || start->orient != O_TOP || !vertwater)
          {
             if(start!=matbuf) memmove(matbuf, start, (cur-start)*sizeof(materialsurface));
             matbuf += mergemats(matbuf, cur-start);
@@ -791,4 +885,3 @@ void renderminimapmaterials()
 
     glEnable(GL_CULL_FACE);
 }
-

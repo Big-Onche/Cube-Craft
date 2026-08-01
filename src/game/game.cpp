@@ -69,6 +69,21 @@ namespace game
         return worldcellacceptswater(sel.o) && worldcellhaswater(sel.o);
     }
 
+    int getwatercelllevel(const ivec &position, bool &falling)
+    {
+        selinfo absolute;
+        absolute.o = ivec(position).mask(~(WATER_BLOCK_SIZE - 1));
+        worldselectiontoabsolute(absolute);
+        fluidcell *cell = fluidcells.access(absolute.o);
+        if(!cell)
+        {
+            falling = false;
+            return -1;
+        }
+        falling = cell->falling;
+        return cell->source ? 0 : cell->level;
+    }
+
     static bool wateraccepts(const ivec &absolute)
     {
         selinfo sel;
@@ -137,8 +152,15 @@ namespace game
             if(changed) schedulewater(position, delay);
             return changed;
         }
-        if(!wateraccepts(position) || !setwatermaterial(position, true)) return false;
+        if(!wateraccepts(position)) return false;
+        const bool materialexists = watermaterial(position);
         fluidcells.access(position, fluidcell(min(level, int(WATER_MAX_LEVEL)), source, falling));
+        if(!materialexists && !setwatermaterial(position, true))
+        {
+            fluidcells.remove(position);
+            return false;
+        }
+        if(materialexists) worldwaterchanged();
         schedulewater(position, delay);
         return true;
     }

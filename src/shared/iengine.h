@@ -145,6 +145,7 @@ extern const char *getworlditemicon(int index);
 extern bool worldcellacceptswater(const ivec &position);
 extern bool worldcellhaswater(const ivec &position);
 extern bool worldcellsolid(const ivec &position);
+extern void worldwaterchanged();
 extern bool worldtorchincell(const ivec &cell);
 extern void addworldtorchlights();
 extern void addworldtorchparticles();

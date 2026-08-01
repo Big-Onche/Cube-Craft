@@ -357,9 +357,23 @@ VARFP(vertwater, 0, 1, 1, allchanged());
 
 static inline void renderwater(const materialsurface &m, int mat = MAT_WATER)
 {
-    if(!vertwater || drawtex == DRAWTEX_MINIMAP) renderflatwater(m.o.x, m.o.y, m.o.z, m.rsize, m.csize, mat);
-    else if(renderwaterlod(m.o.x, m.o.y, m.o.z, m.csize, mat) >= int(m.csize) * 2)
-        rendervertwater(m.csize, m.o.x, m.o.y, m.o.z, m.csize, mat);
+    bool falling = false;
+    if(getwatermateriallevel(m, falling) >= 0 && !falling)
+    {
+        flushwater(mat);
+        if(gle::attribbuf.empty()) { gle::defvertex(); gle::begin(GL_QUADS); }
+        const float offset = drawtex == DRAWTEX_MINIMAP ? -WATER_OFFSET : whphase;
+        const float x = m.o.x, y = m.o.y, z = m.o.z, rsize = m.rsize, csize = m.csize;
+        gle::attribf(x,         y,         z - getwatercornerdrop(x,         y,         z) + offset);
+        gle::attribf(x + rsize, y,         z - getwatercornerdrop(x + rsize, y,         z) + offset);
+        gle::attribf(x + rsize, y + csize, z - getwatercornerdrop(x + rsize, y + csize, z) + offset);
+        gle::attribf(x,         y + csize, z - getwatercornerdrop(x,         y + csize, z) + offset);
+        return;
+    }
+    const int z = m.o.z - int(getwatermaterialdrop(m));
+    if(!vertwater || drawtex == DRAWTEX_MINIMAP) renderflatwater(m.o.x, m.o.y, z, m.rsize, m.csize, mat);
+    else if(renderwaterlod(m.o.x, m.o.y, z, m.csize, mat) >= int(m.csize) * 2)
+        rendervertwater(m.csize, m.o.x, m.o.y, z, m.csize, mat);
 }
 
 #define WATERVARS(name) \
@@ -456,7 +470,47 @@ static void renderwaterfall(const materialsurface &m, float offset)
         gle::defnormal(4, GL_BYTE);
         gle::begin(GL_QUADS);
     }
-    float x = m.o.x, y = m.o.y, zmin = m.o.z, zmax = zmin;
+    float x = m.o.x, y = m.o.y, zmin = m.o.z, zmax = zmin - getwatermaterialdrop(m);
+    bool falling = false;
+    if(getwatermateriallevel(m, falling) >= 0 && !falling)
+    {
+        const float ztop = zmin + (dimension(m.orient) == 0 ? m.csize : m.rsize);
+        switch(m.orient)
+        {
+            case O_LEFT:
+                gle::attribf(x - offset, y + m.rsize, ztop - getwatercornerdrop(x, y + m.rsize, ztop) + wfwave);
+                gle::attrib(matnormals[m.orient]);
+                gle::attribf(x - offset, y + m.rsize, zmin); gle::attrib(matnormals[m.orient]);
+                gle::attribf(x - offset, y, zmin); gle::attrib(matnormals[m.orient]);
+                gle::attribf(x - offset, y, ztop - getwatercornerdrop(x, y, ztop) + wfwave);
+                gle::attrib(matnormals[m.orient]);
+                return;
+            case O_RIGHT:
+                gle::attribf(x + offset, y + m.rsize, ztop - getwatercornerdrop(x, y + m.rsize, ztop) + wfwave);
+                gle::attrib(matnormals[m.orient]);
+                gle::attribf(x + offset, y, ztop - getwatercornerdrop(x, y, ztop) + wfwave);
+                gle::attrib(matnormals[m.orient]);
+                gle::attribf(x + offset, y, zmin); gle::attrib(matnormals[m.orient]);
+                gle::attribf(x + offset, y + m.rsize, zmin); gle::attrib(matnormals[m.orient]);
+                return;
+            case O_BACK:
+                gle::attribf(x + m.csize, y - offset, ztop - getwatercornerdrop(x + m.csize, y, ztop) + wfwave);
+                gle::attrib(matnormals[m.orient]);
+                gle::attribf(x, y - offset, ztop - getwatercornerdrop(x, y, ztop) + wfwave);
+                gle::attrib(matnormals[m.orient]);
+                gle::attribf(x, y - offset, zmin); gle::attrib(matnormals[m.orient]);
+                gle::attribf(x + m.csize, y - offset, zmin); gle::attrib(matnormals[m.orient]);
+                return;
+            case O_FRONT:
+                gle::attribf(x, y + offset, zmin); gle::attrib(matnormals[m.orient]);
+                gle::attribf(x, y + offset, ztop - getwatercornerdrop(x, y, ztop) + wfwave);
+                gle::attrib(matnormals[m.orient]);
+                gle::attribf(x + m.csize, y + offset, ztop - getwatercornerdrop(x + m.csize, y, ztop) + wfwave);
+                gle::attrib(matnormals[m.orient]);
+                gle::attribf(x + m.csize, y + offset, zmin); gle::attrib(matnormals[m.orient]);
+                return;
+        }
+    }
     if(m.ends&1) zmin += -WATER_OFFSET-WATER_AMPLITUDE;
     if(m.ends&2) zmax += wfwave;
     int csize = m.csize, rsize = m.rsize;
@@ -672,7 +726,7 @@ void renderwater()
         loopv(surfs)
         {
             materialsurface &m = surfs[i];
-            if(camera1->o.z < m.o.z - WATER_OFFSET) continue;
+            if(camera1->o.z < m.o.z - WATER_OFFSET - getwatermaterialdrop(m)) continue;
             renderwater(m);
         }
         flushwater();
@@ -683,11 +737,10 @@ void renderwater()
             loopv(surfs)
             {
                 materialsurface &m = surfs[i];
-                if(camera1->o.z >= m.o.z - WATER_OFFSET) continue;
+                if(camera1->o.z >= m.o.z - WATER_OFFSET - getwatermaterialdrop(m)) continue;
                 renderwater(m);
             }
             flushwater();
         }
     }
 }
-
