@@ -18,6 +18,301 @@ namespace game
 #ifndef STANDALONE
     static uint nextworldrequestid = 1;
 
+    enum
+    {
+        WATER_BLOCK_SIZE = 16,
+        WATER_MAX_LEVEL = 7,
+        WATER_DROP_SEARCH = 4
+    };
+
+    struct fluidcell
+    {
+        uchar level;
+        bool source, falling, queued;
+        int update;
+
+        fluidcell() : level(0), source(false), falling(false), queued(false), update(0) {}
+        fluidcell(int level, bool source, bool falling)
+            : level(uchar(level)), source(source), falling(falling), queued(false), update(0) {}
+    };
+
+    static hashtable<ivec, fluidcell> fluidcells(1<<14);
+    static vector<ivec> fluidupdates;
+    static int fluidupdatecursor = 0;
+    VARP(fluidupdatespertick, 1, 2048, 16384);
+    VARP(simulationmaxdist, 1, 12, 64);
+    FVARP(waterflowspeed, 0.1f, 1.0f, 20.0f);
+
+    static void resetwaterphysics()
+    {
+        fluidcells.clear();
+        fluidupdates.setsize(0);
+        fluidupdatecursor = 0;
+    }
+
+    static void waterselection(selinfo &sel, const ivec &absolute)
+    {
+        sel.o = absolute;
+        sel.s = ivec(1, 1, 1);
+        sel.grid = WATER_BLOCK_SIZE;
+        sel.orient = WORLD_ORIENT_TOP;
+        sel.cx = sel.cy = sel.corner = 0;
+        sel.cxs = sel.cys = 2;
+        worldselectiontolocal(sel);
+    }
+
+    static bool watermaterial(const ivec &absolute)
+    {
+        selinfo sel;
+        waterselection(sel, absolute);
+        if(!sel.validate() || !worldselectionready(sel)) return false;
+        return worldcellacceptswater(sel.o) && worldcellhaswater(sel.o);
+    }
+
+    static bool wateraccepts(const ivec &absolute)
+    {
+        selinfo sel;
+        waterselection(sel, absolute);
+        if(!sel.validate() || !worldselectionready(sel)) return false;
+        return worldcellacceptswater(sel.o);
+    }
+
+    static bool setwatermaterial(const ivec &absolute, bool water)
+    {
+        selinfo sel;
+        waterselection(sel, absolute);
+        if(!sel.validate() || !worldselectionready(sel)) return false;
+        if(water)
+        {
+            if(!worldcellacceptswater(sel.o)) return false;
+            if(worldcellhaswater(sel.o)) return true;
+            mpeditmat(MAT_WATER, -1, sel, false);
+        }
+        else
+        {
+            if(!worldcellhaswater(sel.o)) return true;
+            mpeditmat(MAT_AIR, MAT_WATER, sel, false);
+        }
+        return true;
+    }
+
+    static int waterstepmillis()
+    {
+        return max(int(1000.0f / max(waterflowspeed, 0.1f)), 1);
+    }
+
+    static void schedulewater(const ivec &position, int delay = -1)
+    {
+        fluidcell *cell = fluidcells.access(position);
+        if(!cell) return;
+        const int due = totalmillis + (delay >= 0 ? delay : waterstepmillis());
+        if(cell->queued)
+        {
+            cell->update = min(cell->update, due);
+            return;
+        }
+        cell->queued = true;
+        cell->update = due;
+        fluidupdates.add(position);
+    }
+
+    static bool addwatercell(const ivec &position, int level, bool source, bool falling, int delay = -1)
+    {
+        fluidcell *existing = fluidcells.access(position);
+        if(existing)
+        {
+            bool changed = source && !existing->source;
+            if(source)
+            {
+                existing->source = true;
+                existing->falling = false;
+                existing->level = 0;
+            }
+            else if(!existing->source && (level < existing->level || falling != existing->falling))
+            {
+                existing->level = uchar(min(level, int(WATER_MAX_LEVEL)));
+                existing->falling = falling;
+                changed = true;
+            }
+            if(changed) schedulewater(position, delay);
+            return changed;
+        }
+        if(!wateraccepts(position) || !setwatermaterial(position, true)) return false;
+        fluidcells.access(position, fluidcell(min(level, int(WATER_MAX_LEVEL)), source, falling));
+        schedulewater(position, delay);
+        return true;
+    }
+
+    static bool removewatersource(const ivec &position)
+    {
+        fluidcell *cell = fluidcells.access(position);
+        if(!cell || !cell->source) return false;
+        cell->source = false;
+        fluidcells.remove(position);
+        return setwatermaterial(position, false);
+    }
+
+    static void waterterrainchanged(const ivec &position)
+    {
+        static const ivec offsets[] =
+        {
+            ivec(0, 0, 0), ivec(-WATER_BLOCK_SIZE, 0, 0), ivec(WATER_BLOCK_SIZE, 0, 0),
+            ivec(0, -WATER_BLOCK_SIZE, 0), ivec(0, WATER_BLOCK_SIZE, 0),
+            ivec(0, 0, -WATER_BLOCK_SIZE), ivec(0, 0, WATER_BLOCK_SIZE)
+        };
+        loopi(7)
+        {
+            const ivec neighbor = ivec(position).add(offsets[i]);
+            fluidcell *cell = fluidcells.access(neighbor);
+            if(!cell) continue;
+            if(neighbor == position && !wateraccepts(neighbor))
+            {
+                fluidcells.remove(neighbor);
+                setwatermaterial(neighbor, false);
+                continue;
+            }
+            schedulewater(neighbor, 0);
+        }
+    }
+
+    static int waterlevel(const ivec &position)
+    {
+        fluidcell *cell = fluidcells.access(position);
+        if(cell) return cell->source ? 0 : cell->level;
+        return watermaterial(position) ? 0 : WATER_MAX_LEVEL + 1;
+    }
+
+    static bool watersupported(const ivec &position)
+    {
+        ivec below = position;
+        below.z -= WATER_BLOCK_SIZE;
+        if(below.z < 0) return true;
+        selinfo sel;
+        waterselection(sel, below);
+        if(!sel.validate() || !worldselectionready(sel)) return false;
+        return worldcellsolid(sel.o);
+    }
+
+    static int waterdropcost(const ivec &position, const ivec &direction)
+    {
+        ivec cursor = position;
+        loopi(WATER_DROP_SEARCH)
+        {
+            cursor.add(direction);
+            if(!wateraccepts(cursor)) return WATER_DROP_SEARCH + 1;
+            ivec below = cursor;
+            below.z -= WATER_BLOCK_SIZE;
+            if(below.z >= 0 && wateraccepts(below)) return i;
+        }
+        return WATER_DROP_SEARCH + 1;
+    }
+
+    static void updatewatercell(const ivec &position)
+    {
+        fluidcell *cell = fluidcells.access(position);
+        if(!cell || !watermaterial(position)) return;
+
+        static const ivec directions[] =
+        {
+            ivec(-WATER_BLOCK_SIZE, 0, 0), ivec(WATER_BLOCK_SIZE, 0, 0),
+            ivec(0, -WATER_BLOCK_SIZE, 0), ivec(0, WATER_BLOCK_SIZE, 0)
+        };
+        ivec below = position;
+        below.z -= WATER_BLOCK_SIZE;
+        if(below.z >= 0 && wateraccepts(below))
+        {
+            addwatercell(below, cell->level, false, true);
+            return;
+        }
+
+        if(!cell->source && watersupported(position))
+        {
+            int sources = 0;
+            loopi(4)
+            {
+                fluidcell *neighbor = fluidcells.access(ivec(position).add(directions[i]));
+                if(neighbor && neighbor->source) ++sources;
+            }
+            if(sources >= 2)
+            {
+                cell->source = true;
+                cell->falling = false;
+                cell->level = 0;
+            }
+        }
+
+        const int nextlevel = cell->source ? 1 : cell->falling ? 1 : int(cell->level) + 1;
+        if(nextlevel > WATER_MAX_LEVEL) return;
+        int costs[4], best = WATER_DROP_SEARCH + 1;
+        loopi(4)
+        {
+            const ivec neighbor = ivec(position).add(directions[i]);
+            costs[i] = wateraccepts(neighbor) ? waterdropcost(position, directions[i]) : WATER_DROP_SEARCH + 1;
+            best = min(best, costs[i]);
+        }
+        loopi(4)
+        {
+            const ivec neighbor = ivec(position).add(directions[i]);
+            if(!wateraccepts(neighbor) || (best <= WATER_DROP_SEARCH && costs[i] != best)) continue;
+            addwatercell(neighbor, nextlevel, false, false);
+        }
+    }
+
+    static bool waterinsimulationrange(const ivec &position)
+    {
+        if(!player1) return false;
+        vec focus = player1->o;
+        worldpositiontoabsolute(focus);
+        const float range = simulationmaxdist * WATER_BLOCK_SIZE;
+        return vec(position).add(WATER_BLOCK_SIZE * 0.5f).squaredist(focus) <= range * range;
+    }
+
+    static void updatewaterphysics()
+    {
+        int processed = 0, inspected = 0;
+        const int inspectionlimit = min(fluidupdates.length(), max(fluidupdatespertick * 4, 256));
+        while(fluidupdates.length() && processed < fluidupdatespertick && inspected < inspectionlimit)
+        {
+            if(fluidupdatecursor >= fluidupdates.length()) fluidupdatecursor = 0;
+            const ivec position = fluidupdates[fluidupdatecursor];
+            fluidcell *cell = fluidcells.access(position);
+            if(!cell)
+            {
+                fluidupdates.removeunordered(fluidupdatecursor);
+                continue;
+            }
+            if(cell->update > totalmillis || !waterinsimulationrange(position))
+            {
+                ++fluidupdatecursor;
+                ++inspected;
+                continue;
+            }
+            cell->queued = false;
+            fluidupdates.removeunordered(fluidupdatecursor);
+            updatewatercell(position);
+            ++processed;
+            ++inspected;
+        }
+
+        if(!player1 || !player1->inwater) return;
+        vec absolute = player1->o;
+        worldpositiontoabsolute(absolute);
+        ivec cell = ivec(absolute).mask(~(WATER_BLOCK_SIZE - 1));
+        const int west = waterlevel(ivec(cell).add(ivec(-WATER_BLOCK_SIZE, 0, 0))),
+                  east = waterlevel(ivec(cell).add(ivec(WATER_BLOCK_SIZE, 0, 0))),
+                  south = waterlevel(ivec(cell).add(ivec(0, -WATER_BLOCK_SIZE, 0))),
+                  north = waterlevel(ivec(cell).add(ivec(0, WATER_BLOCK_SIZE, 0)));
+        vec flow(float(west - east), float(south - north), 0);
+        fluidcell *current = fluidcells.access(cell);
+        if(current && current->falling) flow.z = -2;
+        if(!flow.iszero())
+        {
+            flow.normalize().mul(min(curtime / 1000.0f, 0.05f) * 12.0f * waterflowspeed);
+            player1->vel.add(flow);
+        }
+        player1->falling.z = max(player1->falling.z, -20.0f);
+    }
+
     struct predictedworldaction
     {
         uint requestid;
@@ -104,13 +399,23 @@ namespace game
                 worldactionselection(placed, placedorigin, orient);
                 mpeditface(-1, 1, sel, false);
                 mpedittex(getworldcubeslot(item), 1, placed, false);
+                waterterrainchanged(placedorigin);
                 return true;
             }
             case WORLD_ACTION_PLACE_SCATTER:
                 return item >= numworldcubes() &&
                        editworldscatter(item - numworldcubes(), target, orient, true);
+            case WORLD_ACTION_PLACE_ITEM:
+            {
+                const int itemoffset = numworldcubes() + numworldscatters();
+                if(item < itemoffset || item >= itemoffset + numworlditems()) return false;
+                const ivec placedorigin = worldactionplacecell(target, orient);
+                fluidcell *existing = fluidcells.access(placedorigin);
+                return (existing && existing->source) || addwatercell(placedorigin, 0, true, false);
+            }
             case WORLD_ACTION_BREAK_CUBE_START:
                 mpdelcube(sel, false);
+                waterterrainchanged(target);
                 return true;
             case WORLD_ACTION_BREAK_SCATTER_START:
                 return item >= numworldcubes() &&
@@ -136,6 +441,11 @@ namespace game
             worldactionselection(sel, prediction.target, prediction.orient);
             worldselectiontolocal(sel);
             editworldscatter(prediction.item - numworldcubes(), sel.o, prediction.orient, false);
+        }
+        else if(prediction.action == WORLD_ACTION_PLACE_ITEM)
+        {
+            ivec target = worldactionplacecell(prediction.target, prediction.orient);
+            removewatersource(target);
         }
         else if(prediction.action == WORLD_ACTION_BREAK_CUBE_START)
         {
@@ -526,6 +836,7 @@ namespace game
             updateworldchunks();
         }
 #ifndef STANDALONE
+        updatewaterphysics();
         updatesurvivalbreaking();
 #endif
         gets2c();
@@ -684,6 +995,9 @@ namespace game
 
     void startmap(const char *name)
     {
+#ifndef STANDALONE
+        resetwaterphysics();
+#endif
         copystring(clientmap, name ? name : "");
 #ifndef STANDALONE
         if(pendingnetworkworld) environment::synctime(pendingnetworktime, pendingnetworkfrozen);
@@ -786,7 +1100,7 @@ namespace game
     {
         const int slot = clampcreativehotbarslot(),
                   item = m_survival ? survivalitems[slot] : creativehotbar[slot],
-                  count = numworldcubes() + numworldscatters();
+                  count = numworldcubes() + numworldscatters() + numworlditems();
         if(m_survival && survivalcounts[slot] <= 0) return -1;
         return item >= 0 && item < count ? item : -1;
     }
@@ -900,7 +1214,7 @@ namespace game
 
     static bool addsurvivalitem(int item)
     {
-        if(item < 0 || item >= numworldcubes() + numworldscatters()) return false;
+        if(item < 0 || item >= numworldcubes() + numworldscatters() + numworlditems()) return false;
         loopi(SURVIVAL_USABLE_SLOTS)
         {
             if(survivalitems[i] != item || survivalcounts[i] >= SURVIVAL_STACK_SIZE) continue;
@@ -1061,8 +1375,24 @@ namespace game
         if(!creativehit(hit)) return;
 
         const int selected = selectedcreativeblock(),
-                  cubecount = numworldcubes();
+                  cubecount = numworldcubes(),
+                  scattercount = numworldscatters(),
+                  itemoffset = cubecount + scattercount;
         if(selected < 0) return;
+        if(selected >= itemoffset)
+        {
+            ivec target = creativeplacecell(hit);
+            if(!insideworld(target) || !insideworld(ivec(target).add(CREATIVE_GRID - 1))) return;
+            selinfo absolute;
+            worldactionselection(absolute, target, hit.orient);
+            worldselectiontoabsolute(absolute);
+            if(!addwatercell(absolute.o, 0, true, false)) return;
+            if(waitforserveredit())
+                predictworldaction(WORLD_ACTION_PLACE_ITEM, hit.o, hit.orient, selected, clampcreativehotbarslot());
+            player1->renderplacemillis = lastmillis;
+            player1->renderplacetoggle = !player1->renderplacetoggle;
+            return;
+        }
         if(selected >= cubecount)
         {
             const int type = selected - cubecount;
@@ -1100,6 +1430,9 @@ namespace game
         {
             mpeditface(-1, 1, hit, true);
             mpedittex(getworldcubeslot(selected), 1, placed, true);
+            selinfo absolute = placed;
+            worldselectiontoabsolute(absolute);
+            waterterrainchanged(absolute.o);
         }
         else
         {
@@ -1135,7 +1468,13 @@ namespace game
             }
             return;
         }
-        if(!waitforserveredit()) mpdelcube(target.cube, true);
+        if(!waitforserveredit())
+        {
+            mpdelcube(target.cube, true);
+            selinfo absolute = target.cube;
+            worldselectiontoabsolute(absolute);
+            waterterrainchanged(absolute.o);
+        }
         else
         {
             const int item = getworldcubeindexat(ivec(target.cube.o).add(target.cube.grid / 2), target.cube.orient);
@@ -1388,7 +1727,7 @@ namespace game
     ICOMMAND(creativeplaceblock, "D", (int *down), { if(*down) creativeplace(); });
     ICOMMAND(creativeselect, "i", (int *index),
     {
-        int count = numworldcubes() + numworldscatters();
+        int count = numworldcubes() + numworldscatters() + numworlditems();
         creativehotbar[clampcreativehotbarslot()] = *index >= 0 && *index < count ? *index : -1;
     });
     ICOMMAND(creativecycle, "i", (int *dir),
@@ -1406,7 +1745,7 @@ namespace game
     });
     ICOMMAND(creativehotbarassign, "ii", (int *slot, int *item),
     {
-        const int count = numworldcubes() + numworldscatters();
+        const int count = numworldcubes() + numworldscatters() + numworlditems();
         if(*slot >= 0 && *slot < CREATIVE_HOTBAR_SLOTS)
             creativehotbar[*slot] = *item >= 0 && *item < count ? *item : -1;
     });
@@ -1443,16 +1782,32 @@ namespace game
                 addmsg(N_INVENTORYACTION, "ri4", int(newworldrequestid()), INVENTORY_ACTION_SWAP, *from, *to);
         }
     });
-    ICOMMAND(creativeblockcount, "", (), intret(numworldcubes() + numworldscatters()));
+    ICOMMAND(creativeblockcount, "", (), intret(numworldcubes() + numworldscatters() + numworlditems()));
     ICOMMAND(creativecubecount, "", (), intret(numworldcubes()));
     ICOMMAND(creativeblockslot, "i", (int *index), intret(*index < numworldcubes() ? getworldcubeslot(*index) : getworldcubeslot(0)));
     ICOMMAND(creativeblockname, "i", (int *index),
     {
-        if(*index < numworldcubes()) result(getworldcubename(*index));
-        else result(getworldscattername(*index - numworldcubes()));
+        const int cubecount = numworldcubes();
+        const int scattercount = numworldscatters();
+        if(*index < cubecount) result(getworldcubename(*index));
+        else if(*index < cubecount + scattercount) result(getworldscattername(*index - cubecount));
+        else result(getworlditemname(*index - cubecount - scattercount));
     });
-    ICOMMAND(creativeblockmodel, "i", (int *index), result(getworldscattermodel(*index - numworldcubes())));
-    ICOMMAND(creativeblockicon, "i", (int *index), result(*index < numworldcubes() ? getworldcubetexture(*index) : getworldscattericon(*index - numworldcubes())));
+    ICOMMAND(creativeblockmodel, "i", (int *index),
+    {
+        const int cubecount = numworldcubes();
+        const int scattercount = numworldscatters();
+        result(*index < cubecount + scattercount ? getworldscattermodel(*index - cubecount)
+                                                 : getworlditemmodel(*index - cubecount - scattercount));
+    });
+    ICOMMAND(creativeblockicon, "i", (int *index),
+    {
+        const int cubecount = numworldcubes();
+        const int scattercount = numworldscatters();
+        result(*index < cubecount ? getworldcubetexture(*index)
+               : *index < cubecount + scattercount ? getworldscattericon(*index - cubecount)
+                                                   : getworlditemicon(*index - cubecount - scattercount));
+    });
 
     void gameplayhud(int w, int h) {}
     bool canjump() { return true; }

@@ -56,7 +56,7 @@ extern bool  raycubelos(const vec &o, const vec &dest, vec &hitpos);
 extern int thirdperson;
 extern bool isthirdperson();
 
-extern bool settexture(const char *name, int clamp = 0);
+extern bool settexture(const char *name, int clamp = 0, bool unfiltered = false);
 
 // octaedit
 
@@ -138,6 +138,13 @@ extern const char *getworldscattername(int index);
 extern const char *getworldscattermodel(int index);
 extern const char *getworldscattericon(int index);
 extern bool isworldtorch(int index);
+extern int numworlditems();
+extern const char *getworlditemname(int index);
+extern const char *getworlditemmodel(int index);
+extern const char *getworlditemicon(int index);
+extern bool worldcellacceptswater(const ivec &position);
+extern bool worldcellhaswater(const ivec &position);
+extern bool worldcellsolid(const ivec &position);
 extern bool worldtorchincell(const ivec &cell);
 extern void addworldtorchlights();
 extern void addworldtorchparticles();

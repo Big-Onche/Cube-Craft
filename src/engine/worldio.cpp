@@ -242,8 +242,19 @@ struct worldscatterdefinition
     }
 };
 
+struct worlditemdefinition
+{
+    string name, model, icon;
+
+    worlditemdefinition()
+    {
+        name[0] = model[0] = icon[0] = '\0';
+    }
+};
+
 static vector<worldcubedefinition *> worldcubedefinitions;
 static vector<worldscatterdefinition *> worldscatterdefinitions;
+static vector<worlditemdefinition *> worlditemdefinitions;
 static int worldgrassscatter = -1, worldrosescatter = -1,
            worldtulipscatter = -1, worlddandelionscatter = -1;
 static int worldgrasstexture = DEFAULT_GEOM, worldgrasssidetexture = DEFAULT_GEOM,
@@ -341,6 +352,51 @@ bool isworldtorch(int index)
 {
     return worldscatterdefinitions.inrange(index) && worldscatterdefinitions[index]->torch;
 }
+
+int numworlditems()
+{
+    return worlditemdefinitions.length();
+}
+
+const char *getworlditemname(int index)
+{
+    return worlditemdefinitions.inrange(index) ? worlditemdefinitions[index]->name : "";
+}
+
+const char *getworlditemmodel(int index)
+{
+    return worlditemdefinitions.inrange(index) ? worlditemdefinitions[index]->model : "";
+}
+
+const char *getworlditemicon(int index)
+{
+    static string iconpath;
+    if(!worlditemdefinitions.inrange(index)) return "";
+    const worlditemdefinition &type = *worlditemdefinitions[index];
+    if(type.icon[0]) return type.icon;
+    formatstring(iconpath, "media/model/%s/diffuse.png", type.model);
+    return iconpath;
+}
+
+bool worldcellacceptswater(const ivec &position)
+{
+    const cube &c = lookupcube(ivec(position).add(WORLD_BLOCK_SIZE / 2));
+    const int material = c.material&MATF_VOLUME;
+    return isempty(c) && (material == MAT_AIR || material == MAT_WATER);
+}
+
+bool worldcellhaswater(const ivec &position)
+{
+    const cube &c = lookupcube(ivec(position).add(WORLD_BLOCK_SIZE / 2));
+    return (c.material&MATF_VOLUME) == MAT_WATER;
+}
+
+bool worldcellsolid(const ivec &position)
+{
+    const cube &c = lookupcube(ivec(position).add(WORLD_BLOCK_SIZE / 2));
+    return !isempty(c);
+}
+
 VARFP(leavesalpha, 0, 1, 1, updateleavesalpha());
 
 static bool isworldleaftexture(const cube &c)
@@ -373,10 +429,17 @@ static worldscatterdefinition *findworldscatter(const char *name)
     return NULL;
 }
 
+static worlditemdefinition *findworlditem(const char *name)
+{
+    loopv(worlditemdefinitions) if(!cubecasecmp(worlditemdefinitions[i]->name, name)) return worlditemdefinitions[i];
+    return NULL;
+}
+
 void worldreset()
 {
     worldcubedefinitions.deletecontents();
     worldscatterdefinitions.deletecontents();
+    worlditemdefinitions.deletecontents();
     worldgrassscatter = worldrosescatter = worldtulipscatter = worlddandelionscatter = -1;
     worldgrasstexture = worldgrasssidetexture = worldgrassbottomtexture = worlddirttexture =
         worldstonetexture = worldsandtexture = worldsnowtexture = worldwoodtexture =
@@ -433,6 +496,25 @@ ICOMMAND(worldscatter, "ss", (char *name, char *model),
 ICOMMAND(worldtorch, "ss", (char *name, char *model),
 {
     defineworldscatter(name, model, true);
+});
+
+static void defineworlditem(const char *name, const char *model)
+{
+    if(!name[0] || !model[0])
+    {
+        conoutf(CON_ERROR, "worlditem requires a name and model path");
+        return;
+    }
+    worlditemdefinition *type = findworlditem(name);
+    if(!type) type = worlditemdefinitions.add(new worlditemdefinition);
+    copystring(type->name, name);
+    copystring(type->model, model);
+    type->icon[0] = '\0';
+}
+
+ICOMMAND(worlditem, "ss", (char *name, char *model),
+{
+    defineworlditem(name, model);
 });
 
 static int loadworldtextureslot(const char *path, float texsize, bool alpha)
@@ -547,12 +629,20 @@ static bool loadworlddefinitions()
             type.mapmodel = -1;
         }
     }
+    loopv(worlditemdefinitions)
+    {
+        worlditemdefinition &type = *worlditemdefinitions[i];
+        defformatstring(icon, "media/model/%s/diffuse.png", type.model);
+        copystring(type.icon, icon);
+        if(!loadmodel(type.model, -1, true)) conoutf(CON_ERROR, "could not load world item model %s", type.model);
+    }
     worldgrassscatter = worldscatterdefinitions.find(findworldscatter("Grass"));
     worldrosescatter = worldscatterdefinitions.find(findworldscatter("Rose"));
     worldtulipscatter = worldscatterdefinitions.find(findworldscatter("Tulip"));
     worlddandelionscatter = worldscatterdefinitions.find(findworldscatter("Dandelion"));
     setworldleavesalpha(worldroot, leavesalpha != 0);
-    conoutf(CON_DEBUG, "loaded %d world cube and %d world scatter definitions", worldcubedefinitions.length(), worldscatterdefinitions.length());
+    conoutf(CON_DEBUG, "loaded %d world cube, %d world scatter, and %d world item definitions", worldcubedefinitions.length(),
+            worldscatterdefinitions.length(), worlditemdefinitions.length());
     return true;
 }
 
