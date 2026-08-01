@@ -1396,7 +1396,8 @@ namespace server
         if(action != WORLD_ACTION_PLACE_ITEM && playeroccupies(occupied)) return rejectaction(ci, requestid, "");
         serverworldaction *state = findworldaction(occupied, action);
         if(state && (state->action == WORLD_ACTION_PLACE_CUBE || state->action == WORLD_ACTION_PLACE_SCATTER ||
-                     state->action == WORLD_ACTION_PLACE_ITEM))
+                     state->action == WORLD_ACTION_PLACE_ITEM) &&
+           !(action == WORLD_ACTION_PLACE_CUBE && state->action == WORLD_ACTION_PLACE_ITEM))
         {
             rejectaction(ci, requestid, "placement target is already occupied");
             sendworldcorrection(ci, *state);

@@ -2884,6 +2884,7 @@ void mpeditmat(int matid, int filter, selinfo &sel, bool local)
     if(local) game::edittrigger(sel, EDIT_MAT, matid, filter);
     if(local && game::waitforserveredit()) return;
 
+    const int requestedmaterial = matid;
     beginworldedit(WORLD_EDIT_SET_MATERIAL, sel, matid, filter);
     ushort filtermat = 0, filtermask = 0, matmask;
     int filtergeom = 0;
@@ -2908,6 +2909,8 @@ void mpeditmat(int matid, int filter, selinfo &sel, bool local)
     }
     loopselxyz(setmat(c, matid, matmask, filtermat, filtermask, filtergeom));
     commitworldedit();
+    if(requestedmaterial < 0 || requestedmaterial == MAT_AIR || (requestedmaterial&MATF_VOLUME) == MAT_WATER)
+        game::watermaterialchanged(sel, requestedmaterial);
 }
 
 void editmat(char *name, char *filtername)
