@@ -20,7 +20,8 @@ struct fluidcell
 
     fluidcell() : level(0), sourcekind(WATER_SOURCE_NONE), falling(false), queued(false), update(0), origin(0, 0, 0) {}
     fluidcell(int level, int sourcekind, bool falling, const ivec &origin)
-        : level(uchar(level)), sourcekind(uchar(sourcekind)), falling(falling), queued(false), update(0), origin(origin) {}
+        : level(uchar(falling ? 0 : min(level, int(WATER_MAX_LEVEL)))), sourcekind(uchar(sourcekind)),
+          falling(falling), queued(false), update(0), origin(origin) {}
 
     bool source() const { return sourcekind != WATER_SOURCE_NONE; }
 };
@@ -58,6 +59,11 @@ static int watermaterialsource(int material)
 static bool waterpositionless(const ivec &a, const ivec &b)
 {
     return a.x < b.x || (a.x == b.x && (a.y < b.y || (a.y == b.y && a.z < b.z)));
+}
+
+static int watercelllevel(const fluidcell &cell)
+{
+    return cell.source() || cell.falling ? 0 : cell.level;
 }
 
 void resetwatersimulation()
@@ -118,7 +124,7 @@ int getwatercelllevel(const ivec &position, bool &falling)
         schedulewater(absolute.o);
     }
     falling = cell->falling;
-    return cell->source() ? 0 : cell->level;
+    return watercelllevel(*cell);
 }
 
 void watermaterialloaded(const ivec &position, int material)
@@ -212,6 +218,7 @@ static bool addwatercell(const ivec &position, int level, int sourcekind, bool f
 {
     const ivec origin = sourcekind != WATER_SOURCE_NONE || !floworigin ? position : *floworigin;
     fluidcell *existing = fluidcells.access(position);
+    const int storedlevel = falling ? 0 : min(level, int(WATER_MAX_LEVEL));
     if(existing)
     {
         bool changed = sourcekind != WATER_SOURCE_NONE && !existing->source();
@@ -223,11 +230,11 @@ static bool addwatercell(const ivec &position, int level, int sourcekind, bool f
             existing->origin = position;
         }
         else if(!existing->source() &&
-                (level < existing->level ||
-                 (level == existing->level && (falling < existing->falling ||
+                (storedlevel < existing->level ||
+                 (storedlevel == existing->level && (falling < existing->falling ||
                   (falling == existing->falling && waterpositionless(origin, existing->origin))))))
         {
-            existing->level = uchar(min(level, int(WATER_MAX_LEVEL)));
+            existing->level = uchar(storedlevel);
             existing->falling = falling;
             existing->origin = origin;
             changed = true;
@@ -238,7 +245,7 @@ static bool addwatercell(const ivec &position, int level, int sourcekind, bool f
     if(!wateraccepts(position)) return false;
     const bool materialexists = watermaterial(position);
     if(materialexists && sourcekind == WATER_SOURCE_NONE) return false;
-    fluidcells.access(position, fluidcell(min(level, int(WATER_MAX_LEVEL)), sourcekind, falling, origin));
+    fluidcells.access(position, fluidcell(storedlevel, sourcekind, falling, origin));
     if((!materialexists || sourcekind != WATER_SOURCE_NONE) &&
        !setwatermaterial(position, true, sourcekind != WATER_SOURCE_NONE, sourcekind))
     {
@@ -368,7 +375,7 @@ static bool watercanflowinto(const ivec &position)
 static int waterlevel(const ivec &position)
 {
     fluidcell *cell = fluidcells.access(position);
-    if(cell) return cell->source() ? 0 : cell->level;
+    if(cell) return watercelllevel(*cell);
     return watermaterial(position) ? 0 : WATER_MAX_LEVEL + 1;
 }
 
@@ -517,7 +524,9 @@ static void updatewatercell(const ivec &position)
         fluidcell *abovefluid = fluidcells.access(above);
         if(abovefluid)
         {
-            desiredlevel = abovefluid->source() ? 0 : abovefluid->level;
+            // Any water directly below another fluid cell is a full falling column,
+            // regardless of the level of the horizontal flow feeding it.
+            desiredlevel = 0;
             desiredfalling = true;
             desiredorigin = abovefluid->origin;
         }
@@ -527,7 +536,7 @@ static void updatewatercell(const ivec &position)
             fluidcell *neighbor = fluidcells.access(neighborposition);
             // Falling water only feeds sideways from the cell where the waterfall lands.
             if(!neighbor || (neighbor->falling && !watersupported(neighborposition))) continue;
-            const int neighborlevel = neighbor->source() ? 0 : neighbor->level;
+            const int neighborlevel = watercelllevel(*neighbor);
             const int candidatelevel = neighborlevel + 1;
             if(candidatelevel < desiredlevel ||
                (candidatelevel == desiredlevel && (desiredfalling || waterpositionless(neighbor->origin, desiredorigin))))
@@ -556,7 +565,7 @@ static void updatewatercell(const ivec &position)
     if(below.z >= 0 && watercanflowinto(below))
     {
         const ivec origin = cell->origin;
-        addwatercell(below, cell->level, WATER_SOURCE_NONE, true, -1, true, &origin);
+        addwatercell(below, 0, WATER_SOURCE_NONE, true, -1, true, &origin);
         return;
     }
 
