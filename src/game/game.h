@@ -115,7 +115,7 @@ static const int msgsizes[] =
     N_DELCUBE, 14, N_CALCLIGHT, 1, N_REMIP, 1, N_EDITVSLOT, 16,
     N_UNDO, 0, N_REDO, 0, N_NEWMAP, 2, N_GETMAP, 1, N_SENDMAP, 0,
     N_CLIPBOARD, 0, N_EDITVAR, 0, N_EDITSCATTER, 16, N_EDITAUTHOR, 4,
-    N_WORLDSTATE, 9, N_WORLDREADY, 2, N_WORLDSYNC, 2, N_WORLDTIME, 3,
+    N_WORLDSTATE, 12, N_WORLDREADY, 2, N_WORLDSYNC, 2, N_WORLDTIME, 3,
     N_SETPRIVILEGE, 3, N_SETMASTER, 0, N_SERVERCOMMAND, 0,
     N_SERVERIDENTITY, 0, N_IDENTITYLOGIN, 0, N_IDENTITYREGISTER, 0, N_IDENTITYCHALLENGE, 0,
     N_IDENTITYRESPONSE, 0, N_IDENTITYSUCCESS, 0, N_IDENTITYFAILURE, 0, N_IDENTITYREVOKED, 0,
@@ -127,7 +127,7 @@ static const int msgsizes[] =
 #define TESSERACT_SERVER_PORT 42000
 #define TESSERACT_LANINFO_PORT 41998
 #define TESSERACT_MASTER_PORT 41999
-#define PROTOCOL_VERSION 11
+#define PROTOCOL_VERSION 12
 
 struct gameent : dynent
 {
@@ -202,7 +202,7 @@ namespace game
     extern float playerarmactionpitch(const gameent *d);
     extern float creativearmwave(int elapsed);
     extern int selectedcreativeblock();
-    extern void receiveserversettings(int breakmillis, int scatterbreakmillis);
+    extern void receiveserversettings(int breakmillis, int scatterbreakmillis, int waterupdates, int waterdistance, int waterspeed);
     extern void receiveinventory(const int *items, const int *counts, int slots, int selected);
     extern void receiveactionresult(uint requestid, int result, const char *reason);
     extern void receivebreakstate(int actor, uint requestid, int phase, int action, const ivec &target, int orient, int stage);

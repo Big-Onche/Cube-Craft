@@ -588,8 +588,9 @@ namespace game
                 pendingnetworkreset = getint(p) != 0;
                 gamemode = getint(p);
                 if(!m_valid(gamemode) || (!m_creative && !m_survival)) gamemode = STARTGAMEMODE;
-                const int breakmillis = getint(p), scatterbreakmillis = getint(p);
-                receiveserversettings(breakmillis, scatterbreakmillis);
+                const int breakmillis = getint(p), scatterbreakmillis = getint(p),
+                          waterupdates = getint(p), waterdistance = getint(p), waterspeed = getint(p);
+                receiveserversettings(breakmillis, scatterbreakmillis, waterupdates, waterdistance, waterspeed);
                 pendingnetworkrestoreposition = pendingnetworkreset && player1;
                 if(pendingnetworkrestoreposition)
                 {

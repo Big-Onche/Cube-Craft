@@ -51,6 +51,9 @@ namespace server
     VAR(destructionratelimit, 1, 12, 100);
     VAR(survivalbreakmillis, 100, 5000, 60000);
     VAR(survivalscatterbreakmillis, 50, 250, 60000);
+    VAR(serverwaterupdatespertick, 1, 1024, 16384);
+    VAR(serverwatersimulationmaxdist, 1, 128, 1024);
+    FVAR(serverwaterflowspeed, 0.1f, 4.0f, 20.0f);
     VAR(breaktimetolerance, 0, 125, 2000);
     VAR(breakcancelgrace, 0, 125, 2000);
     VAR(servercubetypes, 1, 9, 0xFFFF);
@@ -943,8 +946,10 @@ namespace server
     static void sendworldstate(clientinfo &ci, bool reset)
     {
         ci.worldready = false;
-        sendf(ci.clientnum, 1, "ri9", N_WORLDSTATE, serverworldseed, int(worldeditrevision), worldclockmillis,
-              worldtimefrozen ? 1 : 0, reset ? 1 : 0, gamemode, survivalbreakmillis, survivalscatterbreakmillis);
+        sendf(ci.clientnum, 1, "ri12", N_WORLDSTATE, serverworldseed, int(worldeditrevision), worldclockmillis,
+              worldtimefrozen ? 1 : 0, reset ? 1 : 0, gamemode, survivalbreakmillis, survivalscatterbreakmillis,
+              serverwaterupdatespertick, serverwatersimulationmaxdist,
+              clamp(int(serverwaterflowspeed * 1000.0f + 0.5f), 100, 20000));
     }
 
     static void replayworld(clientinfo &ci)

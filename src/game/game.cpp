@@ -34,10 +34,11 @@ namespace game
         uchar sourcekind;
         bool falling, queued;
         int update;
+        ivec origin;
 
-        fluidcell() : level(0), sourcekind(WATER_SOURCE_NONE), falling(false), queued(false), update(0) {}
-        fluidcell(int level, int sourcekind, bool falling)
-            : level(uchar(level)), sourcekind(uchar(sourcekind)), falling(falling), queued(false), update(0) {}
+        fluidcell() : level(0), sourcekind(WATER_SOURCE_NONE), falling(false), queued(false), update(0), origin(0, 0, 0) {}
+        fluidcell(int level, int sourcekind, bool falling, const ivec &origin)
+            : level(uchar(level)), sourcekind(uchar(sourcekind)), falling(falling), queued(false), update(0), origin(origin) {}
 
         bool source() const { return sourcekind != WATER_SOURCE_NONE; }
     };
@@ -46,9 +47,11 @@ namespace game
     static vector<ivec> fluidupdates;
     static int fluidupdatecursor = 0;
     static bool changingwatermaterial = false;
-    VARP(fluidupdatespertick, 1, 2048, 16384);
-    VARP(simulationmaxdist, 1, 12, 64);
-    FVARP(waterflowspeed, 0.1f, 1.0f, 20.0f);
+    VARP(fluidupdatespertick, 1, 1024, 16384);
+    VARP(simulationmaxdist, 1, 128, 1024);
+    FVARP(waterflowspeed, 0.1f, 4.0f, 20.0f);
+    static bool authoritativewatersettings = false;
+    static int authoritativewaterupdates = 1024, authoritativewaterdistance = 128, authoritativewaterspeed = 4000;
 
     static void schedulewater(const ivec &position, int delay = -1);
 
@@ -68,6 +71,11 @@ namespace game
         if(material&MAT_WATER_SOURCE_MANUAL) return WATER_SOURCE_MANUAL;
         if(material&MAT_WATER_SOURCE_NATURAL_ACTIVE) return WATER_SOURCE_NATURAL_ACTIVE;
         return WATER_SOURCE_NONE;
+    }
+
+    static bool waterpositionless(const ivec &a, const ivec &b)
+    {
+        return a.x < b.x || (a.x == b.x && (a.y < b.y || (a.y == b.y && a.z < b.z)));
     }
 
     static void resetwaterphysics()
@@ -111,7 +119,7 @@ namespace game
                 falling = false;
                 return -1;
             }
-            cell = &fluidcells.access(absolute.o, fluidcell(0, sourcekind, false));
+            cell = &fluidcells.access(absolute.o, fluidcell(0, sourcekind, false, absolute.o));
             schedulewater(absolute.o);
         }
         falling = cell->falling;
@@ -127,12 +135,13 @@ namespace game
         worldselectiontoabsolute(absolute);
         fluidcell *cell = fluidcells.access(absolute.o);
         if(!cell)
-            cell = &fluidcells.access(absolute.o, fluidcell(0, sourcekind, false));
+            cell = &fluidcells.access(absolute.o, fluidcell(0, sourcekind, false, absolute.o));
         else
         {
             cell->level = 0;
             cell->sourcekind = uchar(sourcekind);
             cell->falling = false;
+            cell->origin = absolute.o;
         }
         schedulewater(absolute.o);
     }
@@ -180,7 +189,8 @@ namespace game
 
     static int waterstepmillis()
     {
-        return max(int(1000.0f / max(waterflowspeed, 0.1f)), 1);
+        const int speed = authoritativewatersettings ? authoritativewaterspeed : clamp(int(waterflowspeed * 1000.0f + 0.5f), 100, 20000);
+        return max(1000000 / speed, 1);
     }
 
     static void schedulewater(const ivec &position, int delay)
@@ -198,8 +208,10 @@ namespace game
         fluidupdates.add(position);
     }
 
-    static bool addwatercell(const ivec &position, int level, int sourcekind, bool falling, int delay = -1, bool refresh = true)
+    static bool addwatercell(const ivec &position, int level, int sourcekind, bool falling, int delay = -1, bool refresh = true,
+                             const ivec *floworigin = NULL)
     {
+        const ivec origin = sourcekind != WATER_SOURCE_NONE || !floworigin ? position : *floworigin;
         fluidcell *existing = fluidcells.access(position);
         if(existing)
         {
@@ -209,11 +221,16 @@ namespace game
                 existing->sourcekind = uchar(sourcekind);
                 existing->falling = false;
                 existing->level = 0;
+                existing->origin = position;
             }
-            else if(!existing->source() && (level < existing->level || falling != existing->falling))
+            else if(!existing->source() &&
+                    (level < existing->level ||
+                     (level == existing->level && (falling < existing->falling ||
+                      (falling == existing->falling && waterpositionless(origin, existing->origin))))))
             {
                 existing->level = uchar(min(level, int(WATER_MAX_LEVEL)));
                 existing->falling = falling;
+                existing->origin = origin;
                 changed = true;
             }
             if(changed) schedulewater(position, delay);
@@ -222,7 +239,7 @@ namespace game
         if(!wateraccepts(position)) return false;
         const bool materialexists = watermaterial(position);
         if(materialexists && sourcekind == WATER_SOURCE_NONE) return false;
-        fluidcells.access(position, fluidcell(min(level, int(WATER_MAX_LEVEL)), sourcekind, falling));
+        fluidcells.access(position, fluidcell(min(level, int(WATER_MAX_LEVEL)), sourcekind, falling, origin));
         if((!materialexists || sourcekind != WATER_SOURCE_NONE) &&
            !setwatermaterial(position, true, sourcekind != WATER_SOURCE_NONE, sourcekind))
         {
@@ -396,6 +413,7 @@ namespace game
         {
             int desiredlevel = WATER_MAX_LEVEL + 1;
             bool desiredfalling = false;
+            ivec desiredorigin = cell->origin;
             ivec above = position;
             above.z += WATER_BLOCK_SIZE;
             fluidcell *abovefluid = fluidcells.access(above);
@@ -403,16 +421,20 @@ namespace game
             {
                 desiredlevel = abovefluid->source() ? 0 : abovefluid->level;
                 desiredfalling = true;
+                desiredorigin = abovefluid->origin;
             }
             loopi(4)
             {
                 fluidcell *neighbor = fluidcells.access(ivec(position).add(directions[i]));
                 if(!neighbor || neighbor->falling) continue;
                 const int neighborlevel = neighbor->source() ? 0 : neighbor->level;
-                if(neighborlevel + 1 < desiredlevel)
+                const int candidatelevel = neighborlevel + 1;
+                if(candidatelevel < desiredlevel ||
+                   (candidatelevel == desiredlevel && (desiredfalling || waterpositionless(neighbor->origin, desiredorigin))))
                 {
-                    desiredlevel = neighborlevel + 1;
+                    desiredlevel = candidatelevel;
                     desiredfalling = false;
+                    desiredorigin = neighbor->origin;
                 }
             }
             if(desiredlevel > WATER_MAX_LEVEL)
@@ -420,10 +442,11 @@ namespace game
                 removewatercell(position);
                 return;
             }
-            if(cell->level != desiredlevel || cell->falling != desiredfalling)
+            if(cell->level != desiredlevel || cell->falling != desiredfalling || cell->origin != desiredorigin)
             {
                 cell->level = uchar(desiredlevel);
                 cell->falling = desiredfalling;
+                cell->origin = desiredorigin;
                 schedulewaterneighbors(position);
             }
         }
@@ -432,7 +455,8 @@ namespace game
         below.z -= WATER_BLOCK_SIZE;
         if(below.z >= 0 && watercanflowinto(below))
         {
-            addwatercell(below, cell->level, WATER_SOURCE_NONE, true);
+            const ivec origin = cell->origin;
+            addwatercell(below, cell->level, WATER_SOURCE_NONE, true, -1, true, &origin);
             return;
         }
 
@@ -449,12 +473,14 @@ namespace game
                 cell->sourcekind = WATER_SOURCE_NATURAL_ACTIVE;
                 cell->falling = false;
                 cell->level = 0;
+                cell->origin = position;
                 setwatermaterial(position, true, true, WATER_SOURCE_NATURAL_ACTIVE);
             }
         }
 
         const int nextlevel = cell->source() ? 1 : cell->falling ? 1 : int(cell->level) + 1;
         if(nextlevel > WATER_MAX_LEVEL) return;
+        const ivec floworigin = cell->origin;
         int costs[4], best = WATER_DROP_SEARCH + 1;
         loopi(4)
         {
@@ -466,24 +492,26 @@ namespace game
         {
             const ivec neighbor = ivec(position).add(directions[i]);
             if(!watercanflowinto(neighbor) || (best <= WATER_DROP_SEARCH && costs[i] != best)) continue;
-            addwatercell(neighbor, nextlevel, WATER_SOURCE_NONE, false);
+            addwatercell(neighbor, nextlevel, WATER_SOURCE_NONE, false, -1, true, &floworigin);
         }
     }
 
-    static bool waterinsimulationrange(const ivec &position)
+    static bool waterinsimulationrange(const ivec &position, const fluidcell &cell)
     {
-        if(!player1) return false;
-        vec focus = player1->o;
-        worldpositiontoabsolute(focus);
-        const float range = simulationmaxdist * WATER_BLOCK_SIZE;
-        return vec(position).add(WATER_BLOCK_SIZE * 0.5f).squaredist(focus) <= range * range;
+        const int distance = authoritativewatersettings ? authoritativewaterdistance : simulationmaxdist;
+        const long long range = static_cast<long long>(distance) * WATER_BLOCK_SIZE,
+                        dx = position.x - cell.origin.x,
+                        dy = position.y - cell.origin.y,
+                        dz = position.z - cell.origin.z;
+        return dx * dx + dy * dy + dz * dz <= range * range;
     }
 
     static void updatewaterphysics()
     {
+        const int updatebudget = authoritativewatersettings ? authoritativewaterupdates : fluidupdatespertick;
         int processed = 0, inspected = 0;
-        const int inspectionlimit = min(fluidupdates.length(), max(fluidupdatespertick * 4, 256));
-        while(fluidupdates.length() && processed < fluidupdatespertick && inspected < inspectionlimit)
+        const int inspectionlimit = min(fluidupdates.length(), max(updatebudget * 4, 256));
+        while(fluidupdates.length() && processed < updatebudget && inspected < inspectionlimit)
         {
             if(fluidupdatecursor >= fluidupdates.length()) fluidupdatecursor = 0;
             const ivec position = fluidupdates[fluidupdatecursor];
@@ -493,7 +521,7 @@ namespace game
                 fluidupdates.removeunordered(fluidupdatecursor);
                 continue;
             }
-            if(cell->update > totalmillis || !waterinsimulationrange(position))
+            if(cell->update > totalmillis || !waterinsimulationrange(position, *cell))
             {
                 ++fluidupdatecursor;
                 ++inspected;
@@ -806,7 +834,8 @@ namespace game
         predictedworldactions.deletecontents();
         nextworldrequestid = 1;
         resetsurvivalinventory();
-        receiveserversettings(5000, 250);
+        receiveserversettings(5000, 250, 2048, 12, 1000);
+        authoritativewatersettings = false;
 #ifndef STANDALONE
         resetclientreceive();
 #endif
@@ -846,6 +875,7 @@ namespace game
 #endif
         connected = remote = false;
         localworldactive = true;
+        authoritativewatersettings = false;
 #ifndef STANDALONE
         resetclientreceive();
 #endif
@@ -1345,10 +1375,14 @@ namespace game
         creativehotbarslot = clamp(selected, 0, CREATIVE_HOTBAR_SLOTS - 1);
     }
 
-    void receiveserversettings(int breakmillis, int scatterbreakmillis)
+    void receiveserversettings(int breakmillis, int scatterbreakmillis, int waterupdates, int waterdistance, int waterspeed)
     {
         authoritativebreakmillis = clamp(breakmillis, 100, 60000);
         authoritativescatterbreakmillis = clamp(scatterbreakmillis, 50, 60000);
+        authoritativewaterupdates = clamp(waterupdates, 1, 16384);
+        authoritativewaterdistance = clamp(waterdistance, 1, 64);
+        authoritativewaterspeed = clamp(waterspeed, 100, 20000);
+        authoritativewatersettings = true;
     }
 
     void receiveactionresult(uint requestid, int result, const char *reason)
