@@ -458,6 +458,7 @@ extern void visiblecubes(bool cull = true);
 extern void setvfcP(const vec &bbmin = vec(-1, -1, -1), const vec &bbmax = vec(1, 1, 1));
 extern void savevfcP();
 extern void restorevfcP();
+extern bool viewfrustumvalid();
 extern void rendergeom();
 extern int findalphavas();
 extern void renderrefractmask();

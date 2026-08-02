@@ -23,6 +23,7 @@ static inline void drawvaskytris(vtxarray *va)
 plane vfcP[5];  // perpindictular vectors to view frustrum bounding planes
 float vfcDfog;  // far plane culling distance (fog limit).
 float vfcDnear[5], vfcDfar[5];
+static bool vfcvalid = false, oldvfcvalid = false;
 
 vtxarray *visibleva = NULL;
 
@@ -332,6 +333,7 @@ void setvfcP(const vec &bbmin, const vec &bbmax)
 
     vfcDfog = min(calcfogcull(), float(farplane));
     calcvfcD();
+    vfcvalid = true;
 }
 
 plane oldvfcP[5];
@@ -339,12 +341,19 @@ plane oldvfcP[5];
 void savevfcP()
 {
     memcpy(oldvfcP, vfcP, sizeof(vfcP));
+    oldvfcvalid = vfcvalid;
 }
 
 void restorevfcP()
 {
     memcpy(vfcP, oldvfcP, sizeof(vfcP));
     calcvfcD();
+    vfcvalid = oldvfcvalid;
+}
+
+bool viewfrustumvalid()
+{
+    return vfcvalid;
 }
 
 void visiblecubes(bool cull)
@@ -356,6 +365,7 @@ void visiblecubes(bool cull)
     }
     else
     {
+        vfcvalid = false;
         visiblevas = valist.length();
         liveculledvas = 0;
         livecullqueries.setsize(0);

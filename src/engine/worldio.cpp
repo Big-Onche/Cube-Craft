@@ -99,11 +99,15 @@ enum
     WORLD_MAX_CHUNK_DIST = WORLD_RUNTIME_CENTER - 2,
     WORLD_SECTION_COLUMNS = WORLD_CHUNK_SIZE / WORLD_SECTION_SIZE,
     WORLD_SECTION_TILES = WORLD_SECTION_COLUMNS * WORLD_SECTION_COLUMNS,
+    WORLD_SECTION_FACE_COUNT = 6,
+    WORLD_SECTION_CELL_COUNT = WORLD_SECTION_BLOCKS * WORLD_SECTION_BLOCKS * WORLD_SECTION_BLOCKS,
+    WORLD_SECTION_FACE_WORDS = (WORLD_SECTION_BLOCKS * WORLD_SECTION_BLOCKS + 31) / 32,
     WORLD_MAX_PREPARED_CHUNKS = 8,
     WORLD_MAX_COLUMN_CHANGES = 64,
     WORLD_MAX_SECTION_BATCH = 16,
     WORLD_NEAR_RENDER_BLOCKS = 128,
-    WORLD_NEAR_RENDER_SECTION_RADIUS = (WORLD_NEAR_RENDER_BLOCKS + WORLD_SECTION_BLOCKS - 1) / WORLD_SECTION_BLOCKS
+    WORLD_NEAR_RENDER_SECTION_RADIUS = (WORLD_NEAR_RENDER_BLOCKS + WORLD_SECTION_BLOCKS - 1) / WORLD_SECTION_BLOCKS,
+    WORLD_SECTION_PREFETCH_MARGIN = 1
 };
 
 enum
@@ -1040,7 +1044,10 @@ struct worldchunk
     uint mountedtiles[WORLD_SECTION_LAYERS];
     uint contentknown[WORLD_SECTION_LAYERS], contenttiles[WORLD_SECTION_LAYERS],
          opaqueknown[WORLD_SECTION_LAYERS], opaquetiles[WORLD_SECTION_LAYERS],
-         reachabletiles[WORLD_SECTION_LAYERS], visibletiles[WORLD_SECTION_LAYERS];
+         portalsknown[WORLD_SECTION_LAYERS], visibletiles[WORLD_SECTION_LAYERS];
+    uchar portals[WORLD_SECTION_LAYERS][WORLD_SECTION_TILES][WORLD_SECTION_FACE_COUNT],
+          reachablefaces[WORLD_SECTION_LAYERS][WORLD_SECTION_TILES];
+    uint portalcellmasks[WORLD_SECTION_LAYERS][WORLD_SECTION_TILES][WORLD_SECTION_FACE_COUNT][WORLD_SECTION_FACE_WORDS];
     uint request;
     bool loading, generating, saved, dirty, corrupted;
 
@@ -1053,7 +1060,10 @@ struct worldchunk
         memclear(contenttiles);
         memclear(opaqueknown);
         memclear(opaquetiles);
-        memclear(reachabletiles);
+        memclear(portalsknown);
+        memclear(portals);
+        memclear(portalcellmasks);
+        memclear(reachablefaces);
         memclear(visibletiles);
     }
 };
@@ -1085,6 +1095,8 @@ struct worldchunkjob
     game::worldsettings settings;
     int families, optimized, loaderror;
     uint contenttiles[WORLD_SECTION_LAYERS], opaquetiles[WORLD_SECTION_LAYERS];
+    uchar portals[WORLD_SECTION_LAYERS][WORLD_SECTION_TILES][WORLD_SECTION_FACE_COUNT];
+    uint portalcellmasks[WORLD_SECTION_LAYERS][WORLD_SECTION_TILES][WORLD_SECTION_FACE_COUNT][WORLD_SECTION_FACE_WORDS];
     ullong revision, canonicalhash;
     uint epoch, request;
     bool loaded, remip, leavesalpha, sectionstatesready;
@@ -1101,6 +1113,8 @@ struct worldchunkjob
     {
         memclear(contenttiles);
         memclear(opaquetiles);
+        memclear(portals);
+        memclear(portalcellmasks);
         SDL_AtomicSet(&cancelled, 0);
         filename[0] = '\0';
     }
@@ -1238,8 +1252,13 @@ static void setworldleavesalpha(cube *root, bool enabled)
 static void updateleavesalpha()
 {
     setworldleavesalpha(worldroot, leavesalpha != 0);
-    loopv(worldchunks) if(worldchunks[i].root && worldchunks[i].root != worldroot)
-        setworldleavesalpha(worldchunks[i].root, leavesalpha != 0);
+    loopv(worldchunks)
+    {
+        worldchunk &chunk = worldchunks[i];
+        if(chunk.root && chunk.root != worldroot) setworldleavesalpha(chunk.root, leavesalpha != 0);
+        memclear(chunk.opaqueknown);
+        memclear(chunk.portalsknown);
+    }
     invalidateworldsectionvisibility();
     if(worldroot) allchanged();
 }
@@ -2306,6 +2325,113 @@ static int worldcubesectionstate(const cube &c)
            (isentirelysolid(c) && !(c.material&MAT_ALPHA) ? WORLD_SECTION_OPAQUE : 0);
 }
 
+static void fillworldsectionpassability(const cube &c, const ivec &origin, int size, uchar *passable)
+{
+    if(size <= WORLD_BLOCK_SIZE)
+    {
+        int x = origin.x / WORLD_BLOCK_SIZE, y = origin.y / WORLD_BLOCK_SIZE, z = origin.z / WORLD_BLOCK_SIZE;
+        passable[(z * WORLD_SECTION_BLOCKS + y) * WORLD_SECTION_BLOCKS + x] =
+            (worldcubesectionstate(c)&WORLD_SECTION_OPAQUE) == 0;
+        return;
+    }
+    if(c.children)
+    {
+        const int childsize = size >> 1;
+        loopi(8) fillworldsectionpassability(c.children[i], ivec(i, origin, childsize), childsize, passable);
+        return;
+    }
+    if(worldcubesectionstate(c)&WORLD_SECTION_OPAQUE)
+    {
+        int minx = origin.x / WORLD_BLOCK_SIZE, miny = origin.y / WORLD_BLOCK_SIZE, minz = origin.z / WORLD_BLOCK_SIZE,
+            maxx = (origin.x + size) / WORLD_BLOCK_SIZE,
+            maxy = (origin.y + size) / WORLD_BLOCK_SIZE,
+            maxz = (origin.z + size) / WORLD_BLOCK_SIZE;
+        for(int z = minz; z < maxz; ++z) for(int y = miny; y < maxy; ++y) for(int x = minx; x < maxx; ++x)
+            passable[(z * WORLD_SECTION_BLOCKS + y) * WORLD_SECTION_BLOCKS + x] = 0;
+        return;
+    }
+    if(isempty(c) || c.material&MAT_ALPHA) return;
+
+    // Remipping may collapse shaped terrain across multiple blocks. Rebuild its
+    // temporary children so a coarse sloped leaf cannot become a fake portal.
+    cube children[8];
+    subdivideworldmip(c, children);
+    const int childsize = size >> 1;
+    loopi(8) fillworldsectionpassability(children[i], ivec(i, origin, childsize), childsize, passable);
+}
+
+static int classifyworldsection(const cube &c, uchar *portals, uint facemasks[WORLD_SECTION_FACE_COUNT][WORLD_SECTION_FACE_WORDS],
+                                int focuscell = -1, uchar *focusfaces = NULL)
+{
+    static const int offsets[][3] =
+    {
+        { -1, 0, 0 }, { 1, 0, 0 }, { 0, -1, 0 }, { 0, 1, 0 }, { 0, 0, -1 }, { 0, 0, 1 }
+    };
+    uchar passable[WORLD_SECTION_CELL_COUNT], visited[WORLD_SECTION_CELL_COUNT];
+    ushort queue[WORLD_SECTION_CELL_COUNT];
+    memset(passable, 1, sizeof(passable));
+    memclear(visited);
+    memset(portals, 0, WORLD_SECTION_FACE_COUNT * sizeof(uchar));
+    memset(facemasks, 0, WORLD_SECTION_FACE_COUNT * WORLD_SECTION_FACE_WORDS * sizeof(uint));
+    if(focusfaces) *focusfaces = 0;
+    fillworldsectionpassability(c, ivec(0, 0, 0), WORLD_SECTION_SIZE, passable);
+
+    for(int z = 0; z < WORLD_SECTION_BLOCKS; ++z) for(int y = 0; y < WORLD_SECTION_BLOCKS; ++y)
+    for(int x = 0; x < WORLD_SECTION_BLOCKS; ++x)
+    {
+        int cell = (z * WORLD_SECTION_BLOCKS + y) * WORLD_SECTION_BLOCKS + x;
+        if(!passable[cell]) continue;
+        int yz = z * WORLD_SECTION_BLOCKS + y,
+            xz = z * WORLD_SECTION_BLOCKS + x,
+            xy = y * WORLD_SECTION_BLOCKS + x;
+        if(x == 0) facemasks[0][yz >> 5] |= 1U << (yz & 31);
+        if(x == WORLD_SECTION_BLOCKS - 1) facemasks[1][yz >> 5] |= 1U << (yz & 31);
+        if(y == 0) facemasks[2][xz >> 5] |= 1U << (xz & 31);
+        if(y == WORLD_SECTION_BLOCKS - 1) facemasks[3][xz >> 5] |= 1U << (xz & 31);
+        if(z == 0) facemasks[4][xy >> 5] |= 1U << (xy & 31);
+        if(z == WORLD_SECTION_BLOCKS - 1) facemasks[5][xy >> 5] |= 1U << (xy & 31);
+    }
+
+    loopi(WORLD_SECTION_CELL_COUNT)
+    {
+        if(!passable[i] || visited[i]) continue;
+        int head = 0, tail = 0;
+        uchar faces = 0;
+        bool containsfocus = false;
+        visited[i] = 1;
+        queue[tail++] = ushort(i);
+        while(head < tail)
+        {
+            int cell = queue[head++],
+                x = cell % WORLD_SECTION_BLOCKS,
+                y = (cell / WORLD_SECTION_BLOCKS) % WORLD_SECTION_BLOCKS,
+                z = cell / (WORLD_SECTION_BLOCKS * WORLD_SECTION_BLOCKS);
+            if(cell == focuscell) containsfocus = true;
+            if(x == 0) faces |= 1<<0;
+            if(x == WORLD_SECTION_BLOCKS - 1) faces |= 1<<1;
+            if(y == 0) faces |= 1<<2;
+            if(y == WORLD_SECTION_BLOCKS - 1) faces |= 1<<3;
+            if(z == 0) faces |= 1<<4;
+            if(z == WORLD_SECTION_BLOCKS - 1) faces |= 1<<5;
+
+            loopj(WORLD_SECTION_FACE_COUNT)
+            {
+                int nx = x + offsets[j][0], ny = y + offsets[j][1], nz = z + offsets[j][2];
+                if(nx < 0 || nx >= WORLD_SECTION_BLOCKS || ny < 0 || ny >= WORLD_SECTION_BLOCKS ||
+                   nz < 0 || nz >= WORLD_SECTION_BLOCKS)
+                    continue;
+                int neighbor = (nz * WORLD_SECTION_BLOCKS + ny) * WORLD_SECTION_BLOCKS + nx;
+                if(!passable[neighbor] || visited[neighbor]) continue;
+                visited[neighbor] = 1;
+                queue[tail++] = ushort(neighbor);
+            }
+        }
+        loopj(WORLD_SECTION_FACE_COUNT) if(faces & (1<<j)) portals[j] |= faces;
+        if(containsfocus && focusfaces) *focusfaces = faces;
+    }
+    return worldcubesectionstate(c);
+}
+
 static bool prepareworldchunksectionstates(worldchunkjob &job)
 {
     if(!job.root) return false;
@@ -2318,7 +2444,8 @@ static bool prepareworldchunksectionstates(worldchunkjob &job)
             if(SDL_AtomicGet(&job.cancelled)) return false;
             int x = j % WORLD_SECTION_COLUMNS, y = j / WORLD_SECTION_COLUMNS;
             ivec pos(x * WORLD_SECTION_SIZE, y * WORLD_SECTION_SIZE, i * WORLD_SECTION_SIZE);
-            int state = worldcubesectionstate(lookupworldchunkrootcube(static_cast<const cube *>(job.root), pos, WORLD_SECTION_SIZE));
+            int state = classifyworldsection(lookupworldchunkrootcube(static_cast<const cube *>(job.root), pos, WORLD_SECTION_SIZE),
+                                             job.portals[i][j], job.portalcellmasks[i][j]);
             if(state&WORLD_SECTION_CONTENT) content |= 1U << j;
             if(state&WORLD_SECTION_OPAQUE) opaque |= 1U << j;
         }
@@ -2371,9 +2498,74 @@ static void setworldchunksectioncontent(worldchunk &chunk, int tile, int section
     else chunk.contenttiles[section] &= ~tilebit;
 }
 
-static bool worldchunksectionopaque(worldchunk &chunk, int tile, int section)
+static void cacheworldchunksectionclassification(worldchunk &chunk, int tile, int section, int state, const uchar *portals,
+                                                 const uint facemasks[WORLD_SECTION_FACE_COUNT][WORLD_SECTION_FACE_WORDS])
 {
-    return (worldchunksectionstate(chunk, tile, section)&WORLD_SECTION_OPAQUE) != 0;
+    const uint tilebit = 1U << tile;
+    chunk.contentknown[section] |= tilebit;
+    chunk.opaqueknown[section] |= tilebit;
+    chunk.portalsknown[section] |= tilebit;
+    if(state&WORLD_SECTION_CONTENT) chunk.contenttiles[section] |= tilebit;
+    else chunk.contenttiles[section] &= ~tilebit;
+    if(state&WORLD_SECTION_OPAQUE) chunk.opaquetiles[section] |= tilebit;
+    else chunk.opaquetiles[section] &= ~tilebit;
+    memcpy(chunk.portals[section][tile], portals, WORLD_SECTION_FACE_COUNT * sizeof(uchar));
+    memcpy(chunk.portalcellmasks[section][tile], facemasks,
+           WORLD_SECTION_FACE_COUNT * WORLD_SECTION_FACE_WORDS * sizeof(uint));
+}
+
+static const uchar *worldchunksectionportals(worldchunk &chunk, int tile, int section)
+{
+    const uint tilebit = 1U << tile;
+    if(chunk.portalsknown[section] & tilebit) return chunk.portals[section][tile];
+
+    int x = tile % WORLD_SECTION_COLUMNS, y = tile / WORLD_SECTION_COLUMNS;
+    ivec pos(x * WORLD_SECTION_SIZE, y * WORLD_SECTION_SIZE, section * WORLD_SECTION_SIZE);
+    uchar portals[WORLD_SECTION_FACE_COUNT];
+    uint facemasks[WORLD_SECTION_FACE_COUNT][WORLD_SECTION_FACE_WORDS];
+    int state;
+    if(chunk.mountedtiles[section] & tilebit)
+    {
+        ivec actualorigin;
+        int actualsize;
+        state = classifyworldsection(lookupcube(ivec(worldchunkorigin(chunk)).add(pos), -WORLD_SECTION_SIZE, actualorigin, actualsize),
+                                     portals, facemasks);
+    }
+    else state = classifyworldsection(lookupworldchunkcube(static_cast<const worldchunk &>(chunk), pos, WORLD_SECTION_SIZE), portals,
+                                      facemasks);
+    cacheworldchunksectionclassification(chunk, tile, section, state, portals, facemasks);
+    return chunk.portals[section][tile];
+}
+
+static const uint *worldchunksectionfacemask(worldchunk &chunk, int tile, int section, int face)
+{
+    worldchunksectionportals(chunk, tile, section);
+    return chunk.portalcellmasks[section][tile][face];
+}
+
+static uchar worldchunksectionfocusfaces(worldchunk &chunk, int tile, int section, const vec &focus)
+{
+    int x = tile % WORLD_SECTION_COLUMNS, y = tile / WORLD_SECTION_COLUMNS;
+    ivec pos(x * WORLD_SECTION_SIZE, y * WORLD_SECTION_SIZE, section * WORLD_SECTION_SIZE),
+         runtimepos = ivec(worldchunkorigin(chunk)).add(pos);
+    int focusx = clamp(int(floorf((focus.x - runtimepos.x) / WORLD_BLOCK_SIZE)), 0, int(WORLD_SECTION_BLOCKS) - 1),
+        focusy = clamp(int(floorf((focus.y - runtimepos.y) / WORLD_BLOCK_SIZE)), 0, int(WORLD_SECTION_BLOCKS) - 1),
+        focusz = clamp(int(floorf((focus.z - runtimepos.z) / WORLD_BLOCK_SIZE)), 0, int(WORLD_SECTION_BLOCKS) - 1),
+        focuscell = (focusz * WORLD_SECTION_BLOCKS + focusy) * WORLD_SECTION_BLOCKS + focusx;
+    uchar portals[WORLD_SECTION_FACE_COUNT], focusfaces = 0;
+    uint facemasks[WORLD_SECTION_FACE_COUNT][WORLD_SECTION_FACE_WORDS];
+    int state;
+    if(chunk.mountedtiles[section] & (1U << tile))
+    {
+        ivec actualorigin;
+        int actualsize;
+        state = classifyworldsection(lookupcube(runtimepos, -WORLD_SECTION_SIZE, actualorigin, actualsize), portals, facemasks, focuscell,
+                                     &focusfaces);
+    }
+    else state = classifyworldsection(lookupworldchunkcube(static_cast<const worldchunk &>(chunk), pos, WORLD_SECTION_SIZE), portals,
+                                      facemasks, focuscell, &focusfaces);
+    cacheworldchunksectionclassification(chunk, tile, section, state, portals, facemasks);
+    return focusfaces;
 }
 
 static void setworldchunksectionopaque(worldchunk &chunk, int tile, int section, bool opaque)
@@ -2447,6 +2639,7 @@ void markworldchunksdirty(const ivec &bbmin, const ivec &bbmax)
             uint tilebit = 1U << (y * WORLD_SECTION_COLUMNS + x);
             chunk.contentknown[z] &= ~tilebit;
             chunk.opaqueknown[z] &= ~tilebit;
+            chunk.portalsknown[z] &= ~tilebit;
         }
         chunk.dirty = true;
         visibilitychanged = true;
@@ -2538,6 +2731,7 @@ static bool unmountworldchunktile(worldchunk &chunk, int section, int tile)
     int sectionstate = worldcubesectionstate(c);
     setworldchunksectioncontent(chunk, tile, section, (sectionstate&WORLD_SECTION_CONTENT) != 0);
     setworldchunksectionopaque(chunk, tile, section, (sectionstate&WORLD_SECTION_OPAQUE) != 0);
+    chunk.portalsknown[section] &= ~tilebit;
     invalidateworldskyexposure(runtimepos, ivec(runtimepos).add(WORLD_SECTION_SIZE));
     detachworldcubegeometry(c);
     moveworldcube(c, lookupworldchunkcube(chunk, pos, WORLD_SECTION_SIZE));
@@ -3207,6 +3401,9 @@ static int processworldchunkresults()
                     chunk.contenttiles[i] = job->contenttiles[i];
                     chunk.opaqueknown[i] = leavesalphamatches ? alltiles : 0;
                     chunk.opaquetiles[i] = job->opaquetiles[i];
+                    chunk.portalsknown[i] = leavesalphamatches ? alltiles : 0;
+                    memcpy(chunk.portals[i], job->portals[i], sizeof(chunk.portals[i]));
+                    memcpy(chunk.portalcellmasks[i], job->portalcellmasks[i], sizeof(chunk.portalcellmasks[i]));
                 }
             }
             chunk.loading = false;
@@ -3255,8 +3452,10 @@ static bool worldchunksectionnearplayer(const worldchunk &chunk, int tile, int s
 struct worldsectionnode
 {
     int chunkindex, tile, section;
+    uchar exits;
 
-    worldsectionnode(int chunkindex, int tile, int section) : chunkindex(chunkindex), tile(tile), section(section) {}
+    worldsectionnode(int chunkindex, int tile, int section, uchar exits)
+        : chunkindex(chunkindex), tile(tile), section(section), exits(exits) {}
 };
 
 static bool findworldsectionneighbor(int chunkindex, int tile, int section, int dx, int dy, int dz, int focusx, int focusy,
@@ -3280,14 +3479,42 @@ static bool findworldsectionneighbor(int chunkindex, int tile, int section, int 
     return true;
 }
 
-static void revealworldsection(vector<worldsectionnode> &queue, int chunkindex, int tile, int section)
+static bool worldsectionfacesoverlap(int chunkindex, int tile, int section, int face, int neighborindex, int neighbortile,
+                                     int neighborsection)
 {
-    worldchunk &chunk = worldchunks[chunkindex];
+    const uint *facemask = worldchunksectionfacemask(worldchunks[chunkindex], tile, section, face),
+               *neighbormask = worldchunksectionfacemask(worldchunks[neighborindex], neighbortile, neighborsection, face^1);
+    loopi(WORLD_SECTION_FACE_WORDS) if(facemask[i] & neighbormask[i]) return true;
+    return false;
+}
+
+static void markworldsectionvisible(worldchunk &chunk, int tile, int section)
+{
     const uint tilebit = 1U << tile;
     if(worldchunksectionhascontent(chunk, tile, section)) chunk.visibletiles[section] |= tilebit;
-    if(chunk.reachabletiles[section] & tilebit || worldchunksectionopaque(chunk, tile, section)) return;
-    chunk.reachabletiles[section] |= tilebit;
-    queue.add(worldsectionnode(chunkindex, tile, section));
+}
+
+static void revealworldsection(vector<worldsectionnode> &queue, int chunkindex, int tile, int section, uchar entrances)
+{
+    worldchunk &chunk = worldchunks[chunkindex];
+    markworldsectionvisible(chunk, tile, section);
+    const uchar *portals = worldchunksectionportals(chunk, tile, section);
+    uchar exits = 0;
+    loopi(WORLD_SECTION_FACE_COUNT) if(entrances & (1<<i)) exits |= portals[i];
+    exits &= ~chunk.reachablefaces[section][tile];
+    if(!exits) return;
+    chunk.reachablefaces[section][tile] |= exits;
+    queue.add(worldsectionnode(chunkindex, tile, section, exits));
+}
+
+static void revealworldsectionfromfocus(vector<worldsectionnode> &queue, int chunkindex, int tile, int section, uchar exits)
+{
+    worldchunk &chunk = worldchunks[chunkindex];
+    markworldsectionvisible(chunk, tile, section);
+    exits &= ~chunk.reachablefaces[section][tile];
+    if(!exits) return;
+    chunk.reachablefaces[section][tile] |= exits;
+    queue.add(worldsectionnode(chunkindex, tile, section, exits));
 }
 
 static void updateworldsectionvisibility(int chunkx, int chunky)
@@ -3309,8 +3536,8 @@ static void updateworldsectionvisibility(int chunkx, int chunky)
                             clamp(int(floorf(focus->z / WORLD_SECTION_SIZE)), 0, int(WORLD_SECTION_LAYERS) - 1));
     bool focuschanged = focussection != worldsectionvisibilityfocus,
          rebuild = worldsectionvisibilitydirty || chunkx != worldsectionvisibilitychunkx || chunky != worldsectionvisibilitychunky ||
-                   maxchunkdist != worldsectionvisibilitymaxdist;
-    if(!rebuild && !focuschanged && worldsectionvisibilityadditions.empty()) return;
+                   maxchunkdist != worldsectionvisibilitymaxdist || focuschanged;
+    if(!rebuild && worldsectionvisibilityadditions.empty()) return;
 
     ZoneScopedN("Chunks/Update dirty section visibility");
     ZoneValue(worldsectionvisibilityadditions.length());
@@ -3321,17 +3548,18 @@ static void updateworldsectionvisibility(int chunkx, int chunky)
         rebuildworldchunkindices();
         loopv(worldchunks)
         {
-            memclear(worldchunks[i].reachabletiles);
+            memclear(worldchunks[i].reachablefaces);
             memclear(worldchunks[i].visibletiles);
         }
 
-        // Flood down from the sky in every column. Unloaded horizontal
-        // neighbors are not treated as empty space at the streaming boundary.
-        loopv(worldchunks)
+        // Without a camera (during bootstrap), use outside air as a conservative
+        // source. Normal rendering is seeded from the camera below, so a sealed
+        // cave does not keep the unrelated surface mounted.
+        if(!focus) loopv(worldchunks)
         {
             worldchunk &chunk = worldchunks[i];
             if(chunk.loading || chunk.corrupted || !chunk.root || !worldchunkinview(chunk, chunkx, chunky)) continue;
-            loopj(WORLD_SECTION_TILES) revealworldsection(queue, i, j, WORLD_SECTION_LAYERS - 1);
+            loopj(WORLD_SECTION_TILES) revealworldsection(queue, i, j, WORLD_SECTION_LAYERS - 1, 1<<5);
         }
     }
     else
@@ -3344,14 +3572,12 @@ static void updateworldsectionvisibility(int chunkx, int chunky)
             if(!worldchunks.inrange(index)) continue;
             worldchunk &chunk = worldchunks[index];
             if(chunk.loading || chunk.corrupted || !chunk.root || !worldchunkinview(chunk, chunkx, chunky)) continue;
-            loopj(WORLD_SECTION_TILES) revealworldsection(queue, index, j, WORLD_SECTION_LAYERS - 1);
+            if(!focus) loopj(WORLD_SECTION_TILES) revealworldsection(queue, index, j, WORLD_SECTION_LAYERS - 1, 1<<5);
 
             // A newly published chunk may connect to an already reachable cave
             // through a side face, even when it is sealed from the sky.
             loopj(WORLD_SECTION_TILES) loopk(WORLD_SECTION_LAYERS)
             {
-                const uint tilebit = 1U << j;
-                if(chunk.reachabletiles[k] & tilebit) continue;
                 loopl(6)
                 {
                     int neighborindex, neighbortile, neighborsection;
@@ -3359,9 +3585,9 @@ static void updateworldsectionvisibility(int chunkx, int chunky)
                                                  neighborindex, neighbortile, neighborsection))
                         continue;
                     const worldchunk &neighbor = worldchunks[neighborindex];
-                    if(!(neighbor.reachabletiles[neighborsection] & (1U << neighbortile))) continue;
-                    revealworldsection(queue, index, j, k);
-                    break;
+                    if(!(neighbor.reachablefaces[neighborsection][neighbortile] & (1<<(l^1)))) continue;
+                    revealworldsection(queue, index, j, k,
+                                       worldsectionfacesoverlap(index, j, k, l, neighborindex, neighbortile, neighborsection) ? 1<<l : 0);
                 }
             }
         }
@@ -3382,7 +3608,9 @@ static void updateworldsectionvisibility(int chunkx, int chunky)
                 ivec origin = worldchunkorigin(chunk);
                 int tilex = clamp(int(floorf((focus->x - origin.x) / WORLD_SECTION_SIZE)), 0, int(WORLD_SECTION_COLUMNS) - 1),
                     tiley = clamp(int(floorf((focus->y - origin.y) / WORLD_SECTION_SIZE)), 0, int(WORLD_SECTION_COLUMNS) - 1);
-                revealworldsection(queue, cameraindex, tiley * WORLD_SECTION_COLUMNS + tilex, focussection.z);
+                int tile = tiley * WORLD_SECTION_COLUMNS + tilex;
+                revealworldsectionfromfocus(queue, cameraindex, tile, focussection.z,
+                                            worldchunksectionfocusfaces(chunk, tile, focussection.z, *focus));
             }
         }
     }
@@ -3392,11 +3620,14 @@ static void updateworldsectionvisibility(int chunkx, int chunky)
         const worldsectionnode node = queue[pos];
         loopi(6)
         {
+            if(!(node.exits & (1<<i))) continue;
             int neighborindex, neighbortile, neighborsection;
             if(!findworldsectionneighbor(node.chunkindex, node.tile, node.section, directions[i][0], directions[i][1], directions[i][2],
                                          chunkx, chunky, neighborindex, neighbortile, neighborsection))
                 continue;
-            revealworldsection(queue, neighborindex, neighbortile, neighborsection);
+            revealworldsection(queue, neighborindex, neighbortile, neighborsection,
+                               worldsectionfacesoverlap(node.chunkindex, node.tile, node.section, i, neighborindex, neighbortile,
+                                                        neighborsection) ? 1<<(i^1) : 0);
         }
     }
     worldsectionvisibilitydirty = false;
@@ -3408,16 +3639,21 @@ static void updateworldsectionvisibility(int chunkx, int chunky)
     ZoneValue(queue.length());
 }
 
-extern int csmfarplane;
-
-static bool worldchunksectionwithin360(const worldchunk &chunk, int tile, int section)
+static int worldchunksectionviewclass(const worldchunk &chunk, int tile, int section)
 {
-    if(!camera1) return true;
+    if(!camera1 || !viewfrustumvalid()) return 0;
     int x = tile % WORLD_SECTION_COLUMNS, y = tile / WORLD_SECTION_COLUMNS;
     ivec bbmin = ivec(worldchunkorigin(chunk)).add(ivec(x * WORLD_SECTION_SIZE, y * WORLD_SECTION_SIZE, section * WORLD_SECTION_SIZE)),
          bbmax = ivec(bbmin).add(WORLD_SECTION_SIZE);
-    float radius = max(calcfogcull(), float(csmfarplane));
-    return camera1->o.dist_to_bb(bbmin, bbmax) <= radius;
+    if(isvisiblebb(bbmin, ivec(bbmax).sub(bbmin)) < VFC_FOGGED) return 2;
+
+    // Keep one reachable section beyond the current frustum ready. This is the
+    // small mining/movement margin; it must not turn the entire connected air
+    // component into render data.
+    const int expansion = WORLD_SECTION_PREFETCH_MARGIN * WORLD_SECTION_SIZE;
+    bbmin.sub(expansion);
+    bbmax.add(expansion);
+    return isvisiblebb(bbmin, ivec(bbmax).sub(bbmin)) < VFC_FOGGED ? 1 : 0;
 }
 
 static bool worldchunksectionrequired(worldchunk &chunk, int tile, int section, int playerradius)
@@ -3425,7 +3661,22 @@ static bool worldchunksectionrequired(worldchunk &chunk, int tile, int section, 
     if(drawfullchunk || worldchunksectionnearplayer(chunk, tile, section, playerradius))
         return true;
     const uint tilebit = 1U << tile;
-    return (chunk.visibletiles[section] & tilebit) && worldchunksectionwithin360(chunk, tile, section);
+    return (chunk.visibletiles[section] & tilebit) && worldchunksectionviewclass(chunk, tile, section) != 0;
+}
+
+static long long worldchunksectionmountscore(const worldchunk &chunk, int tile, int section)
+{
+    const vec &focus = camera1 ? camera1->o : player ? player->o : vec(0, 0, 0);
+    int x = tile % WORLD_SECTION_COLUMNS, y = tile / WORLD_SECTION_COLUMNS;
+    ivec bbmin = ivec(worldchunkorigin(chunk)).add(ivec(x * WORLD_SECTION_SIZE, y * WORLD_SECTION_SIZE, section * WORLD_SECTION_SIZE)),
+         bbmax = ivec(bbmin).add(WORLD_SECTION_SIZE);
+    long long distance = 0;
+    loopi(3)
+    {
+        double delta = focus[i] < bbmin[i] ? bbmin[i] - focus[i] : focus[i] > bbmax[i] ? focus[i] - bbmax[i] : 0;
+        distance += static_cast<long long>(delta * delta);
+    }
+    return (worldchunksectionviewclass(chunk, tile, section) == 1 ? 1LL<<60 : 0) + distance;
 }
 
 struct worldsectioncandidate
@@ -3530,16 +3781,19 @@ static int findworldchunkmountsections(int chunkx, int chunky,
             loopj(WORLD_SECTION_TILES) if(pendingtiles & (1U << j))
             {
                 if(!worldchunksectionrequired(chunk, j, k, 1) || worldchunksectionwithinnearload(chunk, j, k)) continue;
-                worldsectioncandidate &candidate = candidates[numcandidates++];
-                candidate.chunkindex = i;
-                candidate.tile = j;
-                candidate.section = k;
-                candidate.score = 0;
-                if(numcandidates >= maxcandidates) break;
+                long long score = worldchunksectionmountscore(chunk, j, k);
+                int insert = numcandidates;
+                while(insert > 0 && score < candidates[insert - 1].score) --insert;
+                if(insert >= maxcandidates) continue;
+                int newcount = min(numcandidates + 1, maxcandidates);
+                for(int move = newcount - 1; move > insert; --move) candidates[move] = candidates[move - 1];
+                candidates[insert].chunkindex = i;
+                candidates[insert].tile = j;
+                candidates[insert].section = k;
+                candidates[insert].score = score;
+                numcandidates = newcount;
             }
-            if(numcandidates >= maxcandidates) break;
         }
-        if(numcandidates >= maxcandidates) break;
     }
     ZoneValue(numcandidates);
     return numcandidates;
