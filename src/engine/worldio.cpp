@@ -1242,15 +1242,15 @@ static void updateleavesalpha()
     if(worldroot) allchanged();
 }
 
-VARP(asyncchunkloads, 2, 2, 4);
+VARP(asyncchunkloads, 2, 4, 4);
 VARP(chunkthreads, 0, 0, 16);
 VARP(chunkcachedist, 0, 0, 0);
 VARP(chunkpendinglimit, 4, 8, 16);
 VARP(chunklookahead, 0, 2, 8);
-VARP(chunkpublishbudget, 2, 3, 33);
-VARP(chunkcleanupbudget, 1, 3, 33);
+VARP(chunkpublishbudget, 2, 5, 33);
+VARP(chunkcleanupbudget, 1, 5, 33);
 VARP(chunksectionbatch, 1, 1, WORLD_MAX_SECTION_BATCH);
-VARP(chunkvastagelimit, 1, 2, 16);
+VARP(chunkvastagelimit, 1, 4, 16);
 VARP(drawfullchunk, 0, 0, 1);
 
 static cube *generateworldchunk(int chunkx, int chunky);
