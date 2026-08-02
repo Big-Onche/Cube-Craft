@@ -356,6 +356,16 @@ bool viewfrustumvalid()
     return vfcvalid;
 }
 
+bool isvaoccluded(const vtxarray *va)
+{
+    if(!va || !camera1 || !occlusioncameravalid || lastocclusioncamera.squaredist(camera1->o) > 1e-6f ||
+       fabsf(lastocclusionyaw - camera1->yaw) > 1e-3f || fabsf(lastocclusionpitch - camera1->pitch) > 1e-3f ||
+       fabsf(lastocclusionroll - camera1->roll) > 1e-3f || fabsf(lastocclusionfov - curfov) > 1e-3f ||
+       fabsf(lastocclusionaspect - aspect) > 1e-6f)
+        return false;
+    return va->occluded >= OCCLUDE_BB && va->occludedframe == occlusionframe;
+}
+
 void visiblecubes(bool cull)
 {
     if(cull)

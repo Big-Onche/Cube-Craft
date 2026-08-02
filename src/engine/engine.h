@@ -459,6 +459,7 @@ extern void setvfcP(const vec &bbmin = vec(-1, -1, -1), const vec &bbmax = vec(1
 extern void savevfcP();
 extern void restorevfcP();
 extern bool viewfrustumvalid();
+extern bool isvaoccluded(const vtxarray *va);
 extern void rendergeom();
 extern int findalphavas();
 extern void renderrefractmask();

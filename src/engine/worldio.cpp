@@ -1268,10 +1268,10 @@ VARP(chunkthreads, 0, 0, 16);
 VARP(chunkcachedist, 0, 0, 0);
 VARP(chunkpendinglimit, 4, 8, 16);
 VARP(chunklookahead, 0, 2, 8);
-VARP(chunkpublishbudget, 2, 5, 33);
-VARP(chunkcleanupbudget, 1, 5, 33);
+VARP(chunkpublishbudget, 2, 6, 33);
+VARP(chunkcleanupbudget, 1, 6, 33);
 VARP(chunksectionbatch, 1, 1, WORLD_MAX_SECTION_BATCH);
-VARP(chunkvastagelimit, 1, 4, 16);
+VARP(chunkvastagelimit, 1, 6, 16);
 VARP(drawfullchunk, 0, 0, 1);
 
 static cube *generateworldchunk(int chunkx, int chunky);
@@ -3664,6 +3664,36 @@ static bool worldchunksectionrequired(worldchunk &chunk, int tile, int section, 
     return (chunk.visibletiles[section] & tilebit) && worldchunksectionviewclass(chunk, tile, section) != 0;
 }
 
+extern int csmfarplane;
+
+static bool worldchunksectionwithinresidentrange(const worldchunk &chunk, int tile, int section)
+{
+    const vec *focus = camera1 ? &camera1->o : player ? &player->o : NULL;
+    if(!focus) return true;
+    int x = tile % WORLD_SECTION_COLUMNS, y = tile / WORLD_SECTION_COLUMNS;
+    ivec bbmin = ivec(worldchunkorigin(chunk)).add(ivec(x * WORLD_SECTION_SIZE, y * WORLD_SECTION_SIZE, section * WORLD_SECTION_SIZE)),
+         bbmax = ivec(bbmin).add(WORLD_SECTION_SIZE);
+    return focus->dist_to_bb(bbmin, bbmax) <= max(calcfogcull(), float(csmfarplane));
+}
+
+static bool worldchunksectionoccluded(const worldchunk &chunk, int tile, int section)
+{
+    int x = tile % WORLD_SECTION_COLUMNS, y = tile / WORLD_SECTION_COLUMNS;
+    ivec origin = ivec(worldchunkorigin(chunk)).add(ivec(x * WORLD_SECTION_SIZE, y * WORLD_SECTION_SIZE, section * WORLD_SECTION_SIZE)),
+         actualorigin;
+    int actualsize;
+    const cube &c = lookupcube(origin, -WORLD_SECTION_SIZE, actualorigin, actualsize);
+    return actualorigin == origin && actualsize == WORLD_SECTION_SIZE && c.ext && isvaoccluded(c.ext->va);
+}
+
+static bool worldchunksectionresidentrequired(worldchunk &chunk, int tile, int section, int playerradius)
+{
+    if(drawfullchunk || worldchunksectionnearplayer(chunk, tile, section, playerradius)) return true;
+    const uint tilebit = 1U << tile;
+    return (chunk.visibletiles[section] & tilebit) && worldchunksectionwithinresidentrange(chunk, tile, section) &&
+           !worldchunksectionoccluded(chunk, tile, section);
+}
+
 static long long worldchunksectionmountscore(const worldchunk &chunk, int tile, int section)
 {
     const vec &focus = camera1 ? camera1->o : player ? player->o : vec(0, 0, 0);
@@ -3852,7 +3882,7 @@ static int findworldchunkcachedsections(int chunkx, int chunky,
                     sectionx = (chunk.x - worldfirstchunkx) * WORLD_SECTION_COLUMNS + x,
                     sectiony = (chunk.y - worldfirstchunky) * WORLD_SECTION_COLUMNS + y,
                     dx = sectionx - focusx, dy = sectiony - focusy;
-                if(worldchunksectionrequired(chunk, j, k, 2)) continue;
+                if(worldchunksectionresidentrequired(chunk, j, k, 2)) continue;
                 int dz = k - focusz;
                 long long distance = (long long)dx * dx + (long long)dy * dy +
                                      (long long)dz * dz,
