@@ -241,9 +241,68 @@ namespace game
         }
     }
 
+    static gameent *worlddropplayer(int clientnum)
+    {
+        if(player1 && player1->clientnum == clientnum) return player1;
+        return clients.inrange(clientnum) ? clients[clientnum] : NULL;
+    }
+
+    static void renderworlddrop(const worlddrop &drop)
+    {
+        vec position = drop.picking ? drop.pickupfrom : drop.o;
+        if(waitforserveredit()) worldpositiontolocal(position);
+        if(drop.picking)
+        {
+            gameent *picker = worlddropplayer(drop.picker);
+            if(picker)
+            {
+                const float amount = clamp((lastmillis - drop.pickupmillis) / 250.0f, 0.0f, 1.0f),
+                            smooth = amount * amount * (3.0f - 2.0f * amount);
+                position.lerp(picker->o, smooth);
+            }
+        }
+        else
+        {
+            const uint phaseid = drop.id ? drop.id : drop.sourcerequestid;
+            position.z += 1.5f + sinf((lastmillis + int(phaseid % 1000U) * 37) / 350.0f) * 0.75f;
+        }
+
+        const float maxdistance = getdynamicentsmaxdistance() * 16.0f;
+        if(camera1 && position.squaredist(camera1->o) > maxdistance * maxdistance) return;
+        const int type = getworlditemtype(drop.item), worldindex = getworlditemindex(drop.item);
+        const float yaw = fmodf(lastmillis * 0.09f + float((drop.id ? drop.id : drop.sourcerequestid) % 360U), 360.0f);
+        const int flags = MDL_CULL_VFC | MDL_CULL_DIST | MDL_CULL_OCCLUDED;
+        if(type == WORLD_ITEM_CUBE)
+        {
+            string toptexture, sidetexture, bottomtexture;
+            copystring(toptexture, getworldcubetexture(worldindex, WORLD_CUBE_TOP));
+            copystring(sidetexture, getworldcubetexture(worldindex, WORLD_CUBE_SIDE));
+            copystring(bottomtexture, getworldcubetexture(worldindex, WORLD_CUBE_BOTTOM));
+            modelskinoverride skins[] =
+            {
+                modelskinoverride("top", toptexture),
+                modelskinoverride("side", sidetexture),
+                modelskinoverride("bottom", bottomtexture)
+            };
+            rendermodelwithskins(worldheldcubemodel, ANIM_MAPMODEL | ANIM_LOOP, position, yaw, 0, 0, flags, NULL, skins, 3, 0.45f);
+        }
+        else if(type == WORLD_ITEM_SCATTER || type == WORLD_ITEM_PLACEABLE)
+        {
+            const char *model = getworldscattermodel(worldindex);
+            if(model[0]) rendermodel(model, ANIM_MAPMODEL | ANIM_LOOP, position, yaw, 0, 0, flags, NULL, NULL, 0, 0, 0.4f);
+        }
+    }
+
+    static void renderworlddrops()
+    {
+        const vector<worlddrop *> &drops = getworlddrops();
+        loopv(drops) renderworlddrop(*drops[i]);
+    }
+
     void rendergame()
     {
         entities::renderentities();
+        renderworlddrops();
         loopv(players) renderplayer(players[i], players[i] == player1);
     }
 

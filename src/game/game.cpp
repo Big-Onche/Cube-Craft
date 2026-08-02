@@ -45,6 +45,11 @@ namespace game
     };
 
     static vector<predictedworldaction *> predictedworldactions;
+    static vector<worlddrop *> worlddrops;
+    static uint nextlocaldropid = 1;
+    static int personaldrops = 0, droptimeout = 300, maxdrop = 1024, dynamicentsmaxdistance = 64, requireconfirmeditems = 1;
+    static void updateworlddrops();
+    static void predictsurvivaldrops(int objectitem, uint requestid, const ivec &target, int action, int orient);
 #endif
 
     float horizontalmeterspersecond(const physent *d)
@@ -316,6 +321,7 @@ namespace game
     {
         connected = remote = false;
         predictedworldactions.deletecontents();
+        resetworlddrops();
         nextworldrequestid = 1;
         resetsurvivalinventory();
         receiveserversettings(5000, 250, 1024, 128, 4000);
@@ -565,6 +571,7 @@ namespace game
 #ifndef STANDALONE
         updatewatersimulation();
         updatesurvivalbreaking();
+        updateworlddrops();
 #endif
         gets2c();
         c2sinfo();
@@ -724,6 +731,7 @@ namespace game
     {
 #ifndef STANDALONE
         resetwatersimulation();
+        if(!pendingnetworkworld) resetworlddrops();
 #endif
         copystring(clientmap, name ? name : "");
 #ifndef STANDALONE
@@ -870,6 +878,19 @@ namespace game
     {
 #ifndef STANDALONE
         if(result != ACTION_RESULT_ACCEPTED) cancelclientbreakrequest(requestid);
+        loopv(worlddrops)
+        {
+            worlddrop &drop = *worlddrops[i];
+            if(drop.pickuprequestid != requestid) continue;
+            if(result != ACTION_RESULT_ACCEPTED)
+            {
+                drop.pickuprequestid = 0;
+                drop.picking = drop.removed = false;
+                drop.picker = -1;
+                drop.pickupblocked = true;
+            }
+            break;
+        }
 #endif
         loopv(predictedworldactions)
         {
@@ -880,6 +901,14 @@ namespace game
             predictedworldactions.remove(i);
             break;
         }
+#ifndef STANDALONE
+        for(int i = worlddrops.length() - 1; i >= 0; --i)
+        {
+            worlddrop *drop = worlddrops[i];
+            if(drop->confirmed || drop->sourcerequestid != requestid) continue;
+            delete worlddrops.remove(i);
+        }
+#endif
         if(result != ACTION_RESULT_ACCEPTED && reason && reason[0]) conoutf(CON_WARN, "server action rejected: %s", reason);
     }
 
@@ -958,20 +987,238 @@ namespace game
         return false;
     }
 
-    static bool addsurvivaldrops(int item)
+#ifndef STANDALONE
+    enum
     {
-        const int type = getworlditemtype(item), index = getworlditemindex(item), count = getworldobjectdropcount(type, index);
-        bool room = true;
-        loopi(count)
+        DROP_PICKUP_DISTANCE = 24,
+        DROP_PICKUP_MILLIS = 250,
+        DROP_PICKUP_DELAY = 500
+    };
+
+    static bool survivalhasroom(int item, int quantity)
+    {
+        int room = 0;
+        const int stack = max(getinventoryitemmaxstack(item), 1);
+        loopi(SURVIVAL_USABLE_SLOTS)
         {
-            int dropitem, mincount, maxcount;
-            float chance;
-            if(!getworldobjectdrop(type, index, i, dropitem, mincount, maxcount, chance) || rndscale(1.0f) > chance) continue;
-            const int quantity = mincount >= maxcount ? mincount : mincount + rnd(maxcount - mincount + 1);
-            loopj(quantity) if(!addsurvivalitem(dropitem)) room = false;
+            if(survivalitems[i] == item && survivalcounts[i] > 0) room += max(stack - survivalcounts[i], 0);
+            else if(survivalitems[i] < 0 || survivalcounts[i] <= 0) room += stack;
+            if(room >= quantity) return true;
         }
-        return room;
+        return false;
     }
+
+    static bool addsurvivalitems(int item, int quantity)
+    {
+        if(quantity <= 0 || !survivalhasroom(item, quantity)) return false;
+        loopi(quantity) if(!addsurvivalitem(item)) return false;
+        return true;
+    }
+
+    static ivec worlddropcell(const ivec &target, int action, int orient)
+    {
+        ivec cell = target;
+        if(action == WORLD_ACTION_BREAK_SCATTER_START && orient >= 0 && orient <= 5)
+            cell[orient >> 1] += orient&1 ? 16 : -16;
+        return cell;
+    }
+
+    static vec worlddroporigin(const ivec &target, int action, int orient)
+    {
+        const ivec cell = worlddropcell(target, action, orient);
+        return vec(cell.x + 8.0f, cell.y + 8.0f, cell.z + 3.0f);
+    }
+
+    static worlddrop *findworlddrop(uint id)
+    {
+        loopv(worlddrops) if(worlddrops[i]->id == id && id) return worlddrops[i];
+        return NULL;
+    }
+
+    static vec absoluteplayerfeet(gameent *d)
+    {
+        vec feet = d ? d->feetpos() : vec(0, 0, 0);
+        if(waitforserveredit()) worldpositiontoabsolute(feet);
+        return feet;
+    }
+
+    static bool canpickupdrop(const worlddrop &drop)
+    {
+        return player1 && player1->state == CS_ALIVE && (!personaldrops || drop.owner == -1 || drop.owner == player1->clientnum);
+    }
+
+    static void requestdroppickup(worlddrop &drop)
+    {
+        if(!drop.confirmed || drop.removed || drop.pickuprequestid || !waitforserveredit()) return;
+        drop.pickuprequestid = newworldrequestid();
+        addmsg(N_DROPPICKUP, "ri2", int(drop.pickuprequestid), int(drop.id));
+    }
+
+    static void beginlocaldroppickup(worlddrop &drop)
+    {
+        if(drop.removed || !addsurvivalitems(drop.item, drop.count))
+        {
+            drop.pickupblocked = true;
+            drop.picking = false;
+            return;
+        }
+        drop.removed = drop.picking = true;
+        drop.picker = player1 ? player1->clientnum : -1;
+        drop.pickupmillis = lastmillis;
+        drop.pickupfrom = drop.o;
+    }
+
+    static void updateworlddrops()
+    {
+        if(!player1) return;
+        const vec feet = absoluteplayerfeet(player1);
+        for(int i = worlddrops.length() - 1; i >= 0; --i)
+        {
+            worlddrop &drop = *worlddrops[i];
+            if(drop.removed)
+            {
+                if(lastmillis - drop.pickupmillis >= DROP_PICKUP_MILLIS)
+                {
+                    delete worlddrops.remove(i);
+                    continue;
+                }
+                continue;
+            }
+            if(!waitforserveredit() && drop.confirmed && droptimeout > 0 && lastmillis - drop.created >= droptimeout * 1000)
+            {
+                delete worlddrops.remove(i);
+                continue;
+            }
+            const float distance = drop.o.dist(feet);
+            if(distance > DROP_PICKUP_DISTANCE)
+            {
+                drop.pickupblocked = false;
+                if(!drop.pickuprequestid) drop.picking = false;
+                continue;
+            }
+            if(lastmillis - drop.created < DROP_PICKUP_DELAY) continue;
+            if(!canpickupdrop(drop) || drop.pickupblocked) continue;
+            if(!drop.picking)
+            {
+                drop.picking = true;
+                drop.picker = player1->clientnum;
+                drop.pickupmillis = lastmillis;
+                drop.pickupfrom = drop.o;
+            }
+            if(waitforserveredit()) requestdroppickup(drop);
+            else if(drop.confirmed) beginlocaldroppickup(drop);
+        }
+    }
+
+    static void predictsurvivaldrops(int objectitem, uint requestid, const ivec &target, int action, int orient)
+    {
+        const int type = getworlditemtype(objectitem), index = getworlditemindex(objectitem), definitions = getworldobjectdropcount(type, index);
+        const int source = player1 ? player1->clientnum : -1;
+        if(!requestid) requestid = newworldrequestid();
+        loopi(definitions)
+        {
+            int item, mincount, maxcount, quantity;
+            float chance;
+            if(!getworldobjectdrop(type, index, i, item, mincount, maxcount, chance) || !worlddroproll(source, requestid, objectitem, i, mincount, maxcount, chance, quantity))
+                continue;
+            while(worlddrops.length() >= maxdrop) delete worlddrops.remove(0);
+            worlddrop *drop = new worlddrop;
+            drop->id = waitforserveredit() ? 0 : 0x80000000U | nextlocaldropid++;
+            drop->sourcerequestid = requestid;
+            drop->source = source;
+            drop->item = item;
+            drop->count = quantity;
+            drop->owner = source;
+            drop->created = lastmillis;
+            drop->confirmed = !waitforserveredit();
+            drop->o = worlddroporigin(target, action, orient);
+            worlddrops.add(drop);
+        }
+    }
+
+    void receivedropsettings(int personal, int timeout, int maximum, int maxdistance, int requireconfirmation)
+    {
+        personaldrops = personal != 0;
+        droptimeout = clamp(timeout, 1, 86400);
+        maxdrop = clamp(maximum, 1, 100000);
+        dynamicentsmaxdistance = clamp(maxdistance, 1, 4096);
+        requireconfirmeditems = requireconfirmation != 0;
+        while(worlddrops.length() > maxdrop) delete worlddrops.remove(0);
+    }
+
+    void receivedropspawn(uint id, int source, uint sourcerequestid, int item, int count, int owner, const vec &o)
+    {
+        if(!id || item < 0 || item >= numinventoryitems() || count <= 0 || findworlddrop(id)) return;
+        worlddrop *drop = NULL;
+        loopv(worlddrops)
+        {
+            worlddrop *candidate = worlddrops[i];
+            if(!candidate->confirmed && candidate->source == source && candidate->sourcerequestid == sourcerequestid &&
+               candidate->item == item && candidate->count == count)
+            {
+                drop = candidate;
+                break;
+            }
+        }
+        if(!drop)
+        {
+            drop = new worlddrop;
+            worlddrops.add(drop);
+        }
+        drop->id = id;
+        drop->sourcerequestid = sourcerequestid;
+        drop->source = source;
+        drop->item = item;
+        drop->count = count;
+        drop->owner = owner;
+        drop->created = lastmillis;
+        drop->confirmed = true;
+        drop->o = o;
+        if(drop->picking) requestdroppickup(*drop);
+    }
+
+    void receivedropdelete(uint id, int picker)
+    {
+        worlddrop *drop = findworlddrop(id);
+        if(!drop) return;
+        if(picker < 0)
+        {
+            loopv(worlddrops) if(worlddrops[i] == drop)
+            {
+                delete worlddrops.remove(i);
+                return;
+            }
+        }
+        if(!drop->picking)
+        {
+            drop->pickupmillis = lastmillis;
+            drop->pickupfrom = drop->o;
+        }
+        drop->picker = picker;
+        drop->picking = drop->removed = true;
+    }
+
+    void resetworlddrops()
+    {
+        worlddrops.deletecontents();
+        nextlocaldropid = 1;
+        personaldrops = 0;
+        droptimeout = 300;
+        maxdrop = 1024;
+        dynamicentsmaxdistance = 64;
+        requireconfirmeditems = 1;
+    }
+
+    const vector<worlddrop *> &getworlddrops()
+    {
+        return worlddrops;
+    }
+
+    int getdynamicentsmaxdistance()
+    {
+        return dynamicentsmaxdistance;
+    }
+#endif
 
     static void consumesurvivalitem()
     {
@@ -1383,6 +1630,10 @@ namespace game
                     addpredictedworldaction(survivalbreakrequestid, WORLD_ACTION_BREAK_SCATTER_START, absolute.o, mountorient, item);
                     sendworldaction(survivalbreakrequestid, WORLD_ACTION_BREAK_COMPLETE, support, mountorient, item, -1);
                 }
+                selinfo dropselection;
+                worldactionselection(dropselection, support, mountorient);
+                if(waitforserveredit()) worldselectiontoabsolute(dropselection);
+                predictsurvivaldrops(item, survivalbreakrequestid, dropselection.o, WORLD_ACTION_BREAK_SCATTER_START, mountorient);
                 broken = true;
             }
         }
@@ -1402,9 +1653,12 @@ namespace game
                 sendworldaction(survivalbreakrequestid, WORLD_ACTION_BREAK_COMPLETE, survivalbreaktarget.cube.o,
                                 survivalbreaktarget.cube.orient, item, -1);
             }
+            selinfo dropselection = survivalbreaktarget.cube;
+            if(waitforserveredit()) worldselectiontoabsolute(dropselection);
+            predictsurvivaldrops(item, survivalbreakrequestid, dropselection.o, WORLD_ACTION_BREAK_CUBE_START, survivalbreaktarget.cube.orient);
             broken = true;
         }
-        if(broken && !addsurvivaldrops(item)) conoutf(CON_WARN, "inventory is full; the broken object was not collected");
+        (void)broken;
         survivalbreakactive = false;
         survivalbreakparticlemillis = -1;
         survivalbreakrequestid = 0;
@@ -1517,6 +1771,26 @@ namespace game
                 addmsg(N_INVENTORYACTION, "ri4", int(newworldrequestid()), INVENTORY_ACTION_SWAP, *from, *to);
         }
     });
+#ifndef STANDALONE
+    static void requestdropsetting(const char *name, int value, bool hasvalue)
+    {
+        defformatstring(command, hasvalue ? "%s %d" : "%s", name, value);
+        requestworldcommand(command);
+    }
+
+    ICOMMAND(personaldrops, "iN", (int *value, int *numargs), requestdropsetting("personaldrops", *value, *numargs > 0));
+    ICOMMAND(droptimeout, "iN", (int *value, int *numargs), requestdropsetting("droptimeout", *value, *numargs > 0));
+    ICOMMAND(maxdrop, "iN", (int *value, int *numargs), requestdropsetting("maxdrop", *value, *numargs > 0));
+    ICOMMAND(dynamicentsmaxdistance, "iN", (int *value, int *numargs), requestdropsetting("dynamicentsmaxdistance", *value, *numargs > 0));
+    ICOMMAND(requireconfirmeditems, "iN", (int *value, int *numargs), requestdropsetting("requireconfirmeditems", *value, *numargs > 0));
+    ICOMMAND(confirmeditemcount, "i", (int *item),
+    {
+        int count = 0;
+        if(*item >= 0 && *item < numinventoryitems())
+            loopi(SURVIVAL_USABLE_SLOTS) if(survivalitems[i] == *item && survivalcounts[i] > 0) count += survivalcounts[i];
+        intret(count);
+    });
+#endif
     ICOMMAND(creativeblockcount, "", (), intret(numinventoryitems()));
     ICOMMAND(creativecubecount, "", (), intret(numworldcubes()));
     ICOMMAND(creativeblockiscube, "i", (int *index), intret(getworlditemtype(*index) == WORLD_ITEM_CUBE ? 1 : 0));

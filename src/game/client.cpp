@@ -598,9 +598,32 @@ namespace game
                     worldpositiontoabsolute(pendingnetworkposition);
                 }
                 pendingnetworkedits.deletecontents();
+                resetworlddrops();
                 authoritativeauthor = -1;
                 authoritativerevision = authoritativerequestid = 0;
                 pendingnetworkworld = true;
+                break;
+            }
+            case N_DROPSETTINGS:
+            {
+                const int personal = getint(p), timeout = getint(p), maximum = getint(p), maxdistance = getint(p), requireconfirmation = getint(p);
+                if(!p.overread()) receivedropsettings(personal, timeout, maximum, maxdistance, requireconfirmation);
+                break;
+            }
+            case N_DROPSPAWN:
+            {
+                const uint id = uint(getint(p));
+                const int source = getint(p);
+                const uint sourcerequestid = uint(getint(p));
+                const int item = getint(p), count = getint(p), owner = getint(p), x = getint(p), y = getint(p), z = getint(p);
+                if(!p.overread()) receivedropspawn(id, source, sourcerequestid, item, count, owner, vec(float(x), float(y), float(z)));
+                break;
+            }
+            case N_DROPDELETE:
+            {
+                const uint id = uint(getint(p));
+                const int picker = getint(p);
+                if(!p.overread()) receivedropdelete(id, picker);
                 break;
             }
             case N_WORLDSYNC:

@@ -65,7 +65,7 @@ enum
     N_SERVERIDENTITY, N_IDENTITYLOGIN, N_IDENTITYREGISTER, N_IDENTITYCHALLENGE,
     N_IDENTITYRESPONSE, N_IDENTITYSUCCESS, N_IDENTITYFAILURE, N_IDENTITYREVOKED,
     N_INVENTORYSTATE, N_INVENTORYACTION, N_WORLDACTION, N_WORLDAUTH, N_ACTIONRESULT,
-    N_BREAKSTATE,
+    N_BREAKSTATE, N_DROPSETTINGS, N_DROPSPAWN, N_DROPDELETE, N_DROPPICKUP,
     NUMMSG
 };
 
@@ -116,14 +116,44 @@ static const int msgsizes[] =
     N_SERVERIDENTITY, 0, N_IDENTITYLOGIN, 0, N_IDENTITYREGISTER, 0, N_IDENTITYCHALLENGE, 0,
     N_IDENTITYRESPONSE, 0, N_IDENTITYSUCCESS, 0, N_IDENTITYFAILURE, 0, N_IDENTITYREVOKED, 0,
     N_INVENTORYSTATE, 0, N_INVENTORYACTION, 5, N_WORLDACTION, 9, N_WORLDAUTH, 7,
-    N_ACTIONRESULT, 0, N_BREAKSTATE, 10,
+    N_ACTIONRESULT, 0, N_BREAKSTATE, 10, N_DROPSETTINGS, 6, N_DROPSPAWN, 10, N_DROPDELETE, 3, N_DROPPICKUP, 3,
     -1
 };
 
 #define TESSERACT_SERVER_PORT 42000
 #define TESSERACT_LANINFO_PORT 41998
 #define TESSERACT_MASTER_PORT 41999
-#define PROTOCOL_VERSION 12
+#define PROTOCOL_VERSION 13
+
+static inline uint worlddrophash(uint value)
+{
+    value ^= value >> 16;
+    value *= 0x7FEB352DU;
+    value ^= value >> 15;
+    value *= 0x846CA68BU;
+    return value ^ (value >> 16);
+}
+
+static inline bool worlddroproll(int source, uint requestid, int objectitem, int dropindex, int mincount, int maxcount, float chance, int &quantity)
+{
+    const uint seed = worlddrophash(requestid ^ uint(source + 1) * 0x9E3779B9U ^ uint(objectitem + 1) * 0x85EBCA6BU ^ uint(dropindex + 1));
+    if(float(seed & 0xFFFFFFU) / 16777216.0f >= clamp(chance, 0.0f, 1.0f)) return false;
+    quantity = mincount >= maxcount ? mincount : mincount + int(worlddrophash(seed ^ 0xC2B2AE35U) % uint(maxcount - mincount + 1));
+    return quantity > 0;
+}
+
+struct worlddrop
+{
+    uint id, sourcerequestid, pickuprequestid;
+    int source, item, count, owner, created, pickupmillis, picker;
+    bool confirmed, picking, removed, pickupblocked;
+    vec o, pickupfrom;
+
+    worlddrop() : id(0), sourcerequestid(0), pickuprequestid(0), source(-1), item(-1), count(0), owner(-1), created(0), pickupmillis(0),
+                  picker(-1), confirmed(false), picking(false), removed(false), pickupblocked(false), o(0, 0, 0), pickupfrom(0, 0, 0)
+    {
+    }
+};
 
 struct gameent : dynent
 {
@@ -199,6 +229,12 @@ namespace game
     extern float creativearmwave(int elapsed);
     extern int selectedcreativeblock();
     extern void receiveserversettings(int breakmillis, int scatterbreakmillis, int waterupdates, int waterdistance, int waterspeed);
+    extern void receivedropsettings(int personal, int timeout, int maximum, int maxdistance, int requireconfirmation);
+    extern void receivedropspawn(uint id, int source, uint sourcerequestid, int item, int count, int owner, const vec &o);
+    extern void receivedropdelete(uint id, int picker);
+    extern void resetworlddrops();
+    extern const vector<worlddrop *> &getworlddrops();
+    extern int getdynamicentsmaxdistance();
     extern void receiveinventory(const int *items, const int *counts, int slots, int selected);
     extern void receiveactionresult(uint requestid, int result, const char *reason);
     extern void receivebreakstate(int actor, uint requestid, int phase, int action, const ivec &target, int orient, int stage);

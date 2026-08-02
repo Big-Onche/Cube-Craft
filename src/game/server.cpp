@@ -17,7 +17,8 @@ namespace server
         SERVER_IDENTITY_DB_VERSION = 2,
         PLAYER_IDENTITY_VERSION = 1,
         PLAYER_IDENTITY_TIMEOUT = 15000,
-        PLAYER_IDENTITY_MAX_RECORDS = 100000
+        PLAYER_IDENTITY_MAX_RECORDS = 100000,
+        DROP_PICKUP_DELAY = 500
     };
 
     enum identityauthstate
@@ -60,6 +61,20 @@ namespace server
     VAR(desynctolerance, 0, 4, 100);
     VAR(violationresetinterval, 1, 60, 3600);
     VAR(identitybankicks, 1, 3, 100);
+#ifdef STANDALONE
+    VAR(personaldrops, 0, 0, 1);
+    VAR(droptimeout, 1, 300, 86400);
+    VAR(maxdrop, 1, 1024, 100000);
+    VAR(dynamicentsmaxdistance, 1, 64, 4096);
+    VAR(requireconfirmeditems, 0, 1, 1);
+#else
+    VAR(serverpersonaldrops, 0, 0, 1);
+    VAR(serverdroptimeout, 1, 300, 86400);
+    VAR(servermaxdrop, 1, 1024, 100000);
+    VAR(serverdynamicentsmaxdistance, 1, 64, 4096);
+    VAR(serverrequireconfirmeditems, 0, 1, 1);
+    static int personaldrops = 0, droptimeout = 300, maxdrop = 1024, dynamicentsmaxdistance = 64, requireconfirmeditems = 1;
+#endif
 
     struct serveridentity
     {
@@ -157,7 +172,22 @@ namespace server
         serverworldaction() : target(0, 0, 0), action(-1), orient(0), item(-1) {}
     };
 
+    struct serverdrop
+    {
+        uint id, sourcerequestid;
+        int source, item, count, created;
+        string ownerid;
+        vec o;
+
+        serverdrop() : id(0), sourcerequestid(0), source(-1), item(-1), count(0), created(0), o(0, 0, 0)
+        {
+            ownerid[0] = '\0';
+        }
+    };
+
     static vector<serverworldaction *> serverworldactions;
+    static vector<serverdrop *> serverdrops;
+    static uint nextdropid = 1;
     static void setworldactionstate(const ivec &target, int action, int orient, int item);
 
     vector<clientinfo *> clients;
@@ -469,6 +499,8 @@ namespace server
         worldhistory.deletecontents();
         worldredostack.deletecontents();
         serverworldactions.deletecontents();
+        serverdrops.deletecontents();
+        nextdropid = 1;
         worldeditrevision = 0;
         serverworldready = true;
 
@@ -766,16 +798,109 @@ namespace server
         return false;
     }
 
-    static void addworlddrops(clientinfo &ci, int item)
+    static bool inventoryhasroom(const clientinfo &ci, int item, int quantity)
     {
-        const int type = getworlditemtype(item), index = getworlditemindex(item), count = getworldobjectdropcount(type, index);
-        loopi(count)
+        int room = 0;
+        const int stack = max(getinventoryitemmaxstack(item), 1);
+        loopi(SURVIVAL_USABLE_SLOTS)
         {
-            int dropitem, mincount, maxcount;
+            if(ci.inventoryitems[i] == item && ci.inventorycounts[i] > 0) room += max(stack - ci.inventorycounts[i], 0);
+            else if(ci.inventorycounts[i] <= 0) room += stack;
+            if(room >= quantity) return true;
+        }
+        return false;
+    }
+
+    static bool addinventoryitems(clientinfo &ci, int item, int quantity)
+    {
+        if(quantity <= 0 || !inventoryhasroom(ci, item, quantity)) return false;
+        loopi(quantity) if(!addinventoryitem(ci, item)) return false;
+        return true;
+    }
+
+    static clientinfo *dropowner(const serverdrop &drop)
+    {
+        if(!drop.ownerid[0]) return NULL;
+        loopv(clients)
+        {
+            clientinfo *ci = clients[i];
+            if(ci && ci->connected && !strcmp(ci->playerid, drop.ownerid)) return ci;
+        }
+        return NULL;
+    }
+
+    static clientinfo *randomdropowner()
+    {
+        int available = 0;
+        loopv(clients) if(clients[i] && clients[i]->connected && clients[i]->worldready) ++available;
+        if(!available) return NULL;
+        int selected = rnd(available);
+        loopv(clients) if(clients[i] && clients[i]->connected && clients[i]->worldready && selected-- == 0) return clients[i];
+        return NULL;
+    }
+
+    static void senddropsettings(int cn = -1)
+    {
+        if(cn >= 0)
+            sendf(cn, 1, "ri6", N_DROPSETTINGS, personaldrops, droptimeout, maxdrop, dynamicentsmaxdistance, requireconfirmeditems);
+        else loopv(clients) if(clients[i] && clients[i]->connected)
+            sendf(clients[i]->clientnum, 1, "ri6", N_DROPSETTINGS, personaldrops, droptimeout, maxdrop,
+                  dynamicentsmaxdistance, requireconfirmeditems);
+    }
+
+    static void senddropspawn(int cn, const serverdrop &drop)
+    {
+        clientinfo *owner = dropowner(drop);
+        sendf(cn, 1, "ri10", N_DROPSPAWN, int(drop.id), drop.source, int(drop.sourcerequestid), drop.item, drop.count,
+              owner ? owner->clientnum : drop.ownerid[0] ? -2 : -1, int(drop.o.x), int(drop.o.y), int(drop.o.z));
+    }
+
+    static void broadcastdropspawn(const serverdrop &drop)
+    {
+        loopv(clients) if(clients[i] && clients[i]->connected && clients[i]->worldready) senddropspawn(clients[i]->clientnum, drop);
+    }
+
+    static void removeserverdrop(int index, int picker = -1)
+    {
+        if(!serverdrops.inrange(index)) return;
+        serverdrop *drop = serverdrops.remove(index);
+        loopv(clients) if(clients[i] && clients[i]->connected && clients[i]->worldready)
+            sendf(clients[i]->clientnum, 1, "ri3", N_DROPDELETE, int(drop->id), picker);
+        delete drop;
+    }
+
+    static vec serverdroporigin(const ivec &target, int action, int orient)
+    {
+        ivec cell = target;
+        if(action == WORLD_ACTION_BREAK_SCATTER_START && orient >= 0 && orient <= 5)
+            cell[orient >> 1] += orient&1 ? 16 : -16;
+        return vec(cell.x + 8.0f, cell.y + 8.0f, cell.z + 3.0f);
+    }
+
+    static void addworlddrops(clientinfo *provoker, uint requestid, int action, const ivec &target, int orient, int objectitem)
+    {
+        clientinfo *owner = provoker ? provoker : randomdropowner();
+        const int source = provoker ? provoker->clientnum : owner ? owner->clientnum : -1;
+        const int type = getworlditemtype(objectitem), index = getworlditemindex(objectitem), definitions = getworldobjectdropcount(type, index);
+        loopi(definitions)
+        {
+            int item, mincount, maxcount, quantity;
             float chance;
-            if(!getworldobjectdrop(type, index, i, dropitem, mincount, maxcount, chance) || rndscale(1.0f) > chance) continue;
-            const int quantity = mincount >= maxcount ? mincount : mincount + rnd(maxcount - mincount + 1);
-            loopj(quantity) if(!addinventoryitem(ci, dropitem)) break;
+            if(!getworldobjectdrop(type, index, i, item, mincount, maxcount, chance) || !worlddroproll(source, requestid, objectitem, i, mincount, maxcount, chance, quantity))
+                continue;
+            while(serverdrops.length() >= maxdrop) removeserverdrop(0);
+            serverdrop *drop = new serverdrop;
+            if(!nextdropid || nextdropid > uint(INT_MAX)) nextdropid = 1;
+            drop->id = nextdropid++;
+            drop->sourcerequestid = requestid;
+            drop->source = source;
+            drop->item = item;
+            drop->count = quantity;
+            drop->created = max(totalmillis, 1);
+            drop->o = serverdroporigin(target, action, orient);
+            if(owner) copystring(drop->ownerid, owner->playerid);
+            serverdrops.add(drop);
+            broadcastdropspawn(*drop);
         }
     }
 
@@ -973,6 +1098,7 @@ namespace server
         putint(p, serverwatersimulationmaxdist);
         putint(p, clamp(int(serverwaterflowspeed * 1000.0f + 0.5f), 100, 20000));
         sendpacket(ci.clientnum, 1, p.finalize());
+        senddropsettings(ci.clientnum);
     }
 
     static void replayworld(clientinfo &ci)
@@ -981,6 +1107,7 @@ namespace server
         {
             if(worldhistory[i]->active) sendserveredit(ci.clientnum, *worldhistory[i]);
         }
+        loopv(serverdrops) senddropspawn(ci.clientnum, *serverdrops[i]);
         sendf(ci.clientnum, 1, "ri2", N_WORLDSYNC, int(worldeditrevision));
         ci.worldready = true;
     }
@@ -995,6 +1122,13 @@ namespace server
 
     void serverinit()
     {
+#ifndef STANDALONE
+        personaldrops = serverpersonaldrops;
+        droptimeout = serverdroptimeout;
+        maxdrop = servermaxdrop;
+        dynamicentsmaxdistance = serverdynamicentsmaxdistance;
+        requireconfirmeditems = serverrequireconfirmeditems;
+#endif
         gamemode = creativemode ? STARTGAMEMODE : STARTGAMEMODE + 2;
         copystring(smapname, serverworld);
         journalinitialized = false;
@@ -1303,15 +1437,6 @@ namespace server
         return ++count <= limit;
     }
 
-    static bool inventoryhasroom(const clientinfo &ci)
-    {
-        loopi(SURVIVAL_USABLE_SLOTS)
-            if(ci.inventorycounts[i] <= 0 ||
-               ci.inventorycounts[i] < max(getinventoryitemmaxstack(ci.inventoryitems[i]), 1))
-                return true;
-        return false;
-    }
-
     static bool validactionitem(int action, int item)
     {
         if(item < 0)
@@ -1565,24 +1690,17 @@ namespace server
             return rejectaction(ci, requestid, "excessive destruction rate", true);
         }
         const int action = ci.breakaction;
-        const int objecttype = getworlditemtype(item), objectindex = getworlditemindex(item);
-        if(!servercreative() && getworldobjectdropcount(objecttype, objectindex) > 0 && !inventoryhasroom(ci))
-        {
-            cancelbreak(ci);
-            return rejectaction(ci, requestid, "inventory is full");
-        }
         if(!acceptworldaction(ci, requestid, action, target, ci.breakorient, item))
         {
             cancelbreak(ci);
             return rejectaction(ci, requestid, "server could not persist the destruction");
         }
         setworldactionstate(target, action, ci.breakorient, item);
-        if(!servercreative()) addworlddrops(ci, item);
+        if(!servercreative()) addworlddrops(&ci, requestid, action, target, ci.breakorient, item);
         sendbreakstate(ci, BREAK_STATE_COMPLETE, 7);
         ci.breakactive = false;
         ci.breakrequestid = 0;
         sendactionresult(ci, requestid, true);
-        sendinventory(ci);
         return true;
     }
 
@@ -1612,6 +1730,32 @@ namespace server
             default:
                 return rejectaction(ci, requestid, "unknown world action", true, true);
         }
+    }
+
+    static int findserverdrop(uint id)
+    {
+        loopv(serverdrops) if(serverdrops[i]->id == id) return i;
+        return -1;
+    }
+
+    static bool handledroppickup(clientinfo &ci, uint requestid, uint dropid)
+    {
+        const char *error = NULL;
+        if(!validnewrequest(ci, requestid, error)) return rejectaction(ci, requestid, error, requestid == ci.lastrequestid);
+        if(!ci.worldready || !ci.hasposition) return rejectaction(ci, requestid, "a synchronized player position is required to pick up drops");
+        const int index = findserverdrop(dropid);
+        if(index < 0) return rejectaction(ci, requestid, "drop is no longer available");
+        serverdrop &drop = *serverdrops[index];
+        if(totalmillis - drop.created < DROP_PICKUP_DELAY) return rejectaction(ci, requestid, "drop is not ready for pickup");
+        if(personaldrops && drop.ownerid[0] && strcmp(drop.ownerid, ci.playerid))
+            return rejectaction(ci, requestid, "drop belongs to another player");
+        if(drop.o.dist(ci.o) > 24.0f) return rejectaction(ci, requestid, "drop is beyond the 24-unit pickup distance");
+        if(!inventoryhasroom(ci, drop.item, drop.count)) return rejectaction(ci, requestid, "inventory is full");
+        if(!addinventoryitems(ci, drop.item, drop.count)) return rejectaction(ci, requestid, "server could not add the drop to inventory");
+        removeserverdrop(index, ci.clientnum);
+        sendactionresult(ci, requestid, true);
+        sendinventory(ci);
+        return true;
     }
 
     static bool handleinventoryaction(clientinfo &ci, uint requestid, int action, int first, int second)
@@ -1694,6 +1838,56 @@ namespace server
         while(*args && !iscubespace(*args)) ++args;
         if(*args) *args++ = '\0';
         while(iscubespace(*args)) ++args;
+
+        if(cubecaseequal(command, "personaldrops") || cubecaseequal(command, "requireconfirmeditems"))
+        {
+            int &setting = cubecaseequal(command, "personaldrops") ? personaldrops : requireconfirmeditems;
+            if(args[0])
+            {
+                char *end = NULL;
+                const long value = strtol(args, &end, 10);
+                while(end && iscubespace(*end)) ++end;
+                if(end == args || (end && *end) || (value != 0 && value != 1))
+                {
+                    sendcommandresult(ci, cubecaseequal(command, "personaldrops")
+                                           ? "usage: /personaldrops <0|1>"
+                                           : "usage: /requireconfirmeditems <0|1>");
+                    return;
+                }
+                setting = int(value);
+                senddropsettings();
+            }
+            defformatstring(message, "%s: %s", command, setting ? "enabled" : "disabled");
+            sendcommandresult(ci, message);
+            return;
+        }
+
+        if(cubecaseequal(command, "droptimeout") || cubecaseequal(command, "maxdrop") || cubecaseequal(command, "dynamicentsmaxdistance"))
+        {
+            char *end = NULL;
+            const long value = strtol(args, &end, 10);
+            while(end && iscubespace(*end)) ++end;
+            const int minimum = 1, maximum = cubecaseequal(command, "droptimeout") ? 86400 :
+                                             cubecaseequal(command, "maxdrop") ? 100000 : 4096;
+            if(end == args || (end && *end) || value < minimum || value > maximum)
+            {
+                if(cubecaseequal(command, "droptimeout")) sendcommandresult(ci, "usage: /droptimeout <seconds 1-86400>");
+                else if(cubecaseequal(command, "maxdrop")) sendcommandresult(ci, "usage: /maxdrop <count 1-100000>");
+                else sendcommandresult(ci, "usage: /dynamicentsmaxdistance <distance 1-4096>");
+                return;
+            }
+            if(cubecaseequal(command, "droptimeout")) droptimeout = int(value);
+            else if(cubecaseequal(command, "maxdrop"))
+            {
+                maxdrop = int(value);
+                while(serverdrops.length() > maxdrop) removeserverdrop(0);
+            }
+            else dynamicentsmaxdistance = int(value);
+            senddropsettings();
+            defformatstring(message, "%s: %d", command, int(value));
+            sendcommandresult(ci, message);
+            return;
+        }
 
         if(cubecaseequal(command, "identityrevoke") ||
            cubecaseequal(command, "idrevoke"))
@@ -2343,6 +2537,13 @@ namespace server
                         rejectaction(*ci, requestid, "world actions are disabled until synchronization completes");
                     break;
                 }
+                case N_DROPPICKUP:
+                {
+                    clientinfo *ci = getinfo(sender);
+                    const uint requestid = uint(getint(p)), dropid = uint(getint(p));
+                    if(ci && ci->connected && !p.overread()) handledroppickup(*ci, requestid, dropid);
+                    break;
+                }
                 case N_EDITENT:
                 case N_EDITF: case N_EDITT: case N_EDITM: case N_FLIP: case N_COPY: case N_PASTE: case N_ROTATE: case N_REPLACE: case N_DELCUBE: case N_CALCLIGHT: case N_REMIP: case N_EDITVSLOT: case N_EDITSCATTER: case N_UNDO: case N_REDO: case N_EDITVAR:
                 {
@@ -2425,6 +2626,9 @@ namespace server
                 case N_WORLDAUTH:
                 case N_ACTIONRESULT:
                 case N_BREAKSTATE:
+                case N_DROPSETTINGS:
+                case N_DROPSPAWN:
+                case N_DROPDELETE:
                 {
                     clientinfo *ci = getinfo(sender);
                     p.pad(p.remaining());
@@ -2520,6 +2724,8 @@ namespace server
                 (ci->breakrelease && totalmillis - ci->breakrelease >= breakcancelgrace)))
                 cancelbreak(*ci);
         }
+        for(int i = serverdrops.length() - 1; i >= 0; --i)
+            if(totalmillis - serverdrops[i]->created >= droptimeout * 1000) removeserverdrop(i);
         if(!worldtimefrozen && curtime > 0)
         {
             worldclockmillis += curtime;
