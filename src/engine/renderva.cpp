@@ -136,9 +136,13 @@ static inline bool livecullva(vtxarray &va)
 
     // Never wait for the GPU here. An unavailable or newly visible result
     // rejoins the ordinary visible traversal immediately.
-    if(!checkquery(va.query, true))
+    if(!checkquery(va.query, true) || va.query->fragments > 0)
     {
-        if(va.query->fragments >= oqfrags) va.occluded = OCCLUDE_NOTHING;
+        if(va.query->fragments > 0)
+        {
+            va.occluded = OCCLUDE_NOTHING;
+            va.occludedframe = 0;
+        }
         return false;
     }
 
@@ -928,32 +932,6 @@ int cullfrustumsides(const vec &lightpos, float lightradius, float size, float b
 VAR(smbbcull, 0, 1, 1);
 VAR(smdistcull, 0, 1, 1);
 VAR(smnodraw, 0, 0, 1);
-VARP(livecullshadows, 0, 1, 1);
-VARP(livecullshadowsize, 0, 256, 4096);
-
-static int liveculledshadowvas = 0, livecullshadowmillis = -1;
-
-static inline bool livecullshadowva(vtxarray &va)
-{
-    int sectionsize = getworldsectionsize();
-    if(!livecullshadows || !sectionsize || va.size < livecullshadowsize ||
-       va.curvfc != VFC_FULL_VISIBLE || va.occluded != OCCLUDE_BB ||
-       va.occludedframe != occlusionframe ||
-       camera1->o.dist_to_bb(va.bbmin, va.bbmax) < sectionsize)
-        return false;
-
-    // A clipped query only proves that the on-screen portion was hidden. Its
-    // off-screen portion may still cast into a visible shadow-map split, so
-    // only fully camera-contained bounds are eligible for shadow pruning.
-    liveculledshadowvas++;
-    va.shadowmask = va.shadowtransparent = 0;
-    return true;
-}
-
-int getnumliveculledshadowvas()
-{
-    return liveculledshadowvas;
-}
 
 vec shadoworigin(0, 0, 0), shadowdir(0, 0, 0);
 float shadowradius = 0, shadowbias = 0;
@@ -1021,7 +999,6 @@ void findcsmshadowvas(vector<vtxarray *> &vas, bool transparent)
     loopv(vas)
     {
         vtxarray &v = *vas[i];
-        if(livecullshadowva(v)) continue;
         ivec bbmin, bbmax;
         getshadowvabb(v, bbmin, bbmax, transparent);
         v.shadowmask = calcbbcsmsplits(bbmin, bbmax);
@@ -1048,7 +1025,6 @@ void findrsmshadowvas(vector<vtxarray *> &vas)
     loopv(vas)
     {
         vtxarray &v = *vas[i];
-        if(livecullshadowva(v)) continue;
         ivec bbmin, bbmax;
         getshadowvabb(v, bbmin, bbmax);
         v.shadowmask = calcbbrsmsplits(bbmin, bbmax);
@@ -1090,12 +1066,6 @@ void findspotshadowvas(vector<vtxarray *> &vas, bool transparent)
 
 void findshadowvas(bool transparent)
 {
-    ZoneNamedN(livecullshadowszone, "livecullshadows", livecullshadows != 0);
-    if(livecullshadowmillis != totalmillis)
-    {
-        livecullshadowmillis = totalmillis;
-        liveculledshadowvas = 0;
-    }
     shadowtransparent = 0;
     shadowvas.setsize(0);
     switch(shadowmapping)
@@ -1106,7 +1076,6 @@ void findshadowvas(bool transparent)
         case SM_SPOT: findspotshadowvas(varoot, transparent); break;
     }
     sortshadowvas();
-    ZoneValueV(livecullshadowszone, liveculledshadowvas);
 }
 
 void rendershadowmapworld()
@@ -1879,7 +1848,7 @@ void rendergeom()
                 va->occludedframe = 0;
                 continue;
             }
-            bool hidden = va->query && va->query->owner == va && checkquery(va->query, true);
+            bool hidden = va->query && va->query->owner == va && checkquery(va->query, true) && va->query->fragments == 0;
             va->occluded = hidden ? min(va->occluded + 1, int(OCCLUDE_BB)) : OCCLUDE_NOTHING;
             va->occludedframe = hidden ? occlusionframe : 0;
             va->query = newquery(va);
@@ -1903,7 +1872,7 @@ void rendergeom()
                     va->occludedframe = occlusionframe;
                     continue;
                 }
-                bool hidden = va->query && va->query->owner == va && checkquery(va->query, true);
+                bool hidden = va->query && va->query->owner == va && checkquery(va->query, true) && va->query->fragments == 0;
                 va->occluded = hidden ? min(va->occluded+1, int(OCCLUDE_BB)) : OCCLUDE_NOTHING;
                 va->occludedframe = hidden ? occlusionframe : 0;
                 va->query = newquery(va);
@@ -1979,7 +1948,7 @@ void rendergeom()
         {
             bool parenthidden = va->parent && va->parent->occluded >= OCCLUDE_BB &&
                                 va->parent->occludedframe == occlusionframe;
-            if(parenthidden || (va->query && checkquery(va->query, true)))
+            if(parenthidden || (va->query && checkquery(va->query, true) && va->query->fragments == 0))
             {
                 va->occluded = OCCLUDE_BB;
                 va->occludedframe = occlusionframe;

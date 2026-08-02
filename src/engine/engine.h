@@ -481,7 +481,6 @@ extern void resetqueries();
 extern int getnumqueries();
 extern int getnumvisiblevas();
 extern int getnumliveculledvas();
-extern int getnumliveculledshadowvas();
 extern void startbb(bool mask = true);
 extern void endbb(bool mask = true);
 extern void drawbb(const ivec &bo, const ivec &br);
