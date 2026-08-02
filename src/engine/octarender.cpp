@@ -1160,6 +1160,7 @@ vtxarray *newva(const ivec &o, int size)
     va->mergelevel = -1;
 
     vc.setupdata(va);
+    va->oqcontent = va->alphatris || va->matmask;
 
     if(va->alphatris)
     {
@@ -1237,6 +1238,7 @@ void updatevabb(vtxarray *va, bool force)
 {
     if(!force && va->bbmin.x >= 0) return;
 
+    va->oqcontent = va->alphatris || va->matmask;
     va->bbmin = va->geommin;
     va->bbmax = va->geommax;
     va->bbmin.min(va->lavamin);
@@ -1249,6 +1251,7 @@ void updatevabb(vtxarray *va, bool force)
     {
         vtxarray *child = va->children[i];
         updatevabb(child, force);
+        va->oqcontent |= child->oqcontent;
         va->bbmin.min(child->bbmin);
         va->bbmax.max(child->bbmax);
     }

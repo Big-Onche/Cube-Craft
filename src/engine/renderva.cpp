@@ -187,6 +187,12 @@ static inline bool applyvaquery(vtxarray &va, int result)
 
 static inline bool livecullva(vtxarray &va)
 {
+    if(va.oqcontent)
+    {
+        va.query = NULL;
+        clearvaocclusion(va);
+        return false;
+    }
     if(!livecull || !oqgeom || !oqfrags || drawtex || !occlusionviewstable ||
        va.occluded < OCCLUDE_BB || !va.query || va.query->owner != &va ||
        camera1->o.insidebb(va.o, va.size, 2))
@@ -584,12 +590,32 @@ void drawbb(const ivec &bo, const ivec &br)
 
 extern int octaentsize;
 
-static octaentities *visiblemms, **lastvisiblemms;
+static octaentities *visiblemms;
+
+struct visiblemmentry
+{
+    octaentities *node;
+    int order;
+
+    visiblemmentry(octaentities *node, int order) : node(node), order(order) {}
+};
+
+static bool sortvisiblemms(const visiblemmentry &x, const visiblemmentry &y)
+{
+    if(x.node->distance != y.node->distance) return x.node->distance > y.node->distance;
+    return x.order > y.order;
+}
 
 void findvisiblemms(const vector<extentity *> &ents, bool doquery)
 {
+    ZoneScopedN("Render/G-buffer/Map models/Discovery and sort");
+
+    static vector<visiblemmentry> visiblenodes;
+    static vector<octaentities *> hiddennodes;
+    visiblenodes.setsize(0);
+    hiddennodes.setsize(0);
     visiblemms = NULL;
-    lastvisiblemms = &visiblemms;
+    int order = 0;
     for(vtxarray *va = visibleva; va; va = va->next) if(va->occluded < OCCLUDE_BB && va->curvfc < VFC_FOGGED) loopv(va->mapmodels)
     {
         octaentities *oe = va->mapmodels[i];
@@ -599,10 +625,7 @@ void findvisiblemms(const vector<extentity *> &ents, bool doquery)
         if(occluded)
         {
             oe->distance = -1;
-
-            oe->next = NULL;
-            *lastvisiblemms = oe;
-            lastvisiblemms = &oe->next;
+            hiddennodes.add(oe);
         }
         else
         {
@@ -617,19 +640,24 @@ void findvisiblemms(const vector<extentity *> &ents, bool doquery)
             if(!visible) continue;
 
             oe->distance = int(camera1->o.dist_to_bb(oe->o, oe->size));
-
-            octaentities **prev = &visiblemms, *cur = visiblemms;
-            while(cur && cur->distance >= 0 && oe->distance > cur->distance)
-            {
-                prev = &cur->next;
-                cur = cur->next;
-            }
-
-            if(*prev == NULL) lastvisiblemms = &oe->next;
-            oe->next = *prev;
-            *prev = oe;
+            visiblenodes.add(visiblemmentry(oe, order++));
         }
     }
+
+    if(visiblenodes.length() > 1) visiblenodes.sort(sortvisiblemms);
+
+    octaentities **last = &visiblemms;
+    loopv(visiblenodes)
+    {
+        *last = visiblenodes[i].node;
+        last = &visiblenodes[i].node->next;
+    }
+    loopv(hiddennodes)
+    {
+        *last = hiddennodes[i];
+        last = &hiddennodes[i]->next;
+    }
+    *last = NULL;
 }
 
 VAR(oqmm, 0, 4, 8);
@@ -643,50 +671,78 @@ static inline void rendermapmodel(extentity &e)
 
 void rendermapmodels()
 {
+    ZoneScopedN("Render/G-buffer/Map models/Total");
+
     static int skipoq = 0;
     bool doquery = !drawtex && oqfrags && oqmm;
     const vector<extentity *> &ents = entities::getents();
     findvisiblemms(ents, doquery);
 
-    for(octaentities *oe = visiblemms; oe; oe = oe->next) if(oe->distance>=0)
+    int visibleNodes = 0, visibleEntities = 0, immediateQueryNodes = 0, hiddenNodes = 0, hiddenQueryNodes = 0;
     {
-        bool rendered = false;
-        loopv(oe->mapmodels)
+        ZoneScopedN("Render/G-buffer/Map models/Submission");
+
+        for(octaentities *oe = visiblemms; oe; oe = oe->next) if(oe->distance>=0)
         {
-            extentity &e = *ents[oe->mapmodels[i]];
-            if(!(e.flags&EF_RENDER)) continue;
-            if(!rendered)
+            visibleNodes++;
+            bool rendered = false;
+            loopv(oe->mapmodels)
             {
-                rendered = true;
-                oe->query = doquery && oe->distance>0 && !(++skipoq%oqmm) ? newquery(oe) : NULL;
-                if(oe->query) startmodelquery(oe->query);
+                extentity &e = *ents[oe->mapmodels[i]];
+                if(!(e.flags&EF_RENDER)) continue;
+                visibleEntities++;
+                if(!rendered)
+                {
+                    rendered = true;
+                    oe->query = doquery && oe->distance>0 && !(++skipoq%oqmm) ? newquery(oe) : NULL;
+                    if(oe->query)
+                    {
+                        immediateQueryNodes++;
+                        startmodelquery(oe->query);
+                    }
+                }
+                rendermapmodel(e);
+                e.flags &= ~EF_RENDER;
             }
-            rendermapmodel(e);
-            e.flags &= ~EF_RENDER;
+            if(rendered && oe->query) endmodelquery();
         }
-        if(rendered && oe->query) endmodelquery();
     }
-    rendermapmodelbatches();
-    clearbatchedmapmodels();
+    {
+        ZoneScopedN("Render/G-buffer/Map models/Batched draw");
+        rendermapmodelbatches();
+    }
+    {
+        ZoneScopedN("Render/G-buffer/Map models/Batch cleanup");
+        clearbatchedmapmodels();
+    }
 
     bool queried = false;
-    for(octaentities *oe = visiblemms; oe; oe = oe->next) if(oe->distance<0)
     {
-        oe->query = doquery && !camera1->o.insidebb(oe->bbmin, oe->bbmax, 1) ? newquery(oe) : NULL;
-        if(!oe->query) continue;
-        if(!queried)
+        ZoneScopedN("Render/G-buffer/Map models/Hidden query refresh");
+
+        for(octaentities *oe = visiblemms; oe; oe = oe->next) if(oe->distance<0)
         {
-            startbb();
-            queried = true;
+            hiddenNodes++;
+            oe->query = doquery && !camera1->o.insidebb(oe->bbmin, oe->bbmax, 1) ? newquery(oe) : NULL;
+            if(!oe->query) continue;
+            hiddenQueryNodes++;
+            if(!queried)
+            {
+                startbb();
+                queried = true;
+            }
+            startquery(oe->query);
+            drawbb(oe->bbmin, ivec(oe->bbmax).sub(oe->bbmin));
+            endquery(oe->query);
         }
-        startquery(oe->query);
-        drawbb(oe->bbmin, ivec(oe->bbmax).sub(oe->bbmin));
-        endquery(oe->query);
+        if(queried) endbb();
     }
-    if(queried)
-    {
-        endbb();
-    }
+
+    TracyPlot("Render/Map model visible nodes", int64_t(visibleNodes));
+    TracyPlot("Render/Map model visible entities", int64_t(visibleEntities));
+    TracyPlot("Render/Map model immediate OQ nodes", int64_t(immediateQueryNodes));
+    TracyPlot("Render/Map model hidden nodes", int64_t(hiddenNodes));
+    TracyPlot("Render/Map model hidden OQ nodes", int64_t(hiddenQueryNodes));
 }
 
 static inline bool bbinsideva(const ivec &bo, const ivec &br, vtxarray *va)
@@ -1046,6 +1102,11 @@ static inline void getshadowvabb(vtxarray &v, ivec &bbmin, ivec &bbmax, bool tra
     if(transparent && v.alphatris) { bbmin.min(v.alphamin); bbmax.max(v.alphamax); }
 }
 
+static inline bool hasshadowcontent(const vtxarray &v, bool transparent = false)
+{
+    return v.tris || v.blends || (skyshadow && v.sky) || (transparent && v.alphatris) || v.mapmodels.length();
+}
+
 void findshadowvas(vector<vtxarray *> &vas, bool transparent)
 {
     loopv(vas)
@@ -1056,17 +1117,19 @@ void findshadowvas(vector<vtxarray *> &vas, bool transparent)
         {
             ivec bbmin, bbmax;
             getshadowvabb(v, bbmin, bbmax, transparent);
-            v.shadowmask = smbbcull ? 0x3F : calcbbsidemask(bbmin, bbmax, shadoworigin, shadowradius, shadowbias);
+            v.shadowmask = !smbbcull ? 0x3F : calcbbsidemask(bbmin, bbmax, shadoworigin, shadowradius, shadowbias);
+            if(!v.shadowmask) continue;
             if(transparent)
             {
                 if(v.alphatris)
                 {
-                    v.shadowtransparent = v.shadowmask & calcbbsidemask(v.alphamin, v.alphamax, shadoworigin, shadowradius, shadowbias);
+                    v.shadowtransparent = !smbbcull ? v.shadowmask :
+                                          v.shadowmask & calcbbsidemask(v.alphamin, v.alphamax, shadoworigin, shadowradius, shadowbias);
                     shadowtransparent |= v.shadowtransparent;
                 }
                 else v.shadowtransparent = 0;
             }
-            addshadowva(&v, dist);
+            if(hasshadowcontent(v, transparent)) addshadowva(&v, dist);
             if(v.children.length()) findshadowvas(v.children, transparent);
         }
     }
@@ -1092,7 +1155,7 @@ void findcsmshadowvas(vector<vtxarray *> &vas, bool transparent)
                 else v.shadowtransparent = 0;
             }
             float dist = shadowdir.project_bb(bbmin, bbmax) - shadowbias;
-            addshadowva(&v, dist);
+            if(hasshadowcontent(v, transparent)) addshadowva(&v, dist);
             if(v.children.length()) findcsmshadowvas(v.children, transparent);
         }
     }
@@ -1109,7 +1172,7 @@ void findrsmshadowvas(vector<vtxarray *> &vas)
         if(v.shadowmask)
         {
             float dist = shadowdir.project_bb(bbmin, bbmax) - shadowbias;
-            addshadowva(&v, dist);
+            if(hasshadowcontent(v)) addshadowva(&v, dist);
             if(v.children.length()) findrsmshadowvas(v.children);
         }
     }
@@ -1127,16 +1190,17 @@ void findspotshadowvas(vector<vtxarray *> &vas, bool transparent)
             getshadowvabb(v, bbmin, bbmax, transparent);
             bool insidespot = bbinsidespot(shadoworigin, shadowdir, shadowspot, bbmin, bbmax);
             v.shadowmask = !smbbcull || insidespot ? 1 : 0;
+            if(!v.shadowmask) continue;
             if(transparent)
             {
                 if(v.alphatris)
                 {
-                    v.shadowtransparent = v.shadowmask && bbinsidespot(shadoworigin, shadowdir, shadowspot, v.alphamin, v.alphamax) ? 1 : 0;
+                    v.shadowtransparent = !smbbcull || bbinsidespot(shadoworigin, shadowdir, shadowspot, v.alphamin, v.alphamax) ? 1 : 0;
                     shadowtransparent |= v.shadowtransparent;
                 }
                 else v.shadowtransparent = 0;
             }
-            addshadowva(&v, dist);
+            if(hasshadowcontent(v, transparent)) addshadowva(&v, dist);
             if(v.children.length()) findspotshadowvas(v.children, transparent);
         }
     }
@@ -1890,6 +1954,8 @@ VAR(oqgeom, 0, 1, 1);
 
 void rendergeom()
 {
+    ZoneScopedN("Render/G-buffer/World/Total");
+
     bool doOQ = oqfrags && oqgeom && !drawtex, multipassing = false;
     renderstate cur;
 
@@ -1901,170 +1967,224 @@ void rendergeom()
         groupqueries.setsize(0);
         leafqueries.setsize(0);
 
-        // Keep already hidden groups resident in the query pool first. If the
-        // pool is exhausted, dropping ownership makes the section visible on
-        // the next traversal instead of leaving stale geometry hidden.
-        loopv(livecullqueries)
         {
-            vtxarray *va = livecullqueries[i];
-            if(va->query && va->query->owner == va) proxyqueries.add(va);
-            else clearvaocclusion(*va);
-        }
+            ZoneScopedN("Render/G-buffer/World/Query preparation");
 
-        // Reserve queries for coarse section groups before leaf geometry can
-        // consume the finite query pool.
-        for(vtxarray *va = visibleva; va; va = va->next) if(!va->texs && va->children.length())
-        {
-            if(camera1->o.insidebb(va->o, va->size, 2))
+            // Keep already hidden groups resident in the query pool first. If the
+            // pool is exhausted, dropping ownership makes the section visible on
+            // the next traversal instead of leaving stale geometry hidden.
+            loopv(livecullqueries)
             {
-                va->query = NULL;
-                clearvaocclusion(*va);
-                continue;
+                vtxarray *va = livecullqueries[i];
+                if(va->query && va->query->owner == va) proxyqueries.add(va);
+                else clearvaocclusion(*va);
             }
-            applyvaquery(*va, vaqueryresult(*va));
-            va->query = newvaquery(*va);
-            if(va->query) groupqueries.add(va);
-            else clearvaocclusion(*va);
-        }
 
-        for(vtxarray *va = visibleva; va; va = va->next) if(va->texs)
-        {
-            if(!camera1->o.insidebb(va->o, va->size, 2))
+            // Reserve queries for coarse section groups before leaf geometry can
+            // consume the finite query pool.
+            for(vtxarray *va = visibleva; va; va = va->next) if(!va->texs && va->children.length())
             {
-                if(va->parent && va->parent->occluded >= OCCLUDE_BB &&
-                   va->parent->occludedframe == occlusionframe)
+                if(va->oqcontent)
                 {
                     va->query = NULL;
-                    va->occluded = OCCLUDE_PARENT;
+                    clearvaocclusion(*va);
+                    continue;
+                }
+                if(camera1->o.insidebb(va->o, va->size, 2))
+                {
+                    va->query = NULL;
+                    clearvaocclusion(*va);
+                    continue;
+                }
+                applyvaquery(*va, vaqueryresult(*va));
+                va->query = newvaquery(*va);
+                if(va->query) groupqueries.add(va);
+                else clearvaocclusion(*va);
+            }
+        }
+
+        {
+            ZoneScopedN("Render/G-buffer/World/Z and leaf queries");
+
+            for(vtxarray *va = visibleva; va; va = va->next) if(va->texs)
+            {
+                if(va->oqcontent)
+                {
+                    va->query = NULL;
+                    va->occluded = pvsoccluded(va->geommin, va->geommax) ? OCCLUDE_GEOM : OCCLUDE_NOTHING;
+                    va->occludedframe = 0;
+                    if(va->occluded < OCCLUDE_GEOM) renderva(cur, va, RENDERPASS_Z);
+                    continue;
+                }
+                if(!camera1->o.insidebb(va->o, va->size, 2))
+                {
+                    if(va->parent && va->parent->occluded >= OCCLUDE_BB &&
+                       va->parent->occludedframe == occlusionframe)
+                    {
+                        va->query = NULL;
+                        va->occluded = OCCLUDE_PARENT;
+                        va->occludedframe = occlusionframe;
+                        continue;
+                    }
+                    bool hidden = applyvaquery(*va, vaqueryresult(*va));
+                    if(!hidden && pvsoccluded(va->geommin, va->geommax))
+                    {
+                        va->query = NULL;
+                        va->occluded = OCCLUDE_GEOM;
+                        va->occludedframe = 0;
+                        continue;
+                    }
+                    va->query = newvaquery(*va);
+                    if(!va->query)
+                    {
+                        clearvaocclusion(*va);
+                        hidden = false;
+                    }
+                    if(hidden)
+                    {
+                        if(va->query)
+                        {
+                            if(cur.vattribs) disablevattribs(cur, false);
+                            if(cur.vbuf) disablevbuf(cur);
+                            renderquery(cur, va->query, va);
+                            leafqueries.add(va);
+                        }
+                        continue;
+                    }
+                }
+                else
+                {
+                    va->query = NULL;
+                    va->occluded = pvsoccluded(va->geommin, va->geommax) ? OCCLUDE_GEOM : OCCLUDE_NOTHING;
+                    va->occludedframe = 0;
+                    if(va->occluded >= OCCLUDE_GEOM) continue;
+                }
+
+                renderva(cur, va, RENDERPASS_Z, true);
+                if(va->query) leafqueries.add(va);
+            }
+        }
+
+        {
+            ZoneScopedN("Render/G-buffer/World/Group queries");
+
+            // Geometry-free VAs preserve the section hierarchy. They are queried
+            // as aggregate bounds after section geometry has populated the depth
+            // buffer, allowing one result to cull many underground descendants.
+            loopv(groupqueries)
+            {
+                vtxarray *va = groupqueries[i];
+                if(cur.vattribs) disablevattribs(cur, false);
+                if(cur.vbuf) disablevbuf(cur);
+                renderquery(cur, va->query, va);
+            }
+        }
+
+        {
+            ZoneScopedN("Render/G-buffer/World/Hidden proxy queries");
+
+            // Hidden sections are absent from visibleva, so the rest of the frame
+            // cannot spend CPU or GPU work on their geometry. Refresh only their
+            // bounding-box queries against the current depth buffer.
+            loopv(proxyqueries)
+            {
+                vtxarray *va = proxyqueries[i];
+                if(cur.vattribs) disablevattribs(cur, false);
+                if(cur.vbuf) disablevbuf(cur);
+                renderquery(cur, va->query, va);
+            }
+        }
+
+        TracyPlot("Render/OQ group queries", int64_t(groupqueries.length()));
+        TracyPlot("Render/OQ leaf queries", int64_t(leafqueries.length()));
+        TracyPlot("Render/OQ hidden proxies", int64_t(proxyqueries.length()));
+        TracyPlot("Render/OQ allocated queries", int64_t(geomqueries));
+
+        {
+            ZoneScopedN("Render/G-buffer/World/Query resolve");
+
+            if(cur.vquery) disablevquery(cur);
+            if(cur.vattribs) disablevattribs(cur, false);
+            if(cur.vbuf) disablevbuf(cur);
+
+            glFlush();
+            if(cur.colormask) { cur.colormask = false; glColorMask(GL_FALSE, GL_FALSE, GL_FALSE, GL_FALSE); }
+            if(cur.depthmask) { cur.depthmask = false; glDepthMask(GL_FALSE); }
+            workinoq();
+            if(!cur.colormask) { cur.colormask = true; glColorMask(GL_TRUE, GL_TRUE, GL_TRUE, GL_TRUE); }
+            if(!cur.depthmask) { cur.depthmask = true; glDepthMask(GL_TRUE); }
+
+            // Parent results used during the Z pass came from the preceding view.
+            // Resolve the replacement queries before those parents may suppress
+            // child color rendering. Pending results fail open for this frame.
+            loopv(groupqueries) applyvaquery(*groupqueries[i], vaqueryresult(*groupqueries[i]));
+            loopv(leafqueries) applyvaquery(*leafqueries[i], vaqueryresult(*leafqueries[i]));
+        }
+
+        {
+            ZoneScopedN("Render/G-buffer/World/Opaque color");
+
+            if(!multipassing) { multipassing = true; glDepthFunc(GL_LEQUAL); }
+            cur.texgenorient = -1;
+            setupgeom(cur);
+            resetbatches();
+
+            for(vtxarray *va = visibleva; va; va = va->next) if(va->texs && va->occluded < OCCLUDE_GEOM)
+            {
+                blends += va->blends;
+                renderva(cur, va, RENDERPASS_GBUFFER);
+            }
+            if(geombatches.length()) { renderbatches(cur, RENDERPASS_GBUFFER); glFlush(); }
+        }
+
+        {
+            ZoneScopedN("Render/G-buffer/World/Recovered color");
+
+            for(vtxarray *va = visibleva; va; va = va->next) if(va->texs && va->occluded >= OCCLUDE_GEOM)
+            {
+                bool parenthidden = va->parent && va->parent->occluded >= OCCLUDE_BB &&
+                                    va->parent->occludedframe == occlusionframe;
+                if(parenthidden)
+                {
+                    va->occluded = OCCLUDE_BB;
                     va->occludedframe = occlusionframe;
                     continue;
                 }
-                bool hidden = applyvaquery(*va, vaqueryresult(*va));
-                if(!hidden && pvsoccluded(va->geommin, va->geommax))
-                {
-                    va->query = NULL;
-                    va->occluded = OCCLUDE_GEOM;
-                    va->occludedframe = 0;
-                    continue;
-                }
-                va->query = newvaquery(*va);
-                if(!va->query)
-                {
-                    clearvaocclusion(*va);
-                    hidden = false;
-                }
-                if(hidden)
-                {
-                    if(va->query)
-                    {
-                        if(cur.vattribs) disablevattribs(cur, false);
-                        if(cur.vbuf) disablevbuf(cur);
-                        renderquery(cur, va->query, va);
-                        leafqueries.add(va);
-                    }
-                    continue;
-                }
+                if(applyvaquery(*va, vaqueryresult(*va))) continue;
+                va->occluded = pvsoccluded(va->geommin, va->geommax) ? OCCLUDE_GEOM : OCCLUDE_NOTHING;
+                va->occludedframe = 0;
+                if(va->occluded >= OCCLUDE_GEOM) continue;
+
+                blends += va->blends;
+                renderva(cur, va, RENDERPASS_GBUFFER);
             }
-            else
+            if(geombatches.length()) renderbatches(cur, RENDERPASS_GBUFFER);
+        }
+    }
+    else
+    {
+        {
+            ZoneScopedN("Render/G-buffer/World/Opaque no OQ");
+
+            setupgeom(cur);
+            resetbatches();
+            for(vtxarray *va = visibleva; va; va = va->next) if(va->texs)
             {
                 va->query = NULL;
                 va->occluded = pvsoccluded(va->geommin, va->geommax) ? OCCLUDE_GEOM : OCCLUDE_NOTHING;
                 va->occludedframe = 0;
                 if(va->occluded >= OCCLUDE_GEOM) continue;
+                blends += va->blends;
+                renderva(cur, va, RENDERPASS_GBUFFER);
             }
-
-            renderva(cur, va, RENDERPASS_Z, true);
-            if(va->query) leafqueries.add(va);
+            if(geombatches.length()) renderbatches(cur, RENDERPASS_GBUFFER);
         }
-
-        // Geometry-free VAs preserve the section hierarchy. They are queried
-        // as aggregate bounds after section geometry has populated the depth
-        // buffer, allowing one result to cull many underground descendants.
-        loopv(groupqueries)
-        {
-            vtxarray *va = groupqueries[i];
-            if(cur.vattribs) disablevattribs(cur, false);
-            if(cur.vbuf) disablevbuf(cur);
-            renderquery(cur, va->query, va);
-        }
-
-        // Hidden sections are absent from visibleva, so the rest of the frame
-        // cannot spend CPU or GPU work on their geometry. Refresh only their
-        // bounding-box queries against the current depth buffer.
-        loopv(proxyqueries)
-        {
-            vtxarray *va = proxyqueries[i];
-            if(cur.vattribs) disablevattribs(cur, false);
-            if(cur.vbuf) disablevbuf(cur);
-            renderquery(cur, va->query, va);
-        }
-
-        if(cur.vquery) disablevquery(cur);
-        if(cur.vattribs) disablevattribs(cur, false);
-        if(cur.vbuf) disablevbuf(cur);
-
-        glFlush();
-        if(cur.colormask) { cur.colormask = false; glColorMask(GL_FALSE, GL_FALSE, GL_FALSE, GL_FALSE); }
-        if(cur.depthmask) { cur.depthmask = false; glDepthMask(GL_FALSE); }
-        workinoq();
-        if(!cur.colormask) { cur.colormask = true; glColorMask(GL_TRUE, GL_TRUE, GL_TRUE, GL_TRUE); }
-        if(!cur.depthmask) { cur.depthmask = true; glDepthMask(GL_TRUE); }
-
-        // Parent results used during the Z pass came from the preceding view.
-        // Resolve the replacement queries before those parents may suppress
-        // child color rendering. Pending results fail open for this frame.
-        loopv(groupqueries) applyvaquery(*groupqueries[i], vaqueryresult(*groupqueries[i]));
-        loopv(leafqueries) applyvaquery(*leafqueries[i], vaqueryresult(*leafqueries[i]));
-
-        if(!multipassing) { multipassing = true; glDepthFunc(GL_LEQUAL); }
-        cur.texgenorient = -1;
-        setupgeom(cur);
-        resetbatches();
-
-        for(vtxarray *va = visibleva; va; va = va->next) if(va->texs && va->occluded < OCCLUDE_GEOM)
-        {
-            blends += va->blends;
-            renderva(cur, va, RENDERPASS_GBUFFER);
-        }
-        if(geombatches.length()) { renderbatches(cur, RENDERPASS_GBUFFER); glFlush(); }
-        for(vtxarray *va = visibleva; va; va = va->next) if(va->texs && va->occluded >= OCCLUDE_GEOM)
-        {
-            bool parenthidden = va->parent && va->parent->occluded >= OCCLUDE_BB &&
-                                va->parent->occludedframe == occlusionframe;
-            if(parenthidden)
-            {
-                va->occluded = OCCLUDE_BB;
-                va->occludedframe = occlusionframe;
-                continue;
-            }
-            if(applyvaquery(*va, vaqueryresult(*va))) continue;
-            va->occluded = pvsoccluded(va->geommin, va->geommax) ? OCCLUDE_GEOM : OCCLUDE_NOTHING;
-            va->occludedframe = 0;
-            if(va->occluded >= OCCLUDE_GEOM) continue;
-
-            blends += va->blends;
-            renderva(cur, va, RENDERPASS_GBUFFER);
-        }
-        if(geombatches.length()) renderbatches(cur, RENDERPASS_GBUFFER);
-    }
-    else
-    {
-        setupgeom(cur);
-        resetbatches();
-        for(vtxarray *va = visibleva; va; va = va->next) if(va->texs)
-        {
-            va->query = NULL;
-            va->occluded = pvsoccluded(va->geommin, va->geommax) ? OCCLUDE_GEOM : OCCLUDE_NOTHING;
-            va->occludedframe = 0;
-            if(va->occluded >= OCCLUDE_GEOM) continue;
-            blends += va->blends;
-            renderva(cur, va, RENDERPASS_GBUFFER);
-        }
-        if(geombatches.length()) renderbatches(cur, RENDERPASS_GBUFFER);
     }
 
     if(blends)
     {
+        ZoneScopedN("Render/G-buffer/World/Blend layer");
+
         if(cur.vbuf) disablevbuf(cur);
 
         if(!multipassing) { multipassing = true; glDepthFunc(GL_LEQUAL); }
@@ -2092,6 +2212,8 @@ void rendergeom()
 
     if(!doOQ)
     {
+        ZoneScopedN("Render/G-buffer/World/Deferred OQ work");
+
         glFlush();
         if(cur.colormask) { cur.colormask = false; glColorMask(GL_FALSE, GL_FALSE, GL_FALSE, GL_FALSE); }
         if(cur.depthmask) { cur.depthmask = false; glDepthMask(GL_FALSE); }

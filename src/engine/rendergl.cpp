@@ -2457,71 +2457,114 @@ int xtraverts, xtravertsva;
 
 void gl_drawview()
 {
-    GLuint scalefbo = shouldscale();
-    if(scalefbo) { vieww = gw; viewh = gh; }
+    ZoneScopedN("Render/View");
 
-    float fogmargin = 1 + WATER_AMPLITUDE + nearplane;
-    int fogmat = lookupmaterial(vec(camera1->o.x, camera1->o.y, camera1->o.z - fogmargin))&(MATF_VOLUME|MATF_INDEX), abovemat = MAT_AIR;
+    GLuint scalefbo = 0;
+    int fogmat = MAT_AIR, abovemat = MAT_AIR;
     float fogbelow = 0;
-    if(isliquid(fogmat&MATF_VOLUME))
     {
-        float z = findsurface(fogmat, vec(camera1->o.x, camera1->o.y, camera1->o.z - fogmargin), abovemat) - WATER_OFFSET;
-        if(camera1->o.z < z + fogmargin)
+        ZoneScopedN("Render/View setup");
+
+        scalefbo = shouldscale();
+        if(scalefbo) { vieww = gw; viewh = gh; }
+
+        float fogmargin = 1 + WATER_AMPLITUDE + nearplane;
+        fogmat = lookupmaterial(vec(camera1->o.x, camera1->o.y, camera1->o.z - fogmargin))&(MATF_VOLUME|MATF_INDEX);
+        if(isliquid(fogmat&MATF_VOLUME))
         {
-            fogbelow = z - camera1->o.z;
+            float z = findsurface(fogmat, vec(camera1->o.x, camera1->o.y, camera1->o.z - fogmargin), abovemat) - WATER_OFFSET;
+            if(camera1->o.z < z + fogmargin)
+            {
+                fogbelow = z - camera1->o.z;
+            }
+            else fogmat = abovemat;
         }
-        else fogmat = abovemat;
+        else fogmat = MAT_AIR;
+        setfog(abovemat);
+        //setfog(fogmat, fogbelow, 1, abovemat);
+
+        farplane = worldsize*2;
+
+        projmatrix.perspective(fovy, aspect, nearplane, farplane);
+        setcamprojmatrix();
+
+        glEnable(GL_CULL_FACE);
+        glEnable(GL_DEPTH_TEST);
+
+        ldrscale = 0.5f;
+        ldrscaleb = ldrscale/255;
     }
-    else fogmat = MAT_AIR;
-    setfog(abovemat);
-    //setfog(fogmat, fogbelow, 1, abovemat);
 
-    farplane = worldsize*2;
-
-    projmatrix.perspective(fovy, aspect, nearplane, farplane);
-    setcamprojmatrix();
-
-    glEnable(GL_CULL_FACE);
-    glEnable(GL_DEPTH_TEST);
-
-    ldrscale = 0.5f;
-    ldrscaleb = ldrscale/255;
-
-    visiblecubes();
+    {
+        ZoneScopedN("Render/Visibility");
+        visiblecubes();
+    }
 
     if(wireframe && editmode) glPolygonMode(GL_FRONT_AND_BACK, GL_LINE);
 
-    rendergbuffer();
+    {
+        ZoneScopedN("Render/G-buffer");
+        rendergbuffer();
+    }
 
     extern int showsky;
     if(wireframe && editmode) glPolygonMode(GL_FRONT_AND_BACK, GL_FILL);
-    else if(limitsky() && editmode && showsky) renderexplicitsky(true);
+    else if(limitsky() && editmode && showsky)
+    {
+        ZoneScopedN("Render/Explicit sky");
+        renderexplicitsky(true);
+    }
 
-    renderao();
-    GLERROR;
+    {
+        ZoneScopedN("Render/Ambient occlusion");
+        renderao();
+        GLERROR;
+    }
 
     // render avatar after AO to avoid weird contact shadows
-    renderavatar();
-    GLERROR;
+    {
+        ZoneScopedN("Render/Avatar");
+        renderavatar();
+        GLERROR;
+    }
 
     // render grass after AO to avoid disturbing shimmering patterns
-    generategrass();
-    rendergrass();
-    GLERROR;
+    {
+        ZoneScopedN("Render/Grass generation");
+        generategrass();
+    }
+    {
+        ZoneScopedN("Render/Grass draw");
+        rendergrass();
+        GLERROR;
+    }
 
-    glFlush();
+    {
+        ZoneScopedN("Render/G-buffer flush");
+        glFlush();
+    }
 
-    renderradiancehints();
-    GLERROR;
+    {
+        ZoneScopedN("Render/Radiance hints");
+        renderradiancehints();
+        GLERROR;
+    }
 
-    rendershadowatlas();
-    GLERROR;
+    {
+        ZoneScopedN("Render/Shadow atlas");
+        rendershadowatlas();
+        GLERROR;
+    }
 
-    shadegbuffer();
-    GLERROR;
+    {
+        ZoneScopedN("Render/Deferred lighting");
+        shadegbuffer();
+        GLERROR;
+    }
 
     if(fogmat)
     {
+        ZoneScopedN("Render/Underwater fog");
         setfog(fogmat, fogbelow, 1, abovemat);
 
         renderwaterfog(fogmat, fogbelow);
@@ -2529,16 +2572,23 @@ void gl_drawview()
         setfog(fogmat, fogbelow, clamp(fogbelow, 0.0f, 1.0f), abovemat);
     }
 
-    rendertransparent();
-    GLERROR;
+    {
+        ZoneScopedN("Render/Transparency");
+        rendertransparent();
+        GLERROR;
+    }
 
     if(fogmat) setfog(fogmat, fogbelow, 1, abovemat);
 
-    rendervolumetric();
-    GLERROR;
+    {
+        ZoneScopedN("Render/Volumetrics");
+        rendervolumetric();
+        GLERROR;
+    }
 
     if(!editmode)
     {
+        ZoneScopedN("Render/Creative target");
         glDepthMask(GL_FALSE);
         glEnable(GL_BLEND);
         glBlendFunc(GL_ONE, GL_ONE);
@@ -2550,6 +2600,7 @@ void gl_drawview()
 
     if(editmode)
     {
+        ZoneScopedN("Render/Edit overlays");
         extern int outline;
         if(!wireframe && outline) renderoutline();
         GLERROR;
@@ -2571,11 +2622,30 @@ void gl_drawview()
     glDisable(GL_CULL_FACE);
     glDisable(GL_DEPTH_TEST);
 
-    if(fogoverlay && fogmat != MAT_AIR) drawfogoverlay(fogmat, fogbelow, clamp(fogbelow, 0.0f, 1.0f), abovemat);
+    if(fogoverlay && fogmat != MAT_AIR)
+    {
+        ZoneScopedN("Render/Fog overlay");
+        drawfogoverlay(fogmat, fogbelow, clamp(fogbelow, 0.0f, 1.0f), abovemat);
+    }
 
-    doaa(setuppostfx(vieww, viewh, scalefbo), processhdr);
-    renderpostfx(scalefbo);
-    if(scalefbo) doscale();
+    {
+        ZoneScopedN("Render/Anti-aliasing");
+        doaa(setuppostfx(vieww, viewh, scalefbo), processhdr);
+    }
+    {
+        ZoneScopedN("Render/Post effects");
+        renderpostfx(scalefbo);
+    }
+    if(scalefbo)
+    {
+        ZoneScopedN("Render/Output scaling");
+        doscale();
+    }
+
+    TracyPlot("Render/Visible VAs", int64_t(getnumvisiblevas()));
+    TracyPlot("Render/Live-culled VAs", int64_t(getnumliveculledvas()));
+    TracyPlot("Render/Draw submissions", int64_t(glde));
+    TracyPlot("Render/World triangles", int64_t(vtris));
 }
 
 void gl_drawmainmenu()

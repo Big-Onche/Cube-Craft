@@ -754,22 +754,30 @@ void rendershadowmodelbatches(bool dynmodel)
 
 void rendermapmodelbatches()
 {
+    ZoneScopedN("Render/G-buffer/Map models/Batched model rendering");
+
+    int renderedBatches = 0, renderedInstances = 0;
     enableaamask();
     loopv(batches)
     {
         modelbatch &b = batches[i];
         if(!(b.flags&MDL_MAPMODEL)) continue;
+        renderedBatches++;
         b.m->startrender();
         setaamask(b.m->animated());
         for(int j = b.batched; j >= 0;)
         {
             batchedmodel &bm = batchedmodels[j];
+            renderedInstances++;
             renderbatchedmodel(b.m, bm);
             j = bm.next;
         }
         b.m->endrender();
     }
     disableaamask();
+
+    TracyPlot("Render/Map model batches", int64_t(renderedBatches));
+    TracyPlot("Render/Map model batched instances", int64_t(renderedInstances));
 }
 
 float transmdlsx1 = -1, transmdlsy1 = -1, transmdlsx2 = 1, transmdlsy2 = 1;
@@ -903,6 +911,8 @@ void startmodelquery(occludequery *query)
 
 void endmodelquery()
 {
+    ZoneScopedN("Render/G-buffer/Map models/Immediate OQ draw");
+
     if(batchedmodels.length() == modelquerymodels)
     {
         modelquery->fragments = 0;

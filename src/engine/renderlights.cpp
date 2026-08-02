@@ -4418,6 +4418,8 @@ void rendershadowtransparent(int idx, int side, bool cullside = false)
 
 void rendercsmshadowmaps()
 {
+    ZoneScopedN("Render/Shadows/CSM");
+
     if(csminoq && !debugshadowatlas && !inoq && shouldworkinoq()) return;
 
     csm.rendered = 0;
@@ -4548,6 +4550,8 @@ matrix4 shadowmatrix;
 
 void rendershadowmaps(int offset = 0)
 {
+    ZoneScopedN("Render/Shadows/Local lights");
+
     if(!(sminoq && !debugshadowatlas && !inoq && shouldworkinoq())) offset = 0;
 
     for(; offset < shadowmaps.length(); offset++) if(shadowmaps[offset].light >= 0) break;
@@ -5186,36 +5190,58 @@ void preparegbuffer(bool depthclear)
 
 void rendergbuffer(bool depthclear)
 {
+    ZoneScopedN("Render/G-buffer/Total");
+
     timer *gcputimer = drawtex ? NULL : begintimer("g-buffer", false);
     timer *gtimer = drawtex ? NULL : begintimer("g-buffer");
 
-    preparegbuffer(depthclear);
+    {
+        ZoneScopedN("Render/G-buffer/Prepare");
+        preparegbuffer(depthclear);
+    }
 
     if(limitsky())
     {
+        ZoneScopedN("Render/G-buffer/Sky");
         renderexplicitsky();
         GLERROR;
     }
-    rendergeom();
-    GLERROR;
-    renderdecals();
-    GLERROR;
-    rendermapmodels();
-    GLERROR;
+    {
+        ZoneScopedN("Render/G-buffer/World geometry");
+        rendergeom();
+        GLERROR;
+    }
+    {
+        ZoneScopedN("Render/G-buffer/Decals");
+        renderdecals();
+        GLERROR;
+    }
+    {
+        ZoneScopedN("Render/G-buffer/Map models");
+        rendermapmodels();
+        GLERROR;
+    }
 
     if(drawtex == DRAWTEX_MINIMAP)
     {
+        ZoneScopedN("Render/G-buffer/Minimap materials");
         if(depthclear) findmaterials();
         renderminimapmaterials();
         GLERROR;
     }
     else if(!drawtex)
     {
-        rendermodelbatches();
-        GLERROR;
-        renderstains(STAINBUF_OPAQUE, true);
-        renderstains(STAINBUF_MAPMODEL, true);
-        GLERROR;
+        {
+            ZoneScopedN("Render/G-buffer/Model batches");
+            rendermodelbatches();
+            GLERROR;
+        }
+        {
+            ZoneScopedN("Render/G-buffer/Stains");
+            renderstains(STAINBUF_OPAQUE, true);
+            renderstains(STAINBUF_MAPMODEL, true);
+            GLERROR;
+        }
         //renderavatar();
         //GLERROR;
     }
