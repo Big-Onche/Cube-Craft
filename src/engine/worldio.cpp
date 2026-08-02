@@ -108,7 +108,7 @@ enum
 enum
 {
     WORLD_SAVE_FORMAT_VERSION = 1,
-    WORLDGEN_VERSION = 7,
+    WORLDGEN_VERSION = 8,
     WORLD_DIFF_Z = 0,
     WORLD_DIFF_FRAME_MAX = 64 << 20,
     WORLD_DIFF_FLUSH_MILLIS = 10000
@@ -5426,7 +5426,7 @@ enum
 {
     // A halo wider than the longest worm plus its largest chamber makes clipping seamless at chunk edges.
     WORLD_CAVE_REGION_SIZE = 144,
-    WORLD_CAVE_REGION_HALO = 336
+    WORLD_CAVE_REGION_HALO = 400
 };
 
 struct worldcaverandom
@@ -5471,27 +5471,30 @@ static void addworldcaveworm(const worldgencontext &ctx, worldcaverandom &random
     const int mindepth = min(ctx.settings.cavemindepth, ctx.settings.cavefulldepth),
               bottom = WORLD_MIN_HEIGHT + clamp(ctx.settings.bottomlavalayers, 0, int(WORLD_HEIGHT_BLOCKS)) + 3;
     vec position(origin);
-    float radius = 3.0f + random.unit() * 3.0f, targetradius = radius,
+    const float initialdeepness = worldsmoothstep(180.0f, 228.0f, -origin.z);
+    float radius = min(3.0f + random.unit() * 3.0f, 4.25f - initialdeepness * 1.75f), targetradius = radius,
           turnrate = (random.unit() < 0.5f ? -1.0f : 1.0f) * (0.14f + random.unit() * 0.25f);
     int radiussteps = 1, turnsteps = random.range(1, 3);
     anchors.add(worldcaveanchor(position, worm));
 
     loopi(steps)
     {
+        const float deepness = worldsmoothstep(180.0f, 228.0f, -position.z);
         if(--turnsteps <= 0)
         {
             turnrate = (random.unit() < 0.5f ? -1.0f : 1.0f) * (0.14f + random.unit() * 0.29f);
             turnsteps = random.range(1, 3);
         }
-        yaw += turnrate + (random.unit() - 0.5f) * 0.24f;
-        if(random.unit() < 0.17f)
+        yaw += turnrate * (1.0f + deepness * 0.90f) + (random.unit() - 0.5f) * (0.24f + deepness * 0.22f);
+        if(random.unit() < 0.17f + deepness * 0.15f)
         {
             yaw += (random.unit() < 0.5f ? -1.0f : 1.0f) * (0.48f + random.unit() * 0.82f);
             turnrate = -turnrate * (0.55f + random.unit() * 0.35f);
             turnsteps = random.range(1, 3);
         }
-        pitch = pitch * 0.68f + (random.unit() - 0.5f) * 0.32f;
-        if(random.unit() < 0.10f) pitch += (random.unit() < 0.72f ? -1.0f : 1.0f) * (0.38f + random.unit() * 0.44f);
+        pitch = pitch * (0.68f - deepness * 0.12f) + (random.unit() - 0.5f) * (0.32f + deepness * 0.24f);
+        if(random.unit() < 0.10f + deepness * 0.08f)
+            pitch += (random.unit() < 0.72f ? -1.0f : 1.0f) * (0.38f + random.unit() * (0.44f + deepness * 0.20f));
         pitch = clamp(pitch, -0.85f, 0.70f);
 
         if(--radiussteps <= 0)
@@ -5499,15 +5502,17 @@ static void addworldcaveworm(const worldgencontext &ctx, worldcaverandom &random
             targetradius = worldcaveradius(random);
             radiussteps = random.range(2, 6);
         }
-        const float nextradius = radius + clamp(targetradius - radius, -3.0f, 3.0f),
-                    steplength = 3.5f + random.unit() * 3.0f,
+        const float unrestrictedradius = radius + clamp(targetradius - radius, -3.0f, 3.0f),
+                    deepcap = 4.25f - deepness * 1.75f,
+                    nextradius = min(unrestrictedradius, deepcap),
+                    steplength = (3.5f + random.unit() * 3.0f) * (1.0f - deepness * 0.34f),
                     horizontal = cosf(pitch) * steplength;
         vec next(position.x + cosf(yaw) * horizontal, position.y + sinf(yaw) * horizontal, position.z + sinf(pitch) * steplength);
         const int surface = ctx.generator.height(int(floorf(next.x)), int(floorf(next.y))),
                   ceiling = surface - max(mindepth, int(ceilf(nextradius))) - 1;
         next.z = clamp(next.z, float(bottom), float(max(ceiling, bottom)));
 
-        const float verticalscale = 0.52f + random.unit() * 0.83f;
+        const float verticalscale = 0.52f - deepness * 0.09f + random.unit() * (0.83f - deepness * 0.19f);
         segments.add(worldcavesegment(position, next, radius, nextradius, verticalscale, random.next()));
         position = next;
         radius = nextradius;
@@ -5518,14 +5523,15 @@ static void addworldcaveworm(const worldgencontext &ctx, worldcaverandom &random
 static void addworldcaveconnection(worldcaverandom &random, vector<worldcavesegment> &segments, const vec &start, const vec &end,
                                    float startradius, float endradius, bool entrance = false)
 {
+    const float deepness = worldsmoothstep(180.0f, 228.0f, -min(start.z, end.z));
     const float dx = end.x - start.x, dy = end.y - start.y, dz = end.z - start.z,
                 distance = sqrtf(dx * dx + dy * dy + dz * dz), horizontal = max(sqrtf(dx * dx + dy * dy), 0.001f),
                 direction = random.unit() < 0.5f ? -1.0f : 1.0f,
-                curve = direction * min(distance * (0.15f + random.unit() * 0.13f), 28.0f),
-                wiggle = -direction * min(distance * (0.05f + random.unit() * 0.08f), 12.0f),
+                curve = direction * min(distance * (0.15f + random.unit() * 0.13f + deepness * 0.05f), 28.0f + deepness * 8.0f),
+                wiggle = -direction * min(distance * (0.05f + random.unit() * 0.08f + deepness * 0.04f), 12.0f + deepness * 6.0f),
                 verticalcurve = (random.unit() - 0.62f) * min(distance * 0.14f, 15.0f);
-    const float smallwiggle = direction * min(distance * (0.025f + random.unit() * 0.045f), 7.0f);
-    const int steps = max(int(ceilf(distance / 5.5f)), 3);
+    const float smallwiggle = direction * min(distance * (0.025f + random.unit() * 0.045f + deepness * 0.035f), 7.0f + deepness * 5.0f);
+    const int steps = max(int(ceilf(distance / (5.5f - deepness * 1.8f))), 3);
     vec previous(start);
     float previousradius = startradius;
     for(int i = 1; i <= steps; ++i)
@@ -5544,12 +5550,41 @@ static void addworldcaveconnection(worldcaverandom &random, vector<worldcavesegm
     }
 }
 
+static void addworldcavedeepdescent(const worldgencontext &ctx, worldcaverandom &random, vector<worldcavesegment> &segments,
+                                    vector<worldcaveanchor> &anchors, const vec &start, int worm)
+{
+    const int bottomlayers = clamp(ctx.settings.bottomlavalayers, 0, int(WORLD_HEIGHT_BLOCKS));
+    const float lavaceiling = WORLD_MIN_HEIGHT + bottomlayers + 0.5f,
+                verticaldistance = max(start.z - lavaceiling, 1.0f);
+    const int levels = clamp(int(ceilf(verticaldistance / 44.0f)), 3, 9);
+    vec previous(start);
+    float previousradius = min(3.2f + random.unit() * 1.4f, 4.2f), angle = random.unit() * 2.0f * M_PI;
+    anchors.add(worldcaveanchor(previous, worm));
+    for(int i = 1; i <= levels; ++i)
+    {
+        const float amount = i / float(levels),
+                    deepness = worldsmoothstep(0.45f, 1.0f, amount),
+                    horizontal = i == levels ? random.unit() * 10.0f : 13.0f + random.unit() * (25.0f - deepness * 8.0f),
+                    radius = 3.2f + (1.65f - 3.2f) * deepness + random.unit() * (0.65f - deepness * 0.25f);
+        angle += (random.unit() < 0.5f ? -1.0f : 1.0f) * (0.55f + random.unit() * 1.35f);
+        const vec next(start.x + cosf(angle) * horizontal,
+                       start.y + sinf(angle) * horizontal,
+                       start.z + (lavaceiling - start.z) * amount);
+        addworldcaveconnection(random, segments, previous, next, previousradius, radius);
+        previous = next;
+        previousradius = radius;
+        anchors.add(worldcaveanchor(previous, worm));
+    }
+}
+
 static void addworldcavechamber(worldcaverandom &random, vector<worldcavechamber> &chambers, const vec &attachment)
 {
     const float category = random.unit(),
-                baseradius = category < 0.78f ? 5.0f + random.unit() * 5.0f
-                           : category < 0.97f ? 10.0f + random.unit() * 10.0f
-                                              : 20.0f + random.unit() * 15.0f;
+                generatedradius = category < 0.78f ? 5.0f + random.unit() * 5.0f
+                                : category < 0.97f ? 10.0f + random.unit() * 10.0f
+                                                   : 20.0f + random.unit() * 15.0f,
+                deepness = worldsmoothstep(180.0f, 228.0f, -attachment.z),
+                baseradius = min(generatedradius, 6.0f - deepness * 2.5f);
     const int lobes = random.range(3, category >= 0.97f ? 7 : 5);
     const float mainangle = random.unit() * 2.0f * M_PI;
     loopi(lobes)
@@ -5665,6 +5700,43 @@ static bool generateworldcavesystem(const worldgencontext &ctx, long long region
         const float radius = 3.0f + random.unit() * 2.5f;
         addworldcaveconnection(random, segments, attachment.position, entrance, radius * 1.25f, max(radius * 0.72f, 2.2f), true);
     }
+
+    const int descents = 1 + (density == 2 && random.unit() < 0.42f ? 1 : 0);
+    loopi(descents)
+    {
+        vec descentstart(origin);
+        if(i == 0)
+        {
+            loopj(anchors.length()) if(anchors[j].position.z < descentstart.z) descentstart = anchors[j].position;
+        }
+        else loopj(12)
+        {
+            const vec &candidate = anchors[random.next() % uint(anchors.length())].position;
+            if(candidate.z < descentstart.z) descentstart = candidate;
+        }
+
+        vector<worldcaveanchor> deepanchors;
+        addworldcavedeepdescent(ctx, random, segments, deepanchors, descentstart, worm++);
+        const int descentanchors = deepanchors.length();
+        const vec descentend = deepanchors.last().position;
+        const int deepbranches = random.range(density == 0 ? 2 : 3, density == 2 ? 5 : density == 1 ? 4 : 3);
+        loopj(deepbranches)
+        {
+            vec attachment(descentend);
+            loopk(8)
+            {
+                const vec &candidate = deepanchors[random.next() % uint(descentanchors)].position;
+                if(candidate.z <= -190.0f)
+                {
+                    attachment = candidate;
+                    break;
+                }
+            }
+            const float yaw = random.unit() * 2.0f * M_PI, pitch = (random.unit() - 0.58f) * 0.48f;
+            addworldcaveworm(ctx, random, segments, deepanchors, attachment, yaw, pitch, random.range(10, 16), worm++);
+            if(random.unit() < 0.12f) addworldcavechamber(random, chambers, deepanchors.last().position);
+        }
+    }
     return true;
 }
 
@@ -5679,7 +5751,9 @@ static float worldcavesegmentradius(const worldgencontext &ctx, const worldcaves
                 roughness = coarse * 0.62f + fine * 0.38f,
                 secondary = ctx.generator.largecaves.GetNoise(x - offsety, y + offsetx, z - offsetz),
                 widening = max(secondary - max(ctx.settings.largecavethreshold, 0.72f), 0.0f) * 7.0f;
-    return max(radius + roughness * min(radius * 0.28f, 2.20f) + widening, 1.5f);
+    float carvedradius = max(radius + roughness * min(radius * 0.28f, 2.20f) + widening, 1.35f);
+    if(z < -196.0f) carvedradius = min(carvedradius, max(4.0f - (-z - 196.0f) * 0.075f, 2.35f));
+    return carvedradius;
 }
 
 static bool worldcavesegmentcontains(const worldgencontext &ctx, const worldcavesegment &segment, float x, float y, float z)
