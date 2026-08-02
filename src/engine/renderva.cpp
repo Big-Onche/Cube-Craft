@@ -597,6 +597,7 @@ struct visiblemmentry
     octaentities *node;
     int order;
 
+    visiblemmentry() : node(NULL), order(0) {}
     visiblemmentry(octaentities *node, int order) : node(node), order(order) {}
 };
 
@@ -2124,17 +2125,49 @@ void rendergeom()
         {
             ZoneScopedN("Render/G-buffer/World/Opaque color");
 
-            if(!multipassing) { multipassing = true; glDepthFunc(GL_LEQUAL); }
-            cur.texgenorient = -1;
-            setupgeom(cur);
-            resetbatches();
-
-            for(vtxarray *va = visibleva; va; va = va->next) if(va->texs && va->occluded < OCCLUDE_GEOM)
+#ifdef TRACY_ENABLE
+            int opaquevas = 0, opaquetexs = 0, collectedbatches = 0, uniquebatches = 0;
+#endif
             {
-                blends += va->blends;
-                renderva(cur, va, RENDERPASS_GBUFFER);
+                ZoneScopedN("Render/G-buffer/World/Opaque color/Batch construction");
+
+                if(!multipassing) { multipassing = true; glDepthFunc(GL_LEQUAL); }
+                cur.texgenorient = -1;
+                setupgeom(cur);
+                resetbatches();
+
+                for(vtxarray *va = visibleva; va; va = va->next) if(va->texs && va->occluded < OCCLUDE_GEOM)
+                {
+#ifdef TRACY_ENABLE
+                    opaquevas++;
+                    opaquetexs += va->texs;
+#endif
+                    blends += va->blends;
+                    renderva(cur, va, RENDERPASS_GBUFFER);
+                }
+#ifdef TRACY_ENABLE
+                collectedbatches = geombatches.length();
+                uniquebatches = numbatches;
+#endif
             }
-            if(geombatches.length()) { renderbatches(cur, RENDERPASS_GBUFFER); glFlush(); }
+            if(geombatches.length())
+            {
+                {
+                    ZoneScopedN("Render/G-buffer/World/Opaque color/Batch draw");
+                    renderbatches(cur, RENDERPASS_GBUFFER);
+                }
+                {
+                    ZoneScopedN("Render/G-buffer/World/Opaque color/Flush");
+                    glFlush();
+                }
+            }
+
+#ifdef TRACY_ENABLE
+            TracyPlot("Render/Opaque VAs", int64_t(opaquevas));
+            TracyPlot("Render/Opaque texture elements", int64_t(opaquetexs));
+            TracyPlot("Render/Opaque collected batches", int64_t(collectedbatches));
+            TracyPlot("Render/Opaque unique batches", int64_t(uniquebatches));
+#endif
         }
 
         {
