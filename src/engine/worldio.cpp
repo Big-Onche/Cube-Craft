@@ -1075,7 +1075,7 @@ struct worldsectionowner
     }
 };
 
-VARP(chunkremip, 0, 0, 1); // optional CPU-for-memory octree collapse on generation/load
+VARP(chunkremip, 0, 1, 1); // optional CPU-for-memory octree collapse on generation/load
 
 struct worldchunkjob
 {
@@ -1231,6 +1231,7 @@ static void updateworldscatterers();
 static void clearworldscattererentities();
 static int findworldchunk(int x, int y);
 static int remipworldchunk(cube *root, bool prepared, int &families, SDL_atomic_t *cancelled = NULL);
+static bool subdivideworldmip(const cube &c, cube *children);
 static int pruneworldchunkcache(int chunkx, int chunky, int limit);
 static bool saveworldconfig();
 static void worldchunkname(char *name, size_t len, const worldchunk &chunk);
@@ -1268,6 +1269,27 @@ VARFP(skyexposureattenuation, 1, 16, 255, clearworldskyexposure());
 static bool worldskylighttransparent(const cube &c)
 {
     return isempty(c) || (c.material&MATF_VOLUME) == MAT_GLASS || isworldleaftexture(c);
+}
+
+static cube sampleworldskylightcube(const cube &source, const ivec &position, ivec &origin, int &size)
+{
+    cube sampled = source;
+    sampled.children = NULL;
+    sampled.ext = NULL;
+    // Remipping may collapse partial terrain across several blocks. Rebuild only
+    // the sampled branch so the vertical scan cannot skip the whole coarse leaf.
+    while(size > WORLD_BLOCK_SIZE && !worldskylighttransparent(sampled) && !isentirelysolid(sampled))
+    {
+        cube children[8];
+        subdivideworldmip(sampled, children);
+        size >>= 1;
+        const int child = (position.x >= origin.x + size ? 1 : 0) |
+                          (position.y >= origin.y + size ? 2 : 0) |
+                          (position.z >= origin.z + size ? 4 : 0);
+        origin = ivec(child, origin, size);
+        sampled = children[child];
+    }
+    return sampled;
 }
 
 static bool worldskyfieldcontains(int blockx, int blocky)
@@ -1328,7 +1350,7 @@ static void buildworldskyexposure(int blockx, int blocky)
                               z * WORLD_BLOCK_SIZE + WORLD_BLOCK_SIZE / 2);
             ivec cubeorigin;
             int cubesize;
-            const cube &c = lookupcube(center, 0, cubeorigin, cubesize);
+            const cube c = sampleworldskylightcube(lookupcube(center, 0, cubeorigin, cubesize), center, cubeorigin, cubesize);
             const bool transparent = worldskylighttransparent(c);
             int bottom = cubesize >= WORLD_BLOCK_SIZE ? cubeorigin.z / WORLD_BLOCK_SIZE : z;
             bottom = clamp(bottom, 0, z);
