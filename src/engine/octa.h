@@ -144,7 +144,7 @@ struct vtxarray
     ivec nogimin, nogimax;   // BB of any nogi
     ivec bbmin, bbmax;       // BB of everything including children
     uchar curvfc, occluded;
-    uint occludedframe;
+    uint occludedframe, occlusionstamp;
     occludequery *query;
     vector<octaentities *> mapmodels, decals;
     vector<grasstri> grasstris;

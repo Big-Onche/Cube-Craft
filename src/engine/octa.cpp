@@ -1830,15 +1830,16 @@ struct cfpolys
 
 static hashtable<cfkey, cfpolys> cpolys;
 
-void genmerges(cube *c = worldroot, const ivec &o = ivec(0, 0, 0), int size = worldsize>>1)
+void genmerges(cube *c = worldroot, const ivec &o = ivec(0, 0, 0), int size = worldsize>>1,
+               bool stackneighbours = true, bool showprogress = true)
 {
-    if((genmergeprogress++&0xFFF)==0) renderprogress(float(genmergeprogress)/allocnodes, "merging faces...");
-    neighbourstack[++neighbourdepth] = c;
+    if(showprogress && (genmergeprogress++&0xFFF)==0) renderprogress(float(genmergeprogress)/allocnodes, "merging faces...");
+    if(stackneighbours) neighbourstack[++neighbourdepth] = c;
     loopi(8)
     {
         ivec co(i, o, size);
         int vis;
-        if(c[i].children) genmerges(c[i].children, co, size>>1);
+        if(c[i].children) genmerges(c[i].children, co, size>>1, stackneighbours, showprogress);
         else if(!isempty(c[i])) loopj(6) if((vis = visibletris(c[i], j, co, size)))
         {
             cfkey k;
@@ -1873,7 +1874,7 @@ void genmerges(cube *c = worldroot, const ivec &o = ivec(0, 0, 0), int size = wo
             cpolys.clear();
         }
     }
-    --neighbourdepth;
+    if(stackneighbours) --neighbourdepth;
 }
 
 int calcmergedsize(int orient, const ivec &co, int size, const vertinfo *verts, int numverts)
@@ -1944,4 +1945,21 @@ void calcmerges()
 {
     genmergeprogress = 0;
     genmerges();
+}
+
+void calcmerges(const ivec &origin, int size)
+{
+    ASSERT(neighbourdepth < 0);
+    cube &c = lookupcube(origin, size);
+    invalidatemerges(c);
+    if(!c.children) return;
+
+    // Streaming sections are aligned above maxmerge, so their greedy groups
+    // never cross a section boundary. Resolve neighbours through worldroot
+    // while rebuilding this subtree instead of manufacturing an ancestry
+    // stack for every incremental update.
+    genmergeprogress = 0;
+    cpolys.clear();
+    genmerges(c.children, origin, size >> 1, false, false);
+    cpolys.clear();
 }

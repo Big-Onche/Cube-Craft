@@ -2588,6 +2588,15 @@ static int worldchunkvaupdatekey(const ivec &origin)
           + origin.x / WORLD_SECTION_SIZE;
 }
 
+static ivec worldchunkvaupdateorigin(int key)
+{
+    const int rowsize = WORLD_RUNTIME_SIZE / WORLD_SECTION_SIZE;
+    int x = key % rowsize;
+    key /= rowsize;
+    int y = key % rowsize, z = key / rowsize;
+    return ivec(x, y, z).mul(WORLD_SECTION_SIZE);
+}
+
 static bool queueworldchunkvaupdate(const ivec &origin)
 {
     int key = worldchunkvaupdatekey(origin);
@@ -3589,6 +3598,10 @@ static int processworldchunkvaupdates()
 
     Uint64 start = SDL_GetPerformanceCounter();
     {
+        ZoneScopedN("Chunks/Greedy mesh changed sections");
+        loopv(worldchunkvaupdates) calcmerges(worldchunkvaupdateorigin(worldchunkvaupdates[i]), WORLD_SECTION_SIZE);
+    }
+    {
         ZoneScopedN("Chunks/Commit invalidated VA updates");
         ZoneValue(pending);
         commitchanges();
@@ -3847,6 +3860,7 @@ static void rebuildworldchunks(int chunkx, int chunky, int aheadx, int aheady, b
         if(load)
         {
             ZoneScopedN("Chunks/Rebuild all geometry");
+            calcmerges();
             allchanged(worldfolder[0] != '\0');
         }
     }
@@ -8698,6 +8712,7 @@ static bool loadseedworld(const char *mname, const char *cname)
     }
     loadworldauditlog();
     hasrequestedworldspawn = false;
+    calcmerges();
     allchanged(true);
     clearmainmenu();
     startmap(cname ? cname : mname);
@@ -8822,6 +8837,7 @@ bool load_world(const char *mname, const char *cname)
 
     {
         ZoneScopedN("Chunks/Build entry geometry");
+        if(streamedworld) calcmerges();
         allchanged(true);
     }
 

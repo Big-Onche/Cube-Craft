@@ -1152,7 +1152,7 @@ vtxarray *newva(const ivec &o, int size)
     va->size = size;
     va->curvfc = VFC_NOT_VISIBLE;
     va->occluded = OCCLUDE_NOTHING;
-    va->occludedframe = 0;
+    va->occludedframe = va->occlusionstamp = 0;
     va->query = NULL;
     va->bbmin = va->alphamin = va->refractmin = va->skymin = ivec(-1, -1, -1);
     va->bbmax = va->alphamax = va->refractmax = va->skymax = ivec(-1, -1, -1);

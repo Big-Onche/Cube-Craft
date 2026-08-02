@@ -27,11 +27,15 @@ float vfcDnear[5], vfcDfar[5];
 vtxarray *visibleva = NULL;
 
 VARP(livecull, 0, 1, 1);
+VARP(oqquerygrace, 0, 2, 8);
+VARP(oqgracedist, 0, 8, 64);
 extern int oqgeom;
 
 static int visiblevas = 0, liveculledvas = 0;
 static vector<vtxarray *> livecullqueries;
 static uint occlusionframe = 1;
+static bool occlusioncameravalid = false, occlusionviewstable = false;
+static vec lastocclusioncamera;
 
 bool isfoggedsphere(float rad, const vec &cv)
 {
@@ -118,13 +122,73 @@ static inline float vadist(vtxarray *va, const vec &p)
     return p.dist_to_bb(va->bbmin, va->bbmax);
 }
 
-static vector<vtxarray *> visiblevasorted;
+#define VASORTSIZE 256
+
+static vtxarray *vasortheads[VASORTSIZE], *vasorttails[VASORTSIZE];
 
 static inline void addvisibleva(vtxarray *va)
 {
     visiblevas++;
-    va->distance = int(vadist(va, camera1->o));
-    visiblevasorted.add(va);
+    float distance = vadist(va, camera1->o), sortdistance = max(min(float(worldsize), vfcDfog), 1.0f);
+    va->distance = int(distance);
+    int bucket = clamp(int(distance * VASORTSIZE / sortdistance), 0, VASORTSIZE - 1);
+    va->next = NULL;
+    if(vasorttails[bucket]) vasorttails[bucket]->next = va;
+    else vasortheads[bucket] = va;
+    vasorttails[bucket] = va;
+}
+
+enum
+{
+    VA_QUERY_INVALID = 0,
+    VA_QUERY_PENDING,
+    VA_QUERY_HIDDEN,
+    VA_QUERY_VISIBLE
+};
+
+static inline int vaqueryresult(vtxarray &va)
+{
+    if(!va.query || va.query->owner != &va) return VA_QUERY_INVALID;
+    if(!checkquery(va.query, true)) return va.query->fragments < 0 ? VA_QUERY_PENDING : VA_QUERY_VISIBLE;
+    return va.query->fragments == 0 ? VA_QUERY_HIDDEN : VA_QUERY_VISIBLE;
+}
+
+static inline void clearvaocclusion(vtxarray &va)
+{
+    va.occluded = OCCLUDE_NOTHING;
+    va.occludedframe = va.occlusionstamp = 0;
+}
+
+static inline bool holdvaocclusion(vtxarray &va)
+{
+    return oqquerygrace && occlusionviewstable && va.occlusionstamp &&
+           occlusionframe - va.occlusionstamp <= uint(oqquerygrace);
+}
+
+static inline bool applyvaquery(vtxarray &va, int result)
+{
+    switch(result)
+    {
+        case VA_QUERY_HIDDEN:
+            va.occluded = min(va.occluded + 1, int(OCCLUDE_BB));
+            va.occlusionstamp = occlusionframe;
+            va.occludedframe = va.occluded >= OCCLUDE_BB ? occlusionframe : 0;
+            return true;
+
+        case VA_QUERY_PENDING:
+            if(va.occluded >= OCCLUDE_GEOM && holdvaocclusion(va))
+            {
+                va.occludedframe = va.occluded >= OCCLUDE_BB ? occlusionframe : 0;
+                return true;
+            }
+            break;
+
+        case VA_QUERY_VISIBLE:
+        case VA_QUERY_INVALID:
+            break;
+    }
+    clearvaocclusion(va);
+    return false;
 }
 
 static inline bool livecullva(vtxarray &va)
@@ -134,17 +198,14 @@ static inline bool livecullva(vtxarray &va)
        camera1->o.insidebb(va.o, va.size, 2))
         return false;
 
-    // Never wait for the GPU here. An unavailable or newly visible result
-    // rejoins the ordinary visible traversal immediately.
-    if(!checkquery(va.query, true) || va.query->fragments > 0)
+    int result = vaqueryresult(va);
+    if(result == VA_QUERY_VISIBLE || result == VA_QUERY_INVALID)
     {
-        if(va.query->fragments > 0)
-        {
-            va.occluded = OCCLUDE_NOTHING;
-            va.occludedframe = 0;
-        }
+        clearvaocclusion(va);
         return false;
     }
+    if(result == VA_QUERY_PENDING && !holdvaocclusion(va)) return false;
+    if(result == VA_QUERY_HIDDEN) applyvaquery(va, result);
 
     livecullqueries.add(&va);
     va.occludedframe = occlusionframe;
@@ -152,19 +213,16 @@ static inline bool livecullva(vtxarray &va)
     return true;
 }
 
-static bool sortvisibleva(vtxarray *x, vtxarray *y)
-{
-    return x->distance < y->distance;
-}
-
 void sortvisiblevas()
 {
-    if(visiblevasorted.length() > 1) visiblevasorted.sort(sortvisibleva);
-    visibleva = visiblevasorted.empty() ? NULL : visiblevasorted[0];
-    loopv(visiblevasorted)
+    visibleva = NULL;
+    vtxarray **tail = &visibleva;
+    loopi(VASORTSIZE) if(vasortheads[i])
     {
-        visiblevasorted[i]->next = visiblevasorted.inrange(i + 1) ? visiblevasorted[i + 1] : NULL;
+        *tail = vasortheads[i];
+        tail = &vasorttails[i]->next;
     }
+    *tail = NULL;
 }
 
 template<bool fullvis, bool resetocclude>
@@ -174,7 +232,8 @@ static inline void findvisiblevas(vector<vtxarray *> &vas)
     {
         vtxarray &v = *vas[i];
         int prevvfc = v.curvfc;
-        v.curvfc = fullvis ? VFC_FULL_VISIBLE : isvisiblecube(v.o, v.size);
+        v.curvfc = fullvis ? VFC_FULL_VISIBLE :
+                   v.bbmin.x >= 0 ? isvisiblebb(v.bbmin, ivec(v.bbmax).sub(v.bbmin)) : isvisiblecube(v.o, v.size);
         if(v.curvfc != VFC_NOT_VISIBLE)
         {
             if(pvsoccluded(v.o, v.size))
@@ -186,7 +245,7 @@ static inline void findvisiblevas(vector<vtxarray *> &vas)
             if(resetchildren)
             {
                 v.occluded = !v.texs ? OCCLUDE_GEOM : OCCLUDE_NOTHING;
-                v.occludedframe = 0;
+                v.occludedframe = v.occlusionstamp = 0;
                 v.query = NULL;
             }
             if(livecullva(v)) continue;
@@ -210,7 +269,16 @@ void findvisiblevas()
     ZoneNamedN(livecullzone, "livecull", livecull != 0);
     visiblevas = liveculledvas = 0;
     livecullqueries.setsize(0);
-    visiblevasorted.setsize(0);
+    memclear(vasortheads);
+    memclear(vasorttails);
+    if(!drawtex)
+    {
+        occlusionviewstable = occlusioncameravalid &&
+                              lastocclusioncamera.squaredist(camera1->o) <= float(oqgracedist * oqgracedist);
+        lastocclusioncamera = camera1->o;
+        occlusioncameravalid = true;
+    }
+    else occlusionviewstable = false;
     findvisiblevas<false, false>(varoot);
     sortvisiblevas();
     ZoneValueV(livecullzone, liveculledvas);
@@ -286,7 +354,7 @@ void visiblecubes(bool cull)
             va->distance = 0;
             va->curvfc = VFC_FULL_VISIBLE;
             va->occluded = !va->texs ? OCCLUDE_GEOM : OCCLUDE_NOTHING;
-            va->occludedframe = 0;
+            va->occludedframe = va->occlusionstamp = 0;
             va->query = NULL;
             va->next = visibleva;
             visibleva = va;
@@ -1830,11 +1898,7 @@ void rendergeom()
             vtxarray *va = livecullqueries[i];
             va->query = newquery(va);
             if(va->query) proxyqueries.add(va);
-            else
-            {
-                va->occluded = OCCLUDE_NOTHING;
-                va->occludedframe = 0;
-            }
+            else clearvaocclusion(*va);
         }
 
         // Reserve queries for coarse section groups before leaf geometry can
@@ -1844,20 +1908,13 @@ void rendergeom()
             if(camera1->o.insidebb(va->o, va->size, 2))
             {
                 va->query = NULL;
-                va->occluded = OCCLUDE_NOTHING;
-                va->occludedframe = 0;
+                clearvaocclusion(*va);
                 continue;
             }
-            bool hidden = va->query && va->query->owner == va && checkquery(va->query, true) && va->query->fragments == 0;
-            va->occluded = hidden ? min(va->occluded + 1, int(OCCLUDE_BB)) : OCCLUDE_NOTHING;
-            va->occludedframe = hidden ? occlusionframe : 0;
+            applyvaquery(*va, vaqueryresult(*va));
             va->query = newquery(va);
             if(va->query) groupqueries.add(va);
-            else
-            {
-                va->occluded = OCCLUDE_NOTHING;
-                va->occludedframe = 0;
-            }
+            else clearvaocclusion(*va);
         }
 
         for(vtxarray *va = visibleva; va; va = va->next) if(va->texs)
@@ -1870,14 +1927,21 @@ void rendergeom()
                     va->query = NULL;
                     va->occluded = OCCLUDE_PARENT;
                     va->occludedframe = occlusionframe;
+                    va->occlusionstamp = va->parent->occlusionstamp;
                     continue;
                 }
-                bool hidden = va->query && va->query->owner == va && checkquery(va->query, true) && va->query->fragments == 0;
-                va->occluded = hidden ? min(va->occluded+1, int(OCCLUDE_BB)) : OCCLUDE_NOTHING;
-                va->occludedframe = hidden ? occlusionframe : 0;
+                bool hidden = applyvaquery(*va, vaqueryresult(*va));
                 va->query = newquery(va);
-                if(!va->query || !va->occluded)
+                if(!va->query)
+                {
+                    clearvaocclusion(*va);
+                    hidden = false;
+                }
+                if(!hidden)
+                {
                     va->occluded = pvsoccluded(va->geommin, va->geommax) ? OCCLUDE_GEOM : OCCLUDE_NOTHING;
+                    va->occludedframe = va->occlusionstamp = 0;
+                }
                 if(va->occluded >= OCCLUDE_GEOM)
                 {
                     if(va->query)
@@ -1893,7 +1957,7 @@ void rendergeom()
             {
                 va->query = NULL;
                 va->occluded = pvsoccluded(va->geommin, va->geommax) ? OCCLUDE_GEOM : OCCLUDE_NOTHING;
-                va->occludedframe = 0;
+                va->occludedframe = va->occlusionstamp = 0;
                 if(va->occluded >= OCCLUDE_GEOM) continue;
             }
 
@@ -1948,18 +2012,17 @@ void rendergeom()
         {
             bool parenthidden = va->parent && va->parent->occluded >= OCCLUDE_BB &&
                                 va->parent->occludedframe == occlusionframe;
-            if(parenthidden || (va->query && checkquery(va->query, true) && va->query->fragments == 0))
+            if(parenthidden)
             {
                 va->occluded = OCCLUDE_BB;
                 va->occludedframe = occlusionframe;
+                va->occlusionstamp = va->parent->occlusionstamp;
                 continue;
             }
-            else
-            {
-                va->occluded = pvsoccluded(va->geommin, va->geommax) ? OCCLUDE_GEOM : OCCLUDE_NOTHING;
-                va->occludedframe = 0;
-                if(va->occluded >= OCCLUDE_GEOM) continue;
-            }
+            if(applyvaquery(*va, vaqueryresult(*va))) continue;
+            va->occluded = pvsoccluded(va->geommin, va->geommax) ? OCCLUDE_GEOM : OCCLUDE_NOTHING;
+            va->occludedframe = va->occlusionstamp = 0;
+            if(va->occluded >= OCCLUDE_GEOM) continue;
 
             blends += va->blends;
             renderva(cur, va, RENDERPASS_GBUFFER);
@@ -1974,7 +2037,7 @@ void rendergeom()
         {
             va->query = NULL;
             va->occluded = pvsoccluded(va->geommin, va->geommax) ? OCCLUDE_GEOM : OCCLUDE_NOTHING;
-            va->occludedframe = 0;
+            va->occludedframe = va->occlusionstamp = 0;
             if(va->occluded >= OCCLUDE_GEOM) continue;
             blends += va->blends;
             renderva(cur, va, RENDERPASS_GBUFFER);
