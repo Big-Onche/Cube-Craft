@@ -101,7 +101,9 @@ enum
     WORLD_SECTION_TILES = WORLD_SECTION_COLUMNS * WORLD_SECTION_COLUMNS,
     WORLD_MAX_PREPARED_CHUNKS = 8,
     WORLD_MAX_COLUMN_CHANGES = 64,
-    WORLD_MAX_SECTION_BATCH = 16
+    WORLD_MAX_SECTION_BATCH = 16,
+    WORLD_NEAR_RENDER_BLOCKS = 128,
+    WORLD_NEAR_RENDER_SECTION_RADIUS = (WORLD_NEAR_RENDER_BLOCKS + WORLD_SECTION_BLOCKS - 1) / WORLD_SECTION_BLOCKS
 };
 
 enum
@@ -3426,47 +3428,82 @@ static bool worldchunksectionrequired(worldchunk &chunk, int tile, int section, 
     return (chunk.visibletiles[section] & tilebit) && worldchunksectionwithin360(chunk, tile, section);
 }
 
-static long long worldchunksectionpriority(worldchunk &chunk, int tile, int section)
-{
-    int x = tile % WORLD_SECTION_COLUMNS, y = tile / WORLD_SECTION_COLUMNS;
-    ivec localpos(x * WORLD_SECTION_SIZE, y * WORLD_SECTION_SIZE,
-                  section * WORLD_SECTION_SIZE),
-         origin = ivec(worldchunkorigin(chunk)).add(localpos),
-         sectionpos(origin.x / WORLD_SECTION_SIZE, origin.y / WORLD_SECTION_SIZE, section);
-    vec focus = camera1 ? camera1->o : player ? player->o : vec(0, 0, 0);
-    ivec focussection(int(floorf(focus.x / WORLD_SECTION_SIZE)),
-                      int(floorf(focus.y / WORLD_SECTION_SIZE)),
-                      clamp(int(floorf(focus.z / WORLD_SECTION_SIZE)),
-                            0, int(WORLD_SECTION_LAYERS) - 1));
-    int dx = sectionpos.x - focussection.x, dy = sectionpos.y - focussection.y,
-        dz = section - focussection.z;
-
-    bool nearplayer = worldchunksectionnearplayer(chunk, tile, section, 1),
-         content = worldchunksectionhascontent(chunk, tile, section);
-    const uint tilebit = 1U << tile;
-    bool visible = (chunk.visibletiles[section] & tilebit) && worldchunksectionwithin360(chunk, tile, section);
-    if(!drawfullchunk && !nearplayer && (!content || !visible)) return LLONG_MAX;
-    int tier = nearplayer ? 0 : 1;
-
-    long long distance = (long long)dx * dx + (long long)dy * dy + (long long)dz * dz;
-    return ((long long)tier << 48) + distance;
-}
-
 struct worldsectioncandidate
 {
     int chunkindex, tile, section;
     long long score;
 };
 
+static bool worldchunksectionwithinnearload(const worldchunk &chunk, int tile, int section)
+{
+    if(!player) return false;
+    int x = tile % WORLD_SECTION_COLUMNS, y = tile / WORLD_SECTION_COLUMNS;
+    ivec bbmin = ivec(worldchunkorigin(chunk)).add(ivec(x * WORLD_SECTION_SIZE, y * WORLD_SECTION_SIZE, section * WORLD_SECTION_SIZE)),
+         bbmax = ivec(bbmin).add(WORLD_SECTION_SIZE);
+    float squareddistance = 0;
+    loopi(3)
+    {
+        float delta = player->o[i] < bbmin[i] ? bbmin[i] - player->o[i] : player->o[i] > bbmax[i] ? player->o[i] - bbmax[i] : 0;
+        squareddistance += delta * delta;
+    }
+    const int distance = WORLD_NEAR_RENDER_BLOCKS * WORLD_BLOCK_SIZE;
+    return squareddistance < float(distance * distance);
+}
+
+static int findworldchunknearmountsections(int chunkx, int chunky, worldsectioncandidate *candidates, int maxcandidates)
+{
+    if(!player || maxcandidates <= 0) return 0;
+    int focusx = int(floorf(player->o.x / WORLD_SECTION_SIZE)),
+        focusy = int(floorf(player->o.y / WORLD_SECTION_SIZE)),
+        focusz = clamp(int(floorf(player->o.z / WORLD_SECTION_SIZE)), 0, int(WORLD_SECTION_LAYERS) - 1),
+        numcandidates = 0;
+
+    for(int radius = 0; radius <= WORLD_NEAR_RENDER_SECTION_RADIUS; ++radius)
+    for(int dz = -radius; dz <= radius; ++dz)
+    for(int dy = -radius; dy <= radius; ++dy)
+    for(int dx = -radius; dx <= radius; ++dx)
+    {
+        if(max(max(abs(dx), abs(dy)), abs(dz)) != radius) continue;
+        int sectionx = focusx + dx, sectiony = focusy + dy, section = focusz + dz;
+        if(sectionx < 0 || sectionx >= WORLD_RUNTIME_SIZE / WORLD_SECTION_SIZE ||
+           sectiony < 0 || sectiony >= WORLD_RUNTIME_SIZE / WORLD_SECTION_SIZE ||
+           section < 0 || section >= WORLD_SECTION_LAYERS)
+            continue;
+        int chunkindex = findworldchunk(worldfirstchunkx + sectionx / WORLD_SECTION_COLUMNS,
+                                        worldfirstchunky + sectiony / WORLD_SECTION_COLUMNS);
+        if(!worldchunks.inrange(chunkindex)) continue;
+        worldchunk &chunk = worldchunks[chunkindex];
+        if(chunk.loading || chunk.corrupted || !chunk.root || !worldchunkinview(chunk, chunkx, chunky)) continue;
+        int tile = (sectiony % WORLD_SECTION_COLUMNS) * WORLD_SECTION_COLUMNS + sectionx % WORLD_SECTION_COLUMNS;
+        if((chunk.mountedtiles[section] & (1U << tile)) || !worldchunksectionwithinnearload(chunk, tile, section) ||
+           !worldchunksectionrequired(chunk, tile, section, 1))
+            continue;
+        worldsectioncandidate &candidate = candidates[numcandidates++];
+        candidate.chunkindex = chunkindex;
+        candidate.tile = tile;
+        candidate.section = section;
+        candidate.score = 0;
+        if(numcandidates >= maxcandidates) return numcandidates;
+    }
+    return numcandidates;
+}
+
 static int findworldchunkmountsections(int chunkx, int chunky,
                                        worldsectioncandidate *candidates, int maxcandidates)
 {
-    ZoneScopedN("Chunks/Select prioritized render section");
+    ZoneScopedN("Chunks/Select render sections");
+    if(maxcandidates <= 0) return 0;
+    int numcandidates = findworldchunknearmountsections(chunkx, chunky, candidates, maxcandidates);
+    if(numcandidates >= maxcandidates)
+    {
+        ZoneValue(numcandidates);
+        return numcandidates;
+    }
+
     const vec *nearfocus = player ? &player->o : camera1 ? &camera1->o : NULL;
     int focusx = nearfocus ? int(floorf(nearfocus->x / WORLD_SECTION_SIZE)) : INT_MIN,
         focusy = nearfocus ? int(floorf(nearfocus->y / WORLD_SECTION_SIZE)) : INT_MIN,
-        focusz = nearfocus ? clamp(int(floorf(nearfocus->z / WORLD_SECTION_SIZE)), 0, int(WORLD_SECTION_LAYERS) - 1) : INT_MIN,
-        numcandidates = 0;
+        focusz = nearfocus ? clamp(int(floorf(nearfocus->z / WORLD_SECTION_SIZE)), 0, int(WORLD_SECTION_LAYERS) - 1) : INT_MIN;
     const uint alltiles = (1U << WORLD_SECTION_TILES) - 1;
     loopv(worldchunks)
     {
@@ -3492,21 +3529,17 @@ static int findworldchunkmountsections(int chunkx, int chunky,
             if(!pendingtiles) continue;
             loopj(WORLD_SECTION_TILES) if(pendingtiles & (1U << j))
             {
-                long long score = worldchunksectionpriority(chunk, j, k);
-                if(score == LLONG_MAX) continue;
-                int insert = numcandidates;
-                while(insert > 0 && score < candidates[insert - 1].score) --insert;
-                if(insert >= maxcandidates) continue;
-                int newcount = min(numcandidates + 1, maxcandidates);
-                for(int move = newcount - 1; move > insert; --move)
-                    candidates[move] = candidates[move - 1];
-                candidates[insert].chunkindex = i;
-                candidates[insert].tile = j;
-                candidates[insert].section = k;
-                candidates[insert].score = score;
-                numcandidates = newcount;
+                if(!worldchunksectionrequired(chunk, j, k, 1) || worldchunksectionwithinnearload(chunk, j, k)) continue;
+                worldsectioncandidate &candidate = candidates[numcandidates++];
+                candidate.chunkindex = i;
+                candidate.tile = j;
+                candidate.section = k;
+                candidate.score = 0;
+                if(numcandidates >= maxcandidates) break;
             }
+            if(numcandidates >= maxcandidates) break;
         }
+        if(numcandidates >= maxcandidates) break;
     }
     ZoneValue(numcandidates);
     return numcandidates;
@@ -3679,7 +3712,7 @@ static int processworldchunkchanges(int chunkx, int chunky)
     int mounted = 0, mountedsections = 0, mounttarget = WORLD_MAX_COLUMN_CHANGES,
         publishstagelimit = worldchunkstagelimit(chunkpublishbudget);
     {
-        ZoneScopedN("Chunks/Mount prioritized sections");
+        ZoneScopedN("Chunks/Mount render sections");
         worldsectioncandidate candidates[WORLD_MAX_SECTION_BATCH];
         int numcandidates = findworldchunkmountsections(chunkx, chunky, candidates,
                                                         min(publishstagelimit,
