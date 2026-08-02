@@ -1133,11 +1133,34 @@ static int lastworldchunkmotion = -1;
 static vector<int> worldchunkvaupdates;
 static hashset<int> worldchunkvaupdateset(1<<14);
 static hashtable<int, worldsectionowner> worldsectionowners(1<<15);
+static hashtable<ivec, int> worldchunkindices(1<<14);
+static vector<ivec> worldsectionvisibilityadditions;
+static bool worldsectionvisibilitydirty = true;
+static int worldsectionvisibilitychunkx = INT_MIN, worldsectionvisibilitychunky = INT_MIN,
+           worldsectionvisibilitymaxdist = -1;
+static ivec worldsectionvisibilityfocus(INT_MIN, INT_MIN, INT_MIN);
 static float worldchunkvasectionmillis = 2.0f;
 static worlddiffmetadata activeworldmetadata;
 static int worldeditauthor = -1, lastworlddiffflush = 0;
 static ullong worldeditrevision = 0, incomingworldeditrevision = 0;
 static vector<worldeditrecord *> worldredostack;
+
+static void invalidateworldsectionvisibility()
+{
+    worldsectionvisibilitydirty = true;
+    worldsectionvisibilityadditions.setsize(0);
+}
+
+static void addworldsectionvisibilitychunk(int x, int y)
+{
+    if(!worldsectionvisibilitydirty) worldsectionvisibilityadditions.add(ivec(x, y, 0));
+}
+
+static ivec worldchunkindexkey(int x, int y)
+{
+    uint hash = uint(x) * 0x9E3779B1U ^ uint(y) * 0x85EBCA77U ^ uint(x) ^ uint(y);
+    return ivec(x, y, int(hash));
+}
 
 void worldpositiontoabsolute(vec &position)
 {
@@ -1215,6 +1238,7 @@ static void updateleavesalpha()
     setworldleavesalpha(worldroot, leavesalpha != 0);
     loopv(worldchunks) if(worldchunks[i].root && worldchunks[i].root != worldroot)
         setworldleavesalpha(worldchunks[i].root, leavesalpha != 0);
+    invalidateworldsectionvisibility();
     if(worldroot) allchanged();
 }
 
@@ -1574,6 +1598,11 @@ void clearworldchunks()
     worldchunkvaupdates.setsize(0);
     worldchunkvaupdateset.clear();
     worldsectionowners.clear();
+    worldchunkindices.clear();
+    invalidateworldsectionvisibility();
+    worldsectionvisibilitychunkx = worldsectionvisibilitychunky = INT_MIN;
+    worldsectionvisibilitymaxdist = -1;
+    worldsectionvisibilityfocus = ivec(INT_MIN, INT_MIN, INT_MIN);
     clearworldskyexposure();
     loopv(worldchunks) if(worldchunks[i].root && worldchunks[i].root != worldroot)
     {
@@ -2395,6 +2424,7 @@ void markworldchunksdirty(const ivec &bbmin, const ivec &bbmax)
 {
     if(suppressworldchunkdirty || worldchunks.empty()) return;
     invalidateworldskyexposure(bbmin, bbmax);
+    bool visibilitychanged = false;
     loopv(worldchunks)
     {
         worldchunk &chunk = worldchunks[i];
@@ -2417,7 +2447,9 @@ void markworldchunksdirty(const ivec &bbmin, const ivec &bbmax)
             chunk.opaqueknown[z] &= ~tilebit;
         }
         chunk.dirty = true;
+        visibilitychanged = true;
     }
+    if(visibilitychanged) invalidateworldsectionvisibility();
 }
 
 static bool syncmountedworldchunk(worldchunk &chunk)
@@ -2439,6 +2471,7 @@ static bool syncmountedworldchunk(worldchunk &chunk)
             conoutf(CON_ERROR, "refusing to sync chunk %d_%d section %d:%d: runtime ownership mismatch",
                     chunk.x, chunk.y, i, j);
             chunk.corrupted = true;
+            invalidateworldsectionvisibility();
             valid = false;
             continue;
         }
@@ -2469,6 +2502,7 @@ static bool mountworldchunktile(worldchunk &chunk, int section, int tile)
                 chunk.x, chunk.y, section, tile, owner->chunkx, owner->chunky,
                 int(owner->section), int(owner->tile));
         chunk.corrupted = true;
+        invalidateworldsectionvisibility();
         return false;
     }
     moveworldcube(lookupworldchunkcube(chunk, pos, WORLD_SECTION_SIZE),
@@ -2494,6 +2528,7 @@ static bool unmountworldchunktile(worldchunk &chunk, int section, int tile)
         conoutf(CON_ERROR, "refusing to unmount chunk %d_%d section %d:%d: runtime ownership mismatch",
                 chunk.x, chunk.y, section, tile);
         chunk.corrupted = true;
+        invalidateworldsectionvisibility();
         chunk.mountedtiles[section] &= ~tilebit;
         return false;
     }
@@ -2516,13 +2551,6 @@ static void unmountworldchunk(worldchunk &chunk)
     ZoneTextF("%d_%d", chunk.x, chunk.y);
     loopi(WORLD_SECTION_LAYERS) loopj(WORLD_SECTION_TILES)
         unmountworldchunktile(chunk, i, j);
-}
-
-static bool worldchunkcolumnmounted(const worldchunk &chunk, int tile)
-{
-    const uint tilebit = 1U << tile;
-    loopi(WORLD_SECTION_LAYERS) if(!(chunk.mountedtiles[i] & tilebit)) return false;
-    return true;
 }
 
 static int unmountworldchunkcolumnbatch(worldchunk &chunk, int tile, int *sections, int maxsections)
@@ -2605,8 +2633,30 @@ static void queueworldchunksectionupdates(const worldchunk &chunk, int tile, con
 
 static int findworldchunk(int x, int y)
 {
-    loopv(worldchunks) if(worldchunks[i].x == x && worldchunks[i].y == y) return i;
+    ivec key = worldchunkindexkey(x, y);
+    int *cached = worldchunkindices.access(key);
+    if(cached && *cached < 0) return -1;
+    if(cached && worldchunks.inrange(*cached) && worldchunks[*cached].x == x && worldchunks[*cached].y == y) return *cached;
+    loopv(worldchunks) if(worldchunks[i].x == x && worldchunks[i].y == y)
+    {
+        worldchunkindices[key] = i;
+        return i;
+    }
+    worldchunkindices[key] = -1;
     return -1;
+}
+
+static void indexworldchunk(int index)
+{
+    if(!worldchunks.inrange(index)) return;
+    const worldchunk &chunk = worldchunks[index];
+    worldchunkindices[worldchunkindexkey(chunk.x, chunk.y)] = index;
+}
+
+static void rebuildworldchunkindices()
+{
+    worldchunkindices.clear();
+    loopv(worldchunks) indexworldchunk(i);
 }
 
 static int worldchunkdistance(int x, int y, int focusx, int focusy)
@@ -2876,7 +2926,9 @@ static int acquireworldchunksync(int x, int y, int &generated)
     }
     else generated++;
     worldchunk &chunk = worldchunks.add(worldchunk(x, y, root, false, loaded));
+    indexworldchunk(worldchunks.length() - 1);
     chunk.scatter.move(scatter);
+    addworldsectionvisibilitychunk(x, y);
     return worldchunks.length() - 1;
 }
 
@@ -2932,6 +2984,7 @@ static int queueworldchunk(int x, int y)
         copystring(job->filename, chunkfile);
 
     worldchunk &chunk = worldchunks.add(worldchunk(x, y, NULL, true));
+    indexworldchunk(worldchunks.length() - 1);
     chunk.request = request;
     chunk.generating = !job->filename[0];
     SDL_LockMutex(worldchunkmutex);
@@ -3158,6 +3211,7 @@ static int processworldchunkresults()
                         job->x, job->y, job->loaderror);
             if(job->loaded) loaded++; else generated++;
             optimized += job->optimized;
+            addworldsectionvisibilitychunk(chunk.x, chunk.y);
             published++;
         }
         delete job;
@@ -3227,29 +3281,83 @@ static void revealworldsection(vector<worldsectionnode> &queue, int chunkindex, 
 
 static void updateworldsectionvisibility(int chunkx, int chunky)
 {
-    ZoneScopedN("Chunks/Build 360 degree section visibility");
     static const int directions[][3] =
     {
         { -1, 0, 0 }, { 1, 0, 0 }, { 0, -1, 0 }, { 0, 1, 0 }, { 0, 0, -1 }, { 0, 0, 1 }
     };
-    vector<worldsectionnode> queue;
-    loopv(worldchunks)
+    if(drawfullchunk)
     {
-        memclear(worldchunks[i].reachabletiles);
-        memclear(worldchunks[i].visibletiles);
+        invalidateworldsectionvisibility();
+        return;
     }
 
-    // Flood down from the sky in every column. This discovers the entire exterior without treating unloaded horizontal neighbors as empty
-    // space, which would incorrectly expose solid underground sections at the streaming boundary.
-    loopv(worldchunks)
-    {
-        worldchunk &chunk = worldchunks[i];
-        if(chunk.loading || chunk.corrupted || !chunk.root || !worldchunkinview(chunk, chunkx, chunky)) continue;
-        loopj(WORLD_SECTION_TILES) revealworldsection(queue, i, j, WORLD_SECTION_LAYERS - 1);
-    }
-
-    // A sealed cave is not connected to outside air, so explicitly seed the camera's own section as a second visibility region.
     const vec *focus = camera1 ? &camera1->o : player ? &player->o : NULL;
+    ivec focussection(INT_MIN, INT_MIN, INT_MIN);
+    if(focus)
+        focussection = ivec(int(floorf(focus->x / WORLD_SECTION_SIZE)), int(floorf(focus->y / WORLD_SECTION_SIZE)),
+                            clamp(int(floorf(focus->z / WORLD_SECTION_SIZE)), 0, int(WORLD_SECTION_LAYERS) - 1));
+    bool focuschanged = focussection != worldsectionvisibilityfocus,
+         rebuild = worldsectionvisibilitydirty || chunkx != worldsectionvisibilitychunkx || chunky != worldsectionvisibilitychunky ||
+                   maxchunkdist != worldsectionvisibilitymaxdist;
+    if(!rebuild && !focuschanged && worldsectionvisibilityadditions.empty()) return;
+
+    ZoneScopedN("Chunks/Update dirty section visibility");
+    ZoneValue(worldsectionvisibilityadditions.length());
+    vector<worldsectionnode> queue;
+    if(rebuild)
+    {
+        ZoneScopedN("Chunks/Rebuild section visibility");
+        rebuildworldchunkindices();
+        loopv(worldchunks)
+        {
+            memclear(worldchunks[i].reachabletiles);
+            memclear(worldchunks[i].visibletiles);
+        }
+
+        // Flood down from the sky in every column. Unloaded horizontal
+        // neighbors are not treated as empty space at the streaming boundary.
+        loopv(worldchunks)
+        {
+            worldchunk &chunk = worldchunks[i];
+            if(chunk.loading || chunk.corrupted || !chunk.root || !worldchunkinview(chunk, chunkx, chunky)) continue;
+            loopj(WORLD_SECTION_TILES) revealworldsection(queue, i, j, WORLD_SECTION_LAYERS - 1);
+        }
+    }
+    else
+    {
+        ZoneScopedN("Chunks/Extend section visibility");
+        loopv(worldsectionvisibilityadditions)
+        {
+            const ivec &added = worldsectionvisibilityadditions[i];
+            int index = findworldchunk(added.x, added.y);
+            if(!worldchunks.inrange(index)) continue;
+            worldchunk &chunk = worldchunks[index];
+            if(chunk.loading || chunk.corrupted || !chunk.root || !worldchunkinview(chunk, chunkx, chunky)) continue;
+            loopj(WORLD_SECTION_TILES) revealworldsection(queue, index, j, WORLD_SECTION_LAYERS - 1);
+
+            // A newly published chunk may connect to an already reachable cave
+            // through a side face, even when it is sealed from the sky.
+            loopj(WORLD_SECTION_TILES) loopk(WORLD_SECTION_LAYERS)
+            {
+                const uint tilebit = 1U << j;
+                if(chunk.reachabletiles[k] & tilebit) continue;
+                loopl(6)
+                {
+                    int neighborindex, neighbortile, neighborsection;
+                    if(!findworldsectionneighbor(index, j, k, directions[l][0], directions[l][1], directions[l][2], chunkx, chunky,
+                                                 neighborindex, neighbortile, neighborsection))
+                        continue;
+                    const worldchunk &neighbor = worldchunks[neighborindex];
+                    if(!(neighbor.reachabletiles[neighborsection] & (1U << neighbortile))) continue;
+                    revealworldsection(queue, index, j, k);
+                    break;
+                }
+            }
+        }
+    }
+
+    // A sealed cave is not connected to outside air, so explicitly seed the
+    // camera's own section as a second visibility region.
     if(focus)
     {
         int camerachunkx = worldfirstchunkx + int(floorf(focus->x / WORLD_CHUNK_SIZE)),
@@ -3258,11 +3366,13 @@ static void updateworldsectionvisibility(int chunkx, int chunky)
         if(worldchunks.inrange(cameraindex))
         {
             worldchunk &chunk = worldchunks[cameraindex];
-            ivec origin = worldchunkorigin(chunk);
-            int tilex = clamp(int(floorf((focus->x - origin.x) / WORLD_SECTION_SIZE)), 0, int(WORLD_SECTION_COLUMNS) - 1),
-                tiley = clamp(int(floorf((focus->y - origin.y) / WORLD_SECTION_SIZE)), 0, int(WORLD_SECTION_COLUMNS) - 1),
-                section = clamp(int(floorf(focus->z / WORLD_SECTION_SIZE)), 0, int(WORLD_SECTION_LAYERS) - 1);
-            revealworldsection(queue, cameraindex, tiley * WORLD_SECTION_COLUMNS + tilex, section);
+            if(!chunk.loading && !chunk.corrupted && chunk.root)
+            {
+                ivec origin = worldchunkorigin(chunk);
+                int tilex = clamp(int(floorf((focus->x - origin.x) / WORLD_SECTION_SIZE)), 0, int(WORLD_SECTION_COLUMNS) - 1),
+                    tiley = clamp(int(floorf((focus->y - origin.y) / WORLD_SECTION_SIZE)), 0, int(WORLD_SECTION_COLUMNS) - 1);
+                revealworldsection(queue, cameraindex, tiley * WORLD_SECTION_COLUMNS + tilex, focussection.z);
+            }
         }
     }
 
@@ -3278,6 +3388,12 @@ static void updateworldsectionvisibility(int chunkx, int chunky)
             revealworldsection(queue, neighborindex, neighbortile, neighborsection);
         }
     }
+    worldsectionvisibilitydirty = false;
+    worldsectionvisibilityadditions.setsize(0);
+    worldsectionvisibilitychunkx = chunkx;
+    worldsectionvisibilitychunky = chunky;
+    worldsectionvisibilitymaxdist = maxchunkdist;
+    worldsectionvisibilityfocus = focussection;
     ZoneValue(queue.length());
 }
 
@@ -3337,20 +3453,36 @@ static int findworldchunkmountsections(int chunkx, int chunky,
                                        worldsectioncandidate *candidates, int maxcandidates)
 {
     ZoneScopedN("Chunks/Select prioritized render section");
-    int numcandidates = 0;
+    const vec *nearfocus = player ? &player->o : camera1 ? &camera1->o : NULL;
+    int focusx = nearfocus ? int(floorf(nearfocus->x / WORLD_SECTION_SIZE)) : INT_MIN,
+        focusy = nearfocus ? int(floorf(nearfocus->y / WORLD_SECTION_SIZE)) : INT_MIN,
+        focusz = nearfocus ? clamp(int(floorf(nearfocus->z / WORLD_SECTION_SIZE)), 0, int(WORLD_SECTION_LAYERS) - 1) : INT_MIN,
+        numcandidates = 0;
+    const uint alltiles = (1U << WORLD_SECTION_TILES) - 1;
     loopv(worldchunks)
     {
         worldchunk &chunk = worldchunks[i];
         if(chunk.loading || chunk.corrupted || !chunk.root || worldchunkfullymounted(chunk) ||
            !worldchunkinview(chunk, chunkx, chunky))
             continue;
-        loopj(WORLD_SECTION_TILES)
+        int chunksectionx = (chunk.x - worldfirstchunkx) * WORLD_SECTION_COLUMNS,
+            chunksectiony = (chunk.y - worldfirstchunky) * WORLD_SECTION_COLUMNS;
+        loopk(WORLD_SECTION_LAYERS)
         {
-            if(worldchunkcolumnmounted(chunk, j)) continue;
-            const uint tilebit = 1U << j;
-            loopk(WORLD_SECTION_LAYERS)
+            uint pendingtiles = (drawfullchunk ? alltiles : chunk.visibletiles[k]) & ~chunk.mountedtiles[k];
+            if(nearfocus && abs(k - focusz) <= 1)
             {
-                if(chunk.mountedtiles[k] & tilebit) continue;
+                loopj(WORLD_SECTION_TILES)
+                {
+                    int sectionx = chunksectionx + j % WORLD_SECTION_COLUMNS,
+                        sectiony = chunksectiony + j / WORLD_SECTION_COLUMNS;
+                    if(abs(sectionx - focusx) <= 1 && abs(sectiony - focusy) <= 1) pendingtiles |= 1U << j;
+                }
+                pendingtiles &= ~chunk.mountedtiles[k];
+            }
+            if(!pendingtiles) continue;
+            loopj(WORLD_SECTION_TILES) if(pendingtiles & (1U << j))
+            {
                 long long score = worldchunksectionpriority(chunk, j, k);
                 if(score == LLONG_MAX) continue;
                 int insert = numcandidates;
@@ -3414,18 +3546,17 @@ static int findworldchunkcachedsections(int chunkx, int chunky,
         if(chunk.loading || chunk.corrupted || !chunk.root || !worldchunkmounted(chunk) ||
            !worldchunkinview(chunk, chunkx, chunky))
             continue;
-        loopj(WORLD_SECTION_TILES)
+        loopk(WORLD_SECTION_LAYERS)
         {
-            int x = j % WORLD_SECTION_COLUMNS, y = j / WORLD_SECTION_COLUMNS,
-                sectionx = (chunk.x - worldfirstchunkx) * WORLD_SECTION_COLUMNS + x,
-                sectiony = (chunk.y - worldfirstchunky) * WORLD_SECTION_COLUMNS + y,
-                dx = sectionx - focusx, dy = sectiony - focusy;
-            const uint tilebit = 1U << j;
-            loopk(WORLD_SECTION_LAYERS)
+            uint mountedtiles = chunk.mountedtiles[k];
+            if(!mountedtiles) continue;
+            loopj(WORLD_SECTION_TILES) if(mountedtiles & (1U << j))
             {
-                if(!(chunk.mountedtiles[k] & tilebit) ||
-                   worldchunksectionrequired(chunk, j, k, 2))
-                    continue;
+                int x = j % WORLD_SECTION_COLUMNS, y = j / WORLD_SECTION_COLUMNS,
+                    sectionx = (chunk.x - worldfirstchunkx) * WORLD_SECTION_COLUMNS + x,
+                    sectiony = (chunk.y - worldfirstchunky) * WORLD_SECTION_COLUMNS + y,
+                    dx = sectionx - focusx, dy = sectiony - focusy;
+                if(worldchunksectionrequired(chunk, j, k, 2)) continue;
                 int dz = k - focusz;
                 long long distance = (long long)dx * dx + (long long)dy * dy +
                                      (long long)dz * dz,
@@ -3578,6 +3709,7 @@ static void rebaseworldchunks(int chunkx, int chunky, bool translateplayer = tru
 {
     ZoneScopedN("Chunks/Rebase runtime world");
     ZoneTextF("%d_%d", chunkx, chunky);
+    invalidateworldsectionvisibility();
     worldchunkvaupdates.setsize(0);
     worldchunkvaupdateset.clear();
     clearworldscattererentities();
@@ -3674,6 +3806,7 @@ static int pruneworldchunkcache(int chunkx, int chunky, int limit)
         double elapsed = (SDL_GetPerformanceCounter() - start) * 1000.0 / frequency;
         if(released >= limit || elapsed >= chunkcleanupbudget) break;
     }
+    if(released) invalidateworldsectionvisibility();
     return released;
 }
 
@@ -7355,6 +7488,7 @@ static bool loadworldchunks(const char *mname)
     activeworldchunk = 0;
     worldchunk &currentchunk =
         worldchunks.add(worldchunk(currentx, currenty, currentroot, false, true));
+    indexworldchunk(worldchunks.length() - 1);
     currentchunk.scatter.move(reconstructedworldscatter);
     loadinitialworldchunks(currentx, currenty);
 
@@ -7812,6 +7946,7 @@ static void createworld(const char *requestedname)
     {
         worldchunk &chunk =
             worldchunks.add(worldchunk(0, 0, generateworldchunk(0, 0)));
+            indexworldchunk(worldchunks.length() - 1);
         generateworldscatter(chunk.root, 0, 0, game::worldsettings(),
                              chunk.scatter);
     }
@@ -7908,6 +8043,7 @@ void startnetworkworld(int seed)
     {
         worldchunk &chunk =
             worldchunks.add(worldchunk(0, 0, generateworldchunk(0, 0)));
+            indexworldchunk(worldchunks.length() - 1);
         generateworldscatter(chunk.root, 0, 0, game::worldsettings(),
                              chunk.scatter);
     }
