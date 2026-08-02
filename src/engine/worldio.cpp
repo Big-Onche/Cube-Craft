@@ -101,8 +101,7 @@ enum
     WORLD_SECTION_TILES = WORLD_SECTION_COLUMNS * WORLD_SECTION_COLUMNS,
     WORLD_MAX_PREPARED_CHUNKS = 8,
     WORLD_MAX_COLUMN_CHANGES = 64,
-    WORLD_MAX_SECTION_BATCH = 16,
-    WORLD_MAX_SECTION_REGIONS = WORLD_MAX_SECTION_BATCH * 7
+    WORLD_MAX_SECTION_BATCH = 16
 };
 
 enum
@@ -1083,9 +1082,10 @@ struct worldchunkjob
     vector<worldgencubetextures> cubetextures;
     game::worldsettings settings;
     int families, optimized, loaderror;
+    uint contenttiles[WORLD_SECTION_LAYERS], opaquetiles[WORLD_SECTION_LAYERS];
     ullong revision, canonicalhash;
     uint epoch, request;
-    bool loaded, remip;
+    bool loaded, remip, leavesalpha, sectionstatesready;
     SDL_atomic_t cancelled;
     cube *root;
     vector<worldscatterinstance> scatter;
@@ -1095,8 +1095,10 @@ struct worldchunkjob
         : x(x), y(y), seed(game::getworldseed()), cubetextures(worldgentextures),
           families(0), optimized(0), loaderror(0), revision(0), canonicalhash(0),
           epoch(epoch), request(request),
-          loaded(false), remip(chunkremip != 0), root(NULL)
+          loaded(false), remip(chunkremip != 0), leavesalpha(::leavesalpha != 0), sectionstatesready(false), root(NULL)
     {
+        memclear(contenttiles);
+        memclear(opaquetiles);
         SDL_AtomicSet(&cancelled, 0);
         filename[0] = '\0';
     }
@@ -1182,20 +1184,30 @@ struct worldeditcapture
 
 static worldeditcapture currentworldedit;
 
-static void setworldleavesalpha(cube *root, bool enabled)
+static void setworldleavesalpha(cube *root, bool enabled, int leaveslot, int needlesslot)
 {
-    if(!root || (!findworldcube("leaves") && !findworldcube("needles"))) return;
+    if(!root) return;
     loopi(8)
     {
         cube &c = root[i];
-        if(c.children) setworldleavesalpha(c.children, enabled);
-        else if(isworldleaftexture(c))
+        if(c.children) setworldleavesalpha(c.children, enabled, leaveslot, needlesslot);
+        else if(!isempty(c) && (c.texture[0] == leaveslot || c.texture[0] == needlesslot))
         {
+            bool foliage = true;
+            loopj(6) if(c.texture[j] != c.texture[0]) { foliage = false; break; }
+            if(!foliage) continue;
             if(enabled) c.material |= MAT_ALPHA;
             else c.material &= ~MAT_ALPHA;
             c.visible = c.merged = 0;
         }
     }
+}
+
+static void setworldleavesalpha(cube *root, bool enabled)
+{
+    worldcubedefinition *leaves = findworldcube("leaves"), *needles = findworldcube("needles");
+    if(!root || (!leaves && !needles)) return;
+    setworldleavesalpha(root, enabled, leaves ? leaves->slot : -1, needles ? needles->slot : -1);
 }
 
 static void updateleavesalpha()
@@ -1209,7 +1221,7 @@ static void updateleavesalpha()
 VARP(asyncchunkloads, 2, 2, 4);
 VARP(chunkthreads, 0, 0, 16);
 VARP(chunkcachedist, 0, 0, 0);
-VARP(chunkpendinglimit, 4, 4, 8);
+VARP(chunkpendinglimit, 4, 8, 16);
 VARP(chunklookahead, 0, 2, 8);
 VARP(chunkpublishbudget, 2, 3, 33);
 VARP(chunkcleanupbudget, 1, 3, 33);
@@ -1232,6 +1244,7 @@ static void clearworldscattererentities();
 static int findworldchunk(int x, int y);
 static int remipworldchunk(cube *root, bool prepared, int &families, SDL_atomic_t *cancelled = NULL);
 static bool subdivideworldmip(const cube &c, cube *children);
+static bool prepareworldchunksectionstates(worldchunkjob &job);
 static int pruneworldchunkcache(int chunkx, int chunky, int limit);
 static bool saveworldconfig();
 static void worldchunkname(char *name, size_t len, const worldchunk &chunk);
@@ -1611,6 +1624,18 @@ static cube &lookupworldchunkrootcube(cube *root, const ivec &pos, int size)
     while(!(size >> scale))
     {
         if(!c->children) subdividecube(*c);
+        --scale;
+        c = &c->children[octastep(pos.x, pos.y, pos.z, scale)];
+    }
+    return *c;
+}
+
+static const cube &lookupworldchunkrootcube(const cube *root, const ivec &pos, int size)
+{
+    int scale = WORLD_CHUNK_SCALE - 1;
+    const cube *c = &root[octastep(pos.x, pos.y, pos.z, scale)];
+    while(!(size >> scale) && c->children)
+    {
         --scale;
         c = &c->children[octastep(pos.x, pos.y, pos.z, scale)];
     }
@@ -2250,6 +2275,28 @@ static int worldcubesectionstate(const cube &c)
            (isentirelysolid(c) && !(c.material&MAT_ALPHA) ? WORLD_SECTION_OPAQUE : 0);
 }
 
+static bool prepareworldchunksectionstates(worldchunkjob &job)
+{
+    if(!job.root) return false;
+    ZoneScopedN("Chunks/Worker classify sections");
+    loopi(WORLD_SECTION_LAYERS)
+    {
+        uint content = 0, opaque = 0;
+        loopj(WORLD_SECTION_TILES)
+        {
+            if(SDL_AtomicGet(&job.cancelled)) return false;
+            int x = j % WORLD_SECTION_COLUMNS, y = j / WORLD_SECTION_COLUMNS;
+            ivec pos(x * WORLD_SECTION_SIZE, y * WORLD_SECTION_SIZE, i * WORLD_SECTION_SIZE);
+            int state = worldcubesectionstate(lookupworldchunkrootcube(static_cast<const cube *>(job.root), pos, WORLD_SECTION_SIZE));
+            if(state&WORLD_SECTION_CONTENT) content |= 1U << j;
+            if(state&WORLD_SECTION_OPAQUE) opaque |= 1U << j;
+        }
+        job.contenttiles[i] = content;
+        job.opaquetiles[i] = opaque;
+    }
+    return true;
+}
+
 static int worldchunksectionstate(worldchunk &chunk, int tile, int section)
 {
     const uint tilebit = 1U << tile;
@@ -2526,34 +2573,22 @@ static bool queueworldchunkvaupdate(const ivec &origin)
 static void queueworldchunksectionupdates(const worldchunk &chunk, int tile, const int *sections, int numsections)
 {
     ZoneScopedN("Chunks/Queue affected VA sections");
-    static const int offsets[][3] =
-    {
-        { 0, 0, 0 },
-        { -1, 0, 0 }, { 1, 0, 0 },
-        { 0, -1, 0 }, { 0, 1, 0 },
-        { 0, 0, -1 }, { 0, 0, 1 }
-    };
     int x = tile % WORLD_SECTION_COLUMNS, y = tile / WORLD_SECTION_COLUMNS;
-    ivec bbmins[WORLD_MAX_SECTION_REGIONS], bbmaxs[WORLD_MAX_SECTION_REGIONS];
+    ivec bbmins[WORLD_MAX_SECTION_BATCH], bbmaxs[WORLD_MAX_SECTION_BATCH];
     int numregions = 0;
     loopi(numsections)
     {
         ivec center = worldchunkorigin(chunk, sections[i] * WORLD_SECTION_SIZE);
         center.add(ivec(x * WORLD_SECTION_SIZE, y * WORLD_SECTION_SIZE, 0));
-        loopj(int(sizeof(offsets)/sizeof(offsets[0])))
-        {
-            ivec bbmin = ivec(center).add(ivec(offsets[j][0] * WORLD_SECTION_SIZE,
-                                               offsets[j][1] * WORLD_SECTION_SIZE,
-                                               offsets[j][2] * WORLD_SECTION_SIZE));
-            ivec bbmax = ivec(bbmin).add(WORLD_SECTION_SIZE);
-            if(bbmin.x < 0 || bbmin.y < 0 || bbmin.z < 0 ||
-               bbmax.x > worldsize || bbmax.y > worldsize || bbmax.z > WORLD_MAP_SIZE)
-                continue;
-            if(!queueworldchunkvaupdate(bbmin)) continue;
-            bbmins[numregions] = bbmin;
-            bbmaxs[numregions] = bbmax;
-            numregions++;
-        }
+        if(!queueworldchunkvaupdate(center)) continue;
+
+        // Faces can only change inside the moved section or immediately across
+        // its boundary. Invalidating all six neighboring sections rebuilt up to
+        // seven times the required render data for every streaming operation.
+        bbmins[numregions] = ivec(center).sub(1).max(0);
+        bbmaxs[numregions] = ivec(center).add(WORLD_SECTION_SIZE + 1).min(
+            ivec(worldsize, worldsize, WORLD_MAP_SIZE));
+        numregions++;
     }
     if(numregions)
     {
@@ -2668,6 +2703,11 @@ static int worldchunkloader(void *)
             ZoneScopedN("Chunks/Worker job");
             ZoneTextF("%d_%d", job->x, job->y);
             if(!SDL_AtomicGet(&job->cancelled)) job->root = prepareworldchunk(*job);
+            if(job->root && !SDL_AtomicGet(&job->cancelled))
+            {
+                setworldleavesalpha(job->root, job->leavesalpha);
+                job->sectionstatesready = prepareworldchunksectionstates(*job);
+            }
         }
         if(SDL_AtomicGet(&job->cancelled) && job->root)
         {
@@ -2716,11 +2756,10 @@ static bool startworldchunkloader()
         return false;
     }
 
-    // Procedural generation is both compute and memory intensive. Using every
-    // logical CPU starves the render thread even though the workers have low
-    // scheduler priority, so automatic mode leaves a core free and avoids
-    // saturating the memory subsystem on high-core-count machines.
-    int workers = chunkthreads > 0 ? chunkthreads : min(max(numcpus - 1, 1), 4);
+    // Keep roughly one third of the logical CPUs available to the render thread
+    // and OS. The old hard cap of four left modern six- and eight-core CPUs
+    // underused even though these workers run at low scheduler priority.
+    int workers = chunkthreads > 0 ? chunkthreads : min(max(numcpus - max(numcpus / 3, 1), 1), 8);
     loopi(workers)
     {
         SDL_Thread *worker = SDL_CreateThread(worldchunkloader, "world chunk loader", NULL);
@@ -3093,7 +3132,19 @@ static int processworldchunkresults()
             worldchunk &chunk = worldchunks[index];
             chunk.root = job->root;
             chunk.scatter.move(job->scatter);
-            setworldleavesalpha(chunk.root, leavesalpha != 0);
+            bool leavesalphamatches = job->leavesalpha == (leavesalpha != 0);
+            if(!leavesalphamatches) setworldleavesalpha(chunk.root, leavesalpha != 0);
+            if(job->sectionstatesready)
+            {
+                const uint alltiles = (1U << WORLD_SECTION_TILES) - 1;
+                loopi(WORLD_SECTION_LAYERS)
+                {
+                    chunk.contentknown[i] = alltiles;
+                    chunk.contenttiles[i] = job->contenttiles[i];
+                    chunk.opaqueknown[i] = leavesalphamatches ? alltiles : 0;
+                    chunk.opaquetiles[i] = job->opaquetiles[i];
+                }
+            }
             chunk.loading = false;
             chunk.saved = job->loaded;
             chunk.dirty = false;
@@ -3421,6 +3472,12 @@ static int processworldchunkvaupdates()
     return pending;
 }
 
+static int worldchunkstagelimit(int budget)
+{
+    int estimated = int(float(budget) / max(worldchunkvasectionmillis, 0.05f));
+    return min(chunkvastagelimit, max(estimated, 1));
+}
+
 static int processworldchunkchanges(int chunkx, int chunky)
 {
     ZoneScopedN("Chunks/Process geometry changes");
@@ -3429,13 +3486,14 @@ static int processworldchunkchanges(int chunkx, int chunky)
     Uint64 phasestart = SDL_GetPerformanceCounter();
     const Uint64 frequency = SDL_GetPerformanceFrequency();
     int changedcolumns = 0, unloaded = 0, unloadedsections = 0,
-        unloadtarget = WORLD_MAX_COLUMN_CHANGES;
+        unloadtarget = WORLD_MAX_COLUMN_CHANGES,
+        cleanupstagelimit = worldchunkstagelimit(chunkcleanupbudget);
 
     // Cleanup has its own budget and always runs before publication. This
     // prevents rapid movement from leaving a growing trail of live geometry.
     {
         ZoneScopedN("Chunks/Unload columns");
-        while(unloaded < unloadtarget && unloadedsections < chunkvastagelimit)
+        while(unloaded < unloadtarget && unloadedsections < cleanupstagelimit)
         {
             double elapsed = (SDL_GetPerformanceCounter() - phasestart) * 1000.0 / frequency;
             if(unloaded && elapsed >= chunkcleanupbudget) break;
@@ -3444,19 +3502,19 @@ static int processworldchunkchanges(int chunkx, int chunky)
             worldchunk &chunk = worldchunks[chunkindex];
             int sections[WORLD_MAX_SECTION_BATCH],
                 numsections = unmountworldchunkcolumnbatch(chunk, tile, sections,
-                    min(chunksectionbatch, chunkvastagelimit - unloadedsections));
+                    min(chunksectionbatch, cleanupstagelimit - unloadedsections));
             if(!numsections) break;
             queueworldchunksectionupdates(chunk, tile, sections, numsections);
             unloadedsections += numsections;
             unloaded++;
             changedcolumns++;
         }
-        if(unloadedsections < chunkvastagelimit)
+        if(unloadedsections < cleanupstagelimit)
         {
             worldsectioncandidate candidates[WORLD_MAX_SECTION_BATCH];
             int numcandidates = findworldchunkcachedsections(
                 chunkx, chunky, candidates,
-                min(chunkvastagelimit - unloadedsections, int(WORLD_MAX_SECTION_BATCH)));
+                min(cleanupstagelimit - unloadedsections, int(WORLD_MAX_SECTION_BATCH)));
             loopi(numcandidates)
             {
                 double elapsed = (SDL_GetPerformanceCounter() - phasestart) * 1000.0 / frequency;
@@ -3474,12 +3532,13 @@ static int processworldchunkchanges(int chunkx, int chunky)
     }
 
     phasestart = SDL_GetPerformanceCounter();
-    int mounted = 0, mountedsections = 0, mounttarget = WORLD_MAX_COLUMN_CHANGES;
+    int mounted = 0, mountedsections = 0, mounttarget = WORLD_MAX_COLUMN_CHANGES,
+        publishstagelimit = worldchunkstagelimit(chunkpublishbudget);
     {
         ZoneScopedN("Chunks/Mount prioritized sections");
         worldsectioncandidate candidates[WORLD_MAX_SECTION_BATCH];
         int numcandidates = findworldchunkmountsections(chunkx, chunky, candidates,
-                                                        min(chunkvastagelimit,
+                                                        min(publishstagelimit,
                                                             int(WORLD_MAX_SECTION_BATCH)));
         loopi(numcandidates)
         {
