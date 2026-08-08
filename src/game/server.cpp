@@ -851,7 +851,7 @@ namespace server
     static void senddropspawn(int cn, const serverdrop &drop)
     {
         clientinfo *owner = dropowner(drop);
-        sendf(cn, 1, "ri10", N_DROPSPAWN, int(drop.id), drop.source, int(drop.sourcerequestid), drop.item, drop.count,
+        sendf(cn, 1, "ri9i", N_DROPSPAWN, int(drop.id), drop.source, int(drop.sourcerequestid), drop.item, drop.count,
               owner ? owner->clientnum : drop.ownerid[0] ? -2 : -1, int(drop.o.x), int(drop.o.y), int(drop.o.z));
     }
 

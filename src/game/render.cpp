@@ -272,7 +272,7 @@ namespace game
         const int type = getworlditemtype(drop.item), worldindex = getworlditemindex(drop.item);
         const float yaw = fmodf(lastmillis * 0.09f + float((drop.id ? drop.id : drop.sourcerequestid) % 360U), 360.0f);
         const int flags = MDL_CULL_VFC | MDL_CULL_DIST | MDL_CULL_OCCLUDED;
-        if(type == WORLD_ITEM_CUBE)
+        if(type == WORLD_ITEM_CUBE || type == WORLD_ITEM_NONE)
         {
             string toptexture, sidetexture, bottomtexture;
             copystring(toptexture, getworldcubetexture(worldindex, WORLD_CUBE_TOP));
