@@ -792,7 +792,7 @@ namespace game
     static int craftingitems[CRAFT_GRID_MAX] = { -1, -1, -1, -1, -1, -1, -1, -1, -1 };
     static int craftingcounts[CRAFT_GRID_MAX] = { 0 };
     static int craftinggridsize = 2, craftingstationitem = -1, craftingrecipe = -1,
-               craftingoutputitem = -1, craftingoutputcount = 0;
+               craftingoutputitem = -1, craftingoutputcount = 0, inventorycursoritem = -1, inventorycursorcount = 0;
 
     enum
     {
@@ -866,9 +866,11 @@ namespace game
         craftinggridsize = 2;
         craftingstationitem = craftingrecipe = craftingoutputitem = -1;
         craftingoutputcount = 0;
+        inventorycursoritem = -1;
+        inventorycursorcount = 0;
     }
 
-    void loadsurvivalinventory(const int *items, const int *counts, int slots)
+    void loadsurvivalinventory(const int *items, const int *counts, int slots, int cursoritem, int cursorcount)
     {
         resetsurvivalinventory();
         loopi(min(slots, int(SURVIVAL_USABLE_SLOTS)))
@@ -877,11 +879,24 @@ namespace game
             survivalitems[i] = items[i];
             survivalcounts[i] = clamp(counts[i], 1, max(getinventoryitemmaxstack(items[i]), 1));
         }
+        if(cursoritem >= 0 && cursoritem < numinventoryitems() && cursorcount > 0)
+        {
+            inventorycursoritem = cursoritem;
+            inventorycursorcount = clamp(cursorcount, 1, max(getinventoryitemmaxstack(cursoritem), 1));
+        }
     }
 
-    void receiveinventory(const int *items, const int *counts, int slots, int selected)
+    void receiveinventory(const int *items, const int *counts, int slots, int selected, int cursoritem, int cursorcount)
     {
-        loadsurvivalinventory(items, counts, slots);
+        loopi(SURVIVAL_USABLE_SLOTS)
+        {
+            survivalitems[i] = i < slots && items[i] >= 0 && counts[i] > 0 ? items[i] : -1;
+            survivalcounts[i] = i < slots && items[i] >= 0 && counts[i] > 0
+                              ? clamp(counts[i], 1, max(getinventoryitemmaxstack(items[i]), 1)) : 0;
+        }
+        inventorycursoritem = cursoritem >= 0 && cursoritem < numinventoryitems() && cursorcount > 0 ? cursoritem : -1;
+        inventorycursorcount = inventorycursoritem >= 0
+                             ? clamp(cursorcount, 1, max(getinventoryitemmaxstack(inventorycursoritem), 1)) : 0;
         creativehotbarslot = clamp(selected, 0, CREATIVE_HOTBAR_SLOTS - 1);
     }
 
@@ -1025,6 +1040,8 @@ namespace game
         f->printf("game_mode %d\n", gamemode);
         loopi(SURVIVAL_USABLE_SLOTS) if(survivalitems[i] >= 0 && survivalcounts[i] > 0)
             f->printf("inventory %d %d %d\n", i, survivalitems[i], survivalcounts[i]);
+        if(inventorycursoritem >= 0 && inventorycursorcount > 0)
+            f->printf("inventory_cursor %d %d\n", inventorycursoritem, inventorycursorcount);
     }
 
     static bool addsurvivalitem(int item)
@@ -1841,6 +1858,15 @@ namespace game
     {
         intret(*slot >= 0 && *slot < SURVIVAL_USABLE_SLOTS ? survivalcounts[*slot] : 0);
     });
+    ICOMMAND(getinventorycursoritem, "", (), intret(inventorycursorcount > 0 ? inventorycursoritem : -1));
+    ICOMMAND(getinventorycursorcount, "", (), intret(inventorycursorcount));
+    ICOMMAND(survivalinventoryclick, "ii", (int *slot, int *button),
+    {
+        if(*slot < 0 || *slot >= SURVIVAL_USABLE_SLOTS || (*button != INVENTORY_CLICK_LEFT && *button != INVENTORY_CLICK_RIGHT)) return;
+        inventoryslotclick(inventorycursoritem, inventorycursorcount, survivalitems[*slot], survivalcounts[*slot], *button);
+        if(waitforserveredit())
+            addmsg(N_INVENTORYACTION, "ri4", int(newworldrequestid()), INVENTORY_ACTION_CLICK, *slot, *button);
+    });
     ICOMMAND(survivalinventoryswap, "ii", (int *from, int *to),
     {
         if(*from >= 0 && *from < SURVIVAL_USABLE_SLOTS &&
@@ -1870,6 +1896,14 @@ namespace game
     });
     ICOMMAND(getcraftingoutputitem, "", (), intret(craftingoutputitem));
     ICOMMAND(getcraftingoutputcount, "", (), intret(craftingoutputcount));
+    ICOMMAND(craftinggridclick, "ii", (int *slot, int *button),
+    {
+        if(*slot < 0 || *slot >= craftinggridsize * craftinggridsize ||
+           (*button != INVENTORY_CLICK_LEFT && *button != INVENTORY_CLICK_RIGHT)) return;
+        inventoryslotclick(inventorycursoritem, inventorycursorcount, craftingitems[*slot], craftingcounts[*slot], *button);
+        updateclientcraftpreview();
+        if(waitforserveredit()) requestcraftaction(CRAFT_ACTION_CLICK_GRID, *slot, *button);
+    });
     ICOMMAND(craftinginventorytogrid, "ii", (int *inventoryslot, int *gridslot),
     {
         if(*inventoryslot < 0 || *inventoryslot >= SURVIVAL_USABLE_SLOTS || *gridslot < 0 || *gridslot >= craftinggridsize * craftinggridsize) return;
@@ -1923,6 +1957,25 @@ namespace game
             survivalcounts[*inventoryslot] += match.outputcount;
             updateclientcraftpreview();
         }
+    });
+    ICOMMAND(craftingtakeoutputcursor, "i", (int *button),
+    {
+        if((*button != INVENTORY_CLICK_LEFT && *button != INVENTORY_CLICK_RIGHT) || craftingrecipe < 0) return;
+        const int recipe = craftingrecipe;
+        craftmatch match;
+        if(!matchcraftrecipe(craftingitems, craftingcounts, craftinggridsize, craftingstationitem, -1, 0, recipe, match)) return;
+        const int stack = max(getinventoryitemmaxstack(match.outputitem), 1);
+        if(inventorycursorcount > 0 && inventorycursoritem != match.outputitem) return;
+        if(inventorycursorcount + match.outputcount > stack) return;
+        loopi(CRAFT_GRID_MAX) if(match.consume[i] > 0)
+        {
+            craftingcounts[i] -= match.consume[i];
+            if(craftingcounts[i] <= 0) { craftingitems[i] = -1; craftingcounts[i] = 0; }
+        }
+        inventorycursoritem = match.outputitem;
+        inventorycursorcount += match.outputcount;
+        updateclientcraftpreview();
+        if(waitforserveredit()) requestcraftaction(CRAFT_ACTION_TAKE_OUTPUT_CURSOR, recipe, *button);
     });
 #ifndef STANDALONE
     static void requestdropsetting(const char *name, int value, bool hasvalue)

@@ -104,7 +104,7 @@ namespace server
     {
         int clientnum, privilege, lastpositionmillis, identitystate, identitykind,
             identitychallengemillis,
-            identityfailures, identityfailurewindow, selectedslot, lastinventorysave,
+            identityfailures, identityfailurewindow, selectedslot, inventorycursoritem, inventorycursorcount, lastinventorysave,
             violations, violationwindow, actionwindow, placements, destructions,
             breakaction, breakorient, breakitem, breakstart, breakupdate, breakstage, breakrelease;
         uint ip;
@@ -124,7 +124,8 @@ namespace server
                        identitystate(IDENTITY_UNAUTHENTICATED), identitykind(IDENTITY_KIND_NONE),
                        identitychallengemillis(0),
                        identityfailures(0), identityfailurewindow(0),
-                       selectedslot(0), lastinventorysave(0), violations(0), violationwindow(0),
+                       selectedslot(0), inventorycursoritem(-1), inventorycursorcount(0), lastinventorysave(0),
+                       violations(0), violationwindow(0),
                        actionwindow(0), placements(0), destructions(0), breakaction(-1),
                        breakorient(0), breakitem(-1), breakstart(0), breakupdate(0), breakstage(0), breakrelease(0),
                        ip(0),
@@ -634,6 +635,8 @@ namespace server
             ci.inventorycounts[i] = 0;
         }
         ci.selectedslot = 0;
+        ci.inventorycursoritem = -1;
+        ci.inventorycursorcount = 0;
         loopi(CRAFT_GRID_MAX)
         {
             ci.craftingitems[i] = -1;
@@ -654,7 +657,8 @@ namespace server
         copystring(temppath, findfile(temporary, "wb"));
         stream *file = openrawfile(temporary, "wb");
         if(!file) return false;
-        bool ok = file->printf("survival_inventory 2\nselected %d\ncrafting %d %d %d %d %d\n", ci.selectedslot, ci.craftinggridsize,
+        bool ok = file->printf("survival_inventory 3\nselected %d\ncursor %d %d\ncrafting %d %d %d %d %d\n", ci.selectedslot,
+                               ci.inventorycursoritem, ci.inventorycursorcount, ci.craftinggridsize,
                                ci.craftingstationitem, ci.craftingstationtarget.x, ci.craftingstationtarget.y, ci.craftingstationtarget.z) > 0;
         loopi(SURVIVAL_USABLE_SLOTS) if(ok)
             ok = file->printf("slot %d %d %d\n", i, ci.inventoryitems[i], ci.inventorycounts[i]) > 0;
@@ -689,13 +693,23 @@ namespace server
             int version, selected, slot, item, count;
             if(sscanf(line, "survival_inventory %d", &version) == 1)
             {
-                if(versionseen || (version != 1 && version != 2)) valid = false;
+                if(versionseen || version < 1 || version > 3) valid = false;
                 versionseen = true;
             }
             else if(sscanf(line, "selected %d", &selected) == 1)
             {
                 if(selected < 0 || selected >= SURVIVAL_HOTBAR_SLOTS) valid = false;
                 else ci.selectedslot = selected;
+            }
+            else if(sscanf(line, "cursor %d %d", &item, &count) == 2)
+            {
+                if(count < 0 || (item >= 0 && count > getinventoryitemmaxstack(item)) || (count == 0 && item != -1) ||
+                   (count > 0 && (item < 0 || item >= numinventoryitems()))) valid = false;
+                else
+                {
+                    ci.inventorycursoritem = item;
+                    ci.inventorycursorcount = count;
+                }
             }
             else if(sscanf(line, "slot %d %d %d", &slot, &item, &count) == 3)
             {
@@ -756,6 +770,8 @@ namespace server
         putint(p, N_INVENTORYSTATE);
         putint(p, SURVIVAL_USABLE_SLOTS);
         putint(p, ci.selectedslot);
+        putint(p, ci.inventorycursoritem);
+        putint(p, ci.inventorycursorcount);
         loopi(SURVIVAL_USABLE_SLOTS)
         {
             putint(p, ci.inventoryitems[i]);
@@ -1864,6 +1880,14 @@ namespace server
                 ci.selectedslot = first;
                 markinventorydirty(ci);
                 break;
+            case INVENTORY_ACTION_CLICK:
+                if(first < 0 || first >= SURVIVAL_USABLE_SLOTS ||
+                   (second != INVENTORY_CLICK_LEFT && second != INVENTORY_CLICK_RIGHT))
+                    return rejectaction(ci, requestid, "invalid inventory click", true, true);
+                if(inventoryslotclick(ci.inventorycursoritem, ci.inventorycursorcount,
+                                      ci.inventoryitems[first], ci.inventorycounts[first], second))
+                    markinventorydirty(ci);
+                break;
             default:
                 return rejectaction(ci, requestid, "invalid inventory action", true, true);
         }
@@ -1875,6 +1899,7 @@ namespace server
     static bool rejectcraftaction(clientinfo &ci, uint requestid, const char *reason, bool violation = false, bool malicious = false)
     {
         const bool result = rejectaction(ci, requestid, reason, violation, malicious);
+        sendinventory(ci);
         sendcraftstate(ci);
         return result;
     }
@@ -1929,6 +1954,15 @@ namespace server
                 swap(ci.craftingcounts[first], ci.craftingcounts[second]);
                 markinventorydirty(ci);
                 break;
+            case CRAFT_ACTION_CLICK_GRID:
+                if(!craftingstationvalid(ci)) return rejectcraftaction(ci, requestid, "the crafting station is no longer accessible");
+                if(first < 0 || first >= ci.craftinggridsize * ci.craftinggridsize ||
+                   (second != INVENTORY_CLICK_LEFT && second != INVENTORY_CLICK_RIGHT))
+                    return rejectcraftaction(ci, requestid, "invalid crafting grid click", true, true);
+                if(inventoryslotclick(ci.inventorycursoritem, ci.inventorycursorcount,
+                                      ci.craftingitems[first], ci.craftingcounts[first], second))
+                    markinventorydirty(ci);
+                break;
             case CRAFT_ACTION_TAKE_OUTPUT:
             {
                 if(second < 0 || second >= SURVIVAL_USABLE_SLOTS) return rejectcraftaction(ci, requestid, "invalid output inventory slot", true, true);
@@ -1946,6 +1980,28 @@ namespace server
                 }
                 ci.inventoryitems[second] = match.outputitem;
                 ci.inventorycounts[second] += match.outputcount;
+                markinventorydirty(ci);
+                break;
+            }
+            case CRAFT_ACTION_TAKE_OUTPUT_CURSOR:
+            {
+                if(second != INVENTORY_CLICK_LEFT && second != INVENTORY_CLICK_RIGHT)
+                    return rejectcraftaction(ci, requestid, "invalid crafting output click", true, true);
+                craftmatch match;
+                if(!servercraftmatch(ci, first, match))
+                    return rejectcraftaction(ci, requestid, "the authoritative crafting grid does not match that recipe");
+                const int stack = max(getinventoryitemmaxstack(match.outputitem), 1);
+                if(ci.inventorycursorcount > 0 && ci.inventorycursoritem != match.outputitem)
+                    return rejectcraftaction(ci, requestid, "the cursor contains another item");
+                if(ci.inventorycursorcount + match.outputcount > stack)
+                    return rejectcraftaction(ci, requestid, "the output does not fit on the cursor");
+                loopi(CRAFT_GRID_MAX) if(match.consume[i] > 0)
+                {
+                    ci.craftingcounts[i] -= match.consume[i];
+                    if(ci.craftingcounts[i] <= 0) { ci.craftingitems[i] = -1; ci.craftingcounts[i] = 0; }
+                }
+                ci.inventorycursoritem = match.outputitem;
+                ci.inventorycursorcount += match.outputcount;
                 markinventorydirty(ci);
                 break;
             }

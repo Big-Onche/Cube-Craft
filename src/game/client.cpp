@@ -778,7 +778,7 @@ namespace game
             }
             case N_INVENTORYSTATE:
             {
-                const int slots = getint(p), selected = getint(p);
+                const int slots = getint(p), selected = getint(p), cursoritem = getint(p), cursorcount = getint(p);
                 if(slots != SURVIVAL_USABLE_SLOTS)
                 {
                     conoutf(CON_ERROR, "server sent an invalid survival inventory");
@@ -800,7 +800,7 @@ namespace game
                         counts[i] = count;
                     }
                 }
-                if(!p.overread()) receiveinventory(items, counts, SURVIVAL_USABLE_SLOTS, selected);
+                if(!p.overread()) receiveinventory(items, counts, SURVIVAL_USABLE_SLOTS, selected, cursoritem, cursorcount);
                 break;
             }
             case N_CRAFTSTATE:

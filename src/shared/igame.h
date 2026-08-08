@@ -51,7 +51,7 @@ namespace game
     extern void changemap(const char *name, int mode);
     extern bool validgamemode(int mode);
     extern void resetsurvivalinventory();
-    extern void loadsurvivalinventory(const int *items, const int *counts, int slots);
+    extern void loadsurvivalinventory(const int *items, const int *counts, int slots, int cursoritem = -1, int cursorcount = 0);
     extern void savesurvivalinventory(stream *f);
     extern void forceedit(const char *name);
     extern bool ispaused();

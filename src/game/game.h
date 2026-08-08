@@ -72,7 +72,14 @@ enum
 enum
 {
     INVENTORY_ACTION_SWAP = 0,
-    INVENTORY_ACTION_SELECT
+    INVENTORY_ACTION_SELECT,
+    INVENTORY_ACTION_CLICK
+};
+
+enum
+{
+    INVENTORY_CLICK_LEFT = 0,
+    INVENTORY_CLICK_RIGHT
 };
 
 enum
@@ -82,7 +89,9 @@ enum
     CRAFT_ACTION_INVENTORY_TO_GRID,
     CRAFT_ACTION_GRID_TO_INVENTORY,
     CRAFT_ACTION_GRID_SWAP,
-    CRAFT_ACTION_TAKE_OUTPUT
+    CRAFT_ACTION_TAKE_OUTPUT,
+    CRAFT_ACTION_CLICK_GRID,
+    CRAFT_ACTION_TAKE_OUTPUT_CURSOR
 };
 
 enum
@@ -133,7 +142,58 @@ static const int msgsizes[] =
 #define TESSERACT_SERVER_PORT 42000
 #define TESSERACT_LANINFO_PORT 41998
 #define TESSERACT_MASTER_PORT 41999
-#define PROTOCOL_VERSION 15
+#define PROTOCOL_VERSION 16
+
+static inline bool inventoryslotclick(int &cursoritem, int &cursorcount, int &slotitem, int &slotcount, int button)
+{
+    if(button != INVENTORY_CLICK_LEFT && button != INVENTORY_CLICK_RIGHT) return false;
+    if(cursorcount <= 0) { cursoritem = -1; cursorcount = 0; }
+    if(slotcount <= 0) { slotitem = -1; slotcount = 0; }
+    if(button == INVENTORY_CLICK_LEFT)
+    {
+        if(cursorcount <= 0)
+        {
+            if(slotcount <= 0) return false;
+            swap(cursoritem, slotitem);
+            swap(cursorcount, slotcount);
+            return true;
+        }
+        if(slotcount <= 0)
+        {
+            swap(cursoritem, slotitem);
+            swap(cursorcount, slotcount);
+            return true;
+        }
+        if(cursoritem != slotitem)
+        {
+            swap(cursoritem, slotitem);
+            swap(cursorcount, slotcount);
+            return true;
+        }
+        const int moved = min(cursorcount, max(getinventoryitemmaxstack(slotitem), 1) - slotcount);
+        if(moved <= 0) return false;
+        slotcount += moved;
+        cursorcount -= moved;
+    }
+    else if(cursorcount <= 0)
+    {
+        if(slotcount <= 0) return false;
+        const int moved = (slotcount + 1) / 2;
+        cursoritem = slotitem;
+        cursorcount = moved;
+        slotcount -= moved;
+    }
+    else
+    {
+        if(slotcount > 0 && (slotitem != cursoritem || slotcount >= max(getinventoryitemmaxstack(slotitem), 1))) return false;
+        if(slotcount <= 0) slotitem = cursoritem;
+        ++slotcount;
+        --cursorcount;
+    }
+    if(cursorcount <= 0) { cursoritem = -1; cursorcount = 0; }
+    if(slotcount <= 0) { slotitem = -1; slotcount = 0; }
+    return true;
+}
 
 static inline uint worlddrophash(uint value)
 {
@@ -245,7 +305,7 @@ namespace game
     extern void resetworlddrops();
     extern const vector<worlddrop *> &getworlddrops();
     extern int getdynamicentsmaxdistance();
-    extern void receiveinventory(const int *items, const int *counts, int slots, int selected);
+    extern void receiveinventory(const int *items, const int *counts, int slots, int selected, int cursoritem, int cursorcount);
     extern void receivecraftstate(const int *items, const int *counts, int slots, int gridsize, int stationitem,
                                   int recipe, int outputitem, int outputcount);
     extern void receiveactionresult(uint requestid, int result, const char *reason);

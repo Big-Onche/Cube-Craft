@@ -193,7 +193,7 @@ struct worldchunkdiffstate
 
 struct worlddiffmetadata
 {
-    int seed, worldgenversion, saveformatversion, gamemode;
+    int seed, worldgenversion, saveformatversion, gamemode, inventorycursoritem, inventorycursorcount;
     int inventoryitems[game::SURVIVAL_USABLE_SLOTS],
         inventorycounts[game::SURVIVAL_USABLE_SLOTS];
     ullong parameterhash;
@@ -201,7 +201,7 @@ struct worlddiffmetadata
 
     worlddiffmetadata()
         : seed(0), worldgenversion(0), saveformatversion(0), gamemode(0),
-          parameterhash(0), valid(false)
+          inventorycursoritem(-1), inventorycursorcount(0), parameterhash(0), valid(false)
     {
         loopi(game::SURVIVAL_USABLE_SLOTS)
         {
@@ -7993,6 +7993,7 @@ static bool loadworldmetadata(const char *folder, int &chunkx, int &chunky,
         if(sscanf(line, "world_seed %d", &metadata.seed) == 1) continue;
         if(sscanf(line, "worldgen_version %d", &metadata.worldgenversion) == 1) continue;
         if(sscanf(line, "game_mode %d", &metadata.gamemode) == 1) continue;
+        if(sscanf(line, "inventory_cursor %d %d", &metadata.inventorycursoritem, &metadata.inventorycursorcount) == 2) continue;
         int inventoryslot, inventoryitem, inventorycount;
         if(sscanf(line, "inventory %d %d %d",
                   &inventoryslot, &inventoryitem, &inventorycount) == 3)
@@ -8371,7 +8372,7 @@ static void loadworldcommand(const char *requested)
     game::beginlocalworld();
     game::loadworldseed(metadata.seed);
     game::loadsurvivalinventory(metadata.inventoryitems, metadata.inventorycounts,
-                                game::SURVIVAL_USABLE_SLOTS);
+                                game::SURVIVAL_USABLE_SLOTS, metadata.inventorycursoritem, metadata.inventorycursorcount);
     activeworldmetadata = metadata;
     conoutf("loading saved world %s with pinned seed %d", folder, metadata.seed);
     defformatstring(entry, "%s/%d_%d", folder, chunkx, chunky);
