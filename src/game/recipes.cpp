@@ -495,8 +495,8 @@ bool reloadrecipes(bool report)
     currentrecipe = NULL;
     recipeerrors = 0;
     copystring(currentsource, "(console)");
-    bool success = loadrecipefiles("data/itemtags");
-    success = loadrecipefiles("data/recipes") && success;
+    bool success = loadrecipefiles("config/game/itemtags");
+    success = loadrecipefiles("config/game/recipes") && success;
     compiletags();
     loopv(rawrecipes) compilerecipe(*rawrecipes[i]);
     if(report)
