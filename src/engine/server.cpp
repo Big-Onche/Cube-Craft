@@ -1071,7 +1071,11 @@ void initserver(bool listen, bool dedicated)
 
     execfile("config/server-init.cfg", false);
 
-    if(listen) setuplistenserver(dedicated);
+    if(listen)
+    {
+        initserverworlddefinitions();
+        setuplistenserver(dedicated);
+    }
 
     server::serverinit();
 

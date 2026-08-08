@@ -758,7 +758,7 @@ static bool canloadworldtexture(const char *path)
     return textureload(filename, 3, true, false) != notexture;
 }
 
-static void validateworlderrorfallback()
+static void validateworlderrorfallback(bool assets)
 {
     inventoryitemdefinition *item = findinventoryitem("error");
     worldcubedefinition *cube = findworldcube("error");
@@ -771,6 +771,11 @@ static void validateworlderrorfallback()
         fatal("world startup failed: worldcube \"error\" must reference inventory item \"error\"");
     if(cubecasecmp(object->itemid, "error"))
         fatal("world startup failed: error model definitions must reference inventory item \"error\"");
+    worlderroritem = inventoryitemdefinitions.find(item);
+    worlderrorcube = worldcubedefinitions.find(cube);
+    worlderrorobject = worldscatterdefinitions.find(object);
+    if(!assets) return;
+
     if(!canloadworldtexture(cube->texture))
         fatal("world startup failed: error cube texture media/texture/%s could not be loaded", cube->texture);
     if(cube->sidetexture[0] && !canloadworldtexture(cube->sidetexture))
@@ -784,10 +789,6 @@ static void validateworlderrorfallback()
     defformatstring(modeltexture, "media/model/%s/diffuse.png", object->model);
     if(textureload(modeltexture, 3, true, false) == notexture)
         fatal("world startup failed: error model texture %s could not be loaded", modeltexture);
-
-    worlderroritem = inventoryitemdefinitions.find(item);
-    worlderrorcube = worldcubedefinitions.find(cube);
-    worlderrorobject = worldscatterdefinitions.find(object);
 }
 
 static bool findworldscatterimage(const char *model, const char *basename, string &imagepath)
@@ -821,7 +822,7 @@ static void resolveworldscattericon(worldscatterdefinition &type)
     formatstring(type.icon, "media/model/%s/diffuse.png", type.model);
 }
 
-static bool loadworlddefinitions()
+static bool loadworlddefinitions(bool assets = true)
 {
     worldreset();
     if(!execfile("config/world.cfg", false))
@@ -830,7 +831,7 @@ static bool loadworlddefinitions()
         return false;
     }
 
-    validateworlderrorfallback();
+    validateworlderrorfallback(assets);
 
     loopv(worldcubedefinitions)
     {
@@ -895,6 +896,13 @@ static bool loadworlddefinitions()
                 type.drops[i].item = inventoryitemdefinitions.find(item);
             }
         }
+    }
+
+    if(!assets)
+    {
+        conoutf(CON_DEBUG, "loaded %d inventory item, %d world cube, and %d world object server definitions",
+                inventoryitemdefinitions.length(), worldcubedefinitions.length(), worldscatterdefinitions.length());
+        return true;
     }
 
     execute("texturereset; texsky; setshader stdworld");
@@ -1030,11 +1038,17 @@ static bool loadworlddefinitions()
 
 void initworlddefinitions()
 {
-    if(!loadworlddefinitions())
+    if(!loadworlddefinitions(true))
         fatal("world startup failed: config/world.cfg contains invalid definitions; see the preceding error for details");
 }
 
-ICOMMAND(worldload, "", (), intret(loadworlddefinitions() ? 1 : 0));
+void initserverworlddefinitions()
+{
+    if(!loadworlddefinitions(false))
+        fatal("server startup failed: config/world.cfg contains invalid definitions; see the preceding error for details");
+}
+
+ICOMMAND(worldload, "", (), intret(loadworlddefinitions(true) ? 1 : 0));
 
 struct worldchunk
 {
@@ -9382,5 +9396,278 @@ void writecollideobj(char *name)
 }
 
 COMMAND(writecollideobj, "s");
+
+#else
+
+struct serverinventoryitemdefinition
+{
+    string id;
+    int maxstack;
+
+    serverinventoryitemdefinition() : maxstack(64) { id[0] = '\0'; }
+};
+
+struct serverworlddropdefinition
+{
+    string itemid;
+    int item, mincount, maxcount;
+    float chance;
+
+    serverworlddropdefinition() : item(-1), mincount(0), maxcount(0), chance(1.0f) { itemid[0] = '\0'; }
+};
+
+struct serverworldobjectdefinition
+{
+    string id, itemid;
+    int item, type;
+    vector<serverworlddropdefinition> drops;
+    bool explicitdrops, scatter, placeable;
+
+    serverworldobjectdefinition()
+        : item(-1), type(WORLD_ITEM_NONE), explicitdrops(false), scatter(false), placeable(false)
+    {
+        id[0] = itemid[0] = '\0';
+    }
+};
+
+static vector<serverinventoryitemdefinition *> serverinventoryitems;
+static vector<serverworldobjectdefinition *> serverworldcubes, serverworldobjects;
+static int servererroritem = -1, servererrorobject = -1;
+
+static serverinventoryitemdefinition *findserverinventoryitem(const char *id)
+{
+    loopv(serverinventoryitems) if(!cubecasecmp(serverinventoryitems[i]->id, id)) return serverinventoryitems[i];
+    return NULL;
+}
+
+static serverworldobjectdefinition *findserverworldobject(vector<serverworldobjectdefinition *> &definitions, const char *id)
+{
+    loopv(definitions) if(!cubecasecmp(definitions[i]->id, id)) return definitions[i];
+    return NULL;
+}
+
+static void resetserverworlddefinitions()
+{
+    serverinventoryitems.deletecontents();
+    serverworldcubes.deletecontents();
+    serverworldobjects.deletecontents();
+    servererroritem = servererrorobject = -1;
+}
+
+COMMANDN(worldreset, resetserverworlddefinitions, "");
+
+ICOMMAND(inventoryitem, "ssi", (char *id, char *name, int *maxstack),
+{
+    if(!id[0] || !name[0] || *maxstack <= 0)
+    {
+        conoutf(CON_ERROR, "inventoryitem requires an id, display name, and positive max stack");
+        return;
+    }
+    serverinventoryitemdefinition *item = findserverinventoryitem(id);
+    if(!item) item = serverinventoryitems.add(new serverinventoryitemdefinition);
+    copystring(item->id, id);
+    item->maxstack = *maxstack;
+});
+
+ICOMMAND(worldcube, "sssfsssN",
+         (char *id, char *itemid, char *texture, float *texsize, char *side, char *bottom, char *bottomalternate, int *numargs),
+{
+    (void)texture;
+    (void)texsize;
+    (void)side;
+    (void)bottom;
+    (void)bottomalternate;
+    (void)numargs;
+    if(!id[0]) return;
+    serverworldobjectdefinition *cube = findserverworldobject(serverworldcubes, id);
+    if(!cube) cube = serverworldcubes.add(new serverworldobjectdefinition);
+    copystring(cube->id, id);
+    copystring(cube->itemid, itemid ? itemid : "");
+    cube->type = WORLD_ITEM_CUBE;
+});
+
+static void defineserverworldmodel(const char *id, const char *itemid, bool placeable)
+{
+    if(!id[0]) return;
+    serverworldobjectdefinition *object = findserverworldobject(serverworldobjects, id);
+    if(!object) object = serverworldobjects.add(new serverworldobjectdefinition);
+    copystring(object->id, id);
+    copystring(object->itemid, itemid ? itemid : "");
+    if(placeable) object->placeable = true;
+    else object->scatter = true;
+    object->type = object->placeable ? WORLD_ITEM_PLACEABLE : WORLD_ITEM_SCATTER;
+}
+
+ICOMMAND(worldscatter, "sss", (char *id, char *itemid, char *model),
+{
+    (void)model;
+    defineserverworldmodel(id, itemid, false);
+});
+
+ICOMMAND(worldplaceable, "sssfsN", (char *id, char *itemid, char *model, float *lightradius, char *lightcolor, int *numargs),
+{
+    (void)model;
+    (void)lightradius;
+    (void)lightcolor;
+    (void)numargs;
+    defineserverworldmodel(id, itemid, true);
+});
+
+static void addserverworlddrop(const char *worldid, const char *itemid, int mincount, int maxcount, float chance)
+{
+    serverworldobjectdefinition *object = findserverworldobject(serverworldcubes, worldid);
+    if(!object) object = findserverworldobject(serverworldobjects, worldid);
+    if(!object) return;
+    if(!object->explicitdrops) object->drops.shrink(0);
+    object->explicitdrops = true;
+    serverworlddropdefinition &drop = object->drops.add();
+    copystring(drop.itemid, itemid ? itemid : "");
+    drop.item = !itemid[0] || !cubecasecmp(itemid, "false") ? -1 : -2;
+    drop.mincount = max(mincount, 0);
+    drop.maxcount = max(maxcount, drop.mincount);
+    drop.chance = clamp(chance, 0.0f, 1.0f);
+}
+
+ICOMMAND(worlddrop, "ssiifN", (char *worldid, char *itemid, int *mincount, int *maxcount, float *chance, int *numargs),
+{
+    addserverworlddrop(worldid, itemid, *mincount, *maxcount, *numargs >= 5 ? *chance : 1.0f);
+});
+
+static void resolveserverworlddefinitions()
+{
+    serverinventoryitemdefinition *erroritem = findserverinventoryitem("error");
+    serverworldobjectdefinition *errorcube = findserverworldobject(serverworldcubes, "error"),
+                                *errorobject = findserverworldobject(serverworldobjects, "error");
+    if(!erroritem) fatal("server startup failed: config/world.cfg must define inventoryitem \"error\"");
+    if(!errorcube) fatal("server startup failed: config/world.cfg must define worldcube \"error\"");
+    if(!errorobject || !errorobject->scatter || !errorobject->placeable)
+        fatal("server startup failed: config/world.cfg must define both worldscatter and worldplaceable \"error\"");
+    servererroritem = serverinventoryitems.find(erroritem);
+    servererrorobject = serverworldobjects.find(errorobject);
+
+    loopv(serverworldcubes)
+    {
+        serverworldobjectdefinition &object = *serverworldcubes[i];
+        serverinventoryitemdefinition *item = object.itemid[0] ? findserverinventoryitem(object.itemid) : NULL;
+        object.item = item ? serverinventoryitems.find(item) : object.itemid[0] ? servererroritem : -1;
+    }
+    loopv(serverworldobjects)
+    {
+        serverworldobjectdefinition &object = *serverworldobjects[i];
+        serverinventoryitemdefinition *item = object.itemid[0] ? findserverinventoryitem(object.itemid) : NULL;
+        object.item = item ? serverinventoryitems.find(item) : object.itemid[0] ? servererroritem : -1;
+    }
+    loopk(2)
+    {
+        vector<serverworldobjectdefinition *> &definitions = k ? serverworldobjects : serverworldcubes;
+        loopv(definitions)
+        {
+            serverworldobjectdefinition &object = *definitions[i];
+            loopvj(object.drops) if(object.drops[j].item == -2)
+            {
+                if(!cubecasecmp(object.drops[j].itemid, "self")) object.drops[j].item = object.item;
+                else
+                {
+                    serverinventoryitemdefinition *item = findserverinventoryitem(object.drops[j].itemid);
+                    object.drops[j].item = item ? serverinventoryitems.find(item) : servererroritem;
+                }
+            }
+        }
+    }
+}
+
+void initserverworlddefinitions()
+{
+    resetserverworlddefinitions();
+    if(!execfile("config/world.cfg", false)) fatal("server startup failed: could not load config/world.cfg");
+    resolveserverworlddefinitions();
+    conoutf("loaded %d inventory item, %d world cube, and %d world object server definitions",
+            serverinventoryitems.length(), serverworldcubes.length(), serverworldobjects.length());
+}
+
+void initworlddefinitions() { initserverworlddefinitions(); }
+
+ICOMMAND(worldload, "", (),
+{
+    initserverworlddefinitions();
+    intret(1);
+});
+
+int numinventoryitems() { return serverinventoryitems.length(); }
+
+int getinventoryitemmaxstack(int index)
+{
+    return serverinventoryitems.inrange(index) ? serverinventoryitems[index]->maxstack : 0;
+}
+
+int getworlditemtype(int item)
+{
+    loopv(serverworldcubes) if(serverworldcubes[i]->item == item) return WORLD_ITEM_CUBE;
+    loopv(serverworldobjects) if(serverworldobjects[i]->item == item) return serverworldobjects[i]->type;
+    return WORLD_ITEM_NONE;
+}
+
+int getworlditemindex(int item)
+{
+    loopv(serverworldcubes) if(serverworldcubes[i]->item == item) return i;
+    loopv(serverworldobjects) if(serverworldobjects[i]->item == item) return i;
+    return -1;
+}
+
+static vector<serverworlddropdefinition> &getserverworlddrops(int type, int index)
+{
+    static vector<serverworlddropdefinition> empty;
+    if(type == WORLD_ITEM_CUBE && serverworldcubes.inrange(index)) return serverworldcubes[index]->drops;
+    if((type == WORLD_ITEM_SCATTER || type == WORLD_ITEM_PLACEABLE) && serverworldobjects.inrange(index))
+        return serverworldobjects[index]->drops;
+    return empty;
+}
+
+int getworldobjectdropcount(int type, int index)
+{
+    vector<serverworlddropdefinition> &drops = getserverworlddrops(type, index);
+    if(!drops.empty()) return drops.length();
+    if(type == WORLD_ITEM_CUBE && serverworldcubes.inrange(index)) return serverworldcubes[index]->item >= 0 ? 1 : 0;
+    if((type == WORLD_ITEM_SCATTER || type == WORLD_ITEM_PLACEABLE) && serverworldobjects.inrange(index))
+        return serverworldobjects[index]->item >= 0 ? 1 : 0;
+    return 0;
+}
+
+bool getworldobjectdrop(int type, int index, int dropindex, int &item, int &mincount, int &maxcount, float &chance)
+{
+    vector<serverworlddropdefinition> &drops = getserverworlddrops(type, index);
+    if(!drops.empty())
+    {
+        if(!drops.inrange(dropindex)) return false;
+        const serverworlddropdefinition &drop = drops[dropindex];
+        item = drop.item;
+        mincount = drop.mincount;
+        maxcount = drop.maxcount;
+        chance = drop.chance;
+        return item >= 0;
+    }
+    if(dropindex != 0) return false;
+    if(type == WORLD_ITEM_CUBE && serverworldcubes.inrange(index)) item = serverworldcubes[index]->item;
+    else if((type == WORLD_ITEM_SCATTER || type == WORLD_ITEM_PLACEABLE) && serverworldobjects.inrange(index))
+        item = serverworldobjects[index]->item;
+    else return false;
+    mincount = maxcount = 1;
+    chance = 1.0f;
+    return item >= 0;
+}
+
+int getworldcubefaceslot(int index, int orient)
+{
+    (void)index;
+    (void)orient;
+    return DEFAULT_GEOM;
+}
+
+int getworldscatterindexat(const ivec &support, int orient)
+{
+    (void)support;
+    (void)orient;
+    return servererrorobject;
+}
 
 #endif

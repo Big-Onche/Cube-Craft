@@ -16,12 +16,18 @@ namespace game
 {
     static void paintworldcube(int worldindex, const selinfo &selection, bool local)
     {
+#ifndef STANDALONE
         loopi(6)
         {
             selinfo face = selection;
             face.orient = i;
             mpedittex(getworldcubefaceslot(worldindex, i), 0, face, local);
         }
+#else
+        (void)worldindex;
+        (void)selection;
+        (void)local;
+#endif
     }
 
     int gamemode = STARTGAMEMODE;

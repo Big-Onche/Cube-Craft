@@ -132,6 +132,7 @@ enum
 };
 extern int numworldcubes();
 extern void initworlddefinitions();
+extern void initserverworlddefinitions();
 extern int getworldcubeslot(int index);
 extern int getworldcubefaceslot(int index, int orient);
 extern int getworldcubeindex(int slot);
