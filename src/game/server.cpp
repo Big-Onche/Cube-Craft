@@ -1738,18 +1738,21 @@ namespace server
         return -1;
     }
 
-    static bool handledroppickup(clientinfo &ci, uint requestid, uint dropid)
+    static bool handledroppickup(clientinfo &ci, uint requestid, uint dropid, const vec &position)
     {
         const char *error = NULL;
         if(!validnewrequest(ci, requestid, error)) return rejectaction(ci, requestid, error, requestid == ci.lastrequestid);
         if(!ci.worldready || !ci.hasposition) return rejectaction(ci, requestid, "a synchronized player position is required to pick up drops");
+        const int elapsed = max(totalmillis - ci.lastpositionmillis, 1);
+        if(position.z < 0 || position.z > (1 << 13) || position.dist(ci.o) > 32.0f + elapsed * 0.5f)
+            return rejectaction(ci, requestid, "invalid synchronized pickup position", true);
         const int index = findserverdrop(dropid);
         if(index < 0) return rejectaction(ci, requestid, "drop is no longer available");
         serverdrop &drop = *serverdrops[index];
         if(totalmillis - drop.created < DROP_PICKUP_DELAY) return rejectaction(ci, requestid, "drop is not ready for pickup");
         if(personaldrops && drop.ownerid[0] && strcmp(drop.ownerid, ci.playerid))
             return rejectaction(ci, requestid, "drop belongs to another player");
-        if(drop.o.dist(ci.o) > 24.0f) return rejectaction(ci, requestid, "drop is beyond the 24-unit pickup distance");
+        if(drop.o.dist(position) > 24.0f) return rejectaction(ci, requestid, "drop is beyond the 24-unit pickup distance");
         if(!inventoryhasroom(ci, drop.item, drop.count)) return rejectaction(ci, requestid, "inventory is full");
         if(!addinventoryitems(ci, drop.item, drop.count)) return rejectaction(ci, requestid, "server could not add the drop to inventory");
         removeserverdrop(index, ci.clientnum);
@@ -2541,7 +2544,10 @@ namespace server
                 {
                     clientinfo *ci = getinfo(sender);
                     const uint requestid = uint(getint(p)), dropid = uint(getint(p));
-                    if(ci && ci->connected && !p.overread()) handledroppickup(*ci, requestid, dropid);
+                    int coords[3];
+                    loopk(3) coords[k] = getint(p);
+                    if(ci && ci->connected && !p.overread())
+                        handledroppickup(*ci, requestid, dropid, vec(coords[0] / DMF, coords[1] / DMF, coords[2] / DMF));
                     break;
                 }
                 case N_EDITENT:

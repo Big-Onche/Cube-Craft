@@ -1056,8 +1056,10 @@ namespace game
     static void requestdroppickup(worlddrop &drop)
     {
         if(!drop.confirmed || drop.removed || drop.pickuprequestid || !waitforserveredit()) return;
+        vec position = absoluteplayerfeet(player1);
+        position.mul(DMF);
         drop.pickuprequestid = newworldrequestid();
-        addmsg(N_DROPPICKUP, "ri2", int(drop.pickuprequestid), int(drop.id));
+        addmsg(N_DROPPICKUP, "ri5", int(drop.pickuprequestid), int(drop.id), int(position.x), int(position.y), int(position.z));
     }
 
     static void beginlocaldroppickup(worlddrop &drop)
