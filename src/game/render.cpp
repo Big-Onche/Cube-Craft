@@ -272,7 +272,12 @@ namespace game
         const int type = getworlditemtype(drop.item), worldindex = getworlditemindex(drop.item);
         const float yaw = fmodf(lastmillis * 0.09f + float((drop.id ? drop.id : drop.sourcerequestid) % 360U), 360.0f);
         const int flags = MDL_CULL_VFC | MDL_CULL_DIST | MDL_CULL_OCCLUDED;
-        if(type == WORLD_ITEM_CUBE || type == WORLD_ITEM_NONE)
+        const char *directmodel = type == WORLD_ITEM_NONE ? getinventoryitemmodel(drop.item) : "";
+        if(directmodel[0])
+        {
+            rendermodel(directmodel, ANIM_MAPMODEL | ANIM_LOOP, position, yaw, 0, 0, flags, NULL, NULL, 0, 0, 0.4f);
+        }
+        else if(type == WORLD_ITEM_CUBE || type == WORLD_ITEM_NONE)
         {
             string toptexture, sidetexture, bottomtexture;
             copystring(toptexture, getworldcubetexture(worldindex, WORLD_CUBE_TOP));
@@ -393,11 +398,15 @@ namespace game
         rendermodelwithskins(hud ? heldcubemodel : worldheldcubemodel, ANIM_MAPMODEL | ANIM_LOOP, pose.origin, pose.yaw, pose.pitch, pose.roll, flags, d, skins, 3, size);
     }
 
-    static void renderheldscatter(gameent *d, int selected, const helditempose &pose, int flags, float size)
+    static void renderheldmodel(gameent *d, const char *model, const helditempose &pose, int flags, float size)
     {
-        const char *model = getworldscattermodel(selected);
         if(!model[0]) return;
         rendermodel(model, ANIM_MAPMODEL | ANIM_LOOP, pose.origin, pose.yaw, pose.pitch, pose.roll, flags, d, NULL, 0, 0, size);
+    }
+
+    static void renderheldscatter(gameent *d, int selected, const helditempose &pose, int flags, float size)
+    {
+        renderheldmodel(d, getworldscattermodel(selected), pose, flags, size);
     }
 
     static void renderhelditem(gameent *d, int selected, const vec &origin, float yaw, float pitch, float roll, int flags, bool hud)
@@ -412,6 +421,8 @@ namespace game
             renderheldcube(d, worldindex, pose, flags, hud ? HUD_HELD_CUBE_SIZE : WORLD_HELD_CUBE_SIZE, hud);
         else if(type == WORLD_ITEM_SCATTER || type == WORLD_ITEM_PLACEABLE)
             renderheldscatter(d, worldindex, pose, flags, hud ? HUD_HELD_SCATTER_SIZE : WORLD_HELD_SCATTER_SIZE);
+        else if(type == WORLD_ITEM_NONE)
+            renderheldmodel(d, getinventoryitemmodel(selected), pose, flags, hud ? HUD_HELD_SCATTER_SIZE : WORLD_HELD_SCATTER_SIZE);
     }
 
     bool heldtorchemitterposition(gameent *d, vec &position)

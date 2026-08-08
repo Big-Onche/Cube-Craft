@@ -155,6 +155,7 @@ extern int numinventoryitems();
 extern const char *getinventoryitemname(int index);
 extern const char *getinventoryitemid(int index);
 extern int getinventoryitemmaxstack(int index);
+extern const char *getinventoryitemmodel(int index);
 extern const char *getinventoryitemicon(int index);
 extern int getinventoryitemindex(const char *id);
 

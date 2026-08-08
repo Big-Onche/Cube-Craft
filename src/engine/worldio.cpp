@@ -279,12 +279,12 @@ struct worldscatterdefinition
 
 struct inventoryitemdefinition
 {
-    string id, name, icon;
+    string id, name, model, icon;
     int maxstack;
 
     inventoryitemdefinition() : maxstack(64)
     {
-        id[0] = name[0] = icon[0] = '\0';
+        id[0] = name[0] = model[0] = icon[0] = '\0';
     }
 };
 
@@ -476,10 +476,22 @@ int getinventoryitemmaxstack(int index)
     return inventoryitemdefinitions.inrange(index) ? inventoryitemdefinitions[index]->maxstack : 0;
 }
 
+const char *getinventoryitemmodel(int index)
+{
+    return inventoryitemdefinitions.inrange(index) ? inventoryitemdefinitions[index]->model : "";
+}
+
 const char *getinventoryitemicon(int index)
 {
     static string iconpath;
     if(!inventoryitemdefinitions.inrange(index)) return "";
+    const inventoryitemdefinition &item = *inventoryitemdefinitions[index];
+    if(item.icon[0]) return item.icon;
+    if(item.model[0])
+    {
+        formatstring(iconpath, "media/model/%s/diffuse.png", item.model);
+        return iconpath;
+    }
     loopv(worldcubedefinitions) if(worldcubedefinitions[i]->item == index)
     {
         formatstring(iconpath, "media/texture/%s", worldcubedefinitions[i]->texture);
@@ -635,7 +647,7 @@ void worldreset()
 
 COMMAND(worldreset, "");
 
-static void defineinventoryitem(const char *id, const char *name, int maxstack)
+static void defineinventoryitem(const char *id, const char *name, int maxstack, const char *model, const char *icon)
 {
     if(!id[0] || !name[0] || maxstack <= 0)
     {
@@ -647,12 +659,14 @@ static void defineinventoryitem(const char *id, const char *name, int maxstack)
     if(!type) type = inventoryitemdefinitions.add(new inventoryitemdefinition);
     copystring(type->id, id);
     copystring(type->name, name);
+    copystring(type->model, model ? model : "");
+    copystring(type->icon, icon ? icon : "");
     type->maxstack = maxstack;
 }
 
-ICOMMAND(inventoryitem, "ssi", (char *id, char *name, int *maxstack),
+ICOMMAND(inventoryitem, "ssissN", (char *id, char *name, int *maxstack, char *model, char *icon, int *numargs),
 {
-    defineinventoryitem(id, name, *maxstack);
+    defineinventoryitem(id, name, *maxstack, *numargs >= 4 ? model : "", *numargs >= 5 ? icon : "");
 });
 
 static void defineworldcube(const char *id, const char *itemid, const char *texture, float texsize, const char *side, const char *bottom, const char *bottomalternate, int numargs)
@@ -9466,8 +9480,11 @@ static void resetserverworlddefinitions()
 
 COMMANDN(worldreset, resetserverworlddefinitions, "");
 
-ICOMMAND(inventoryitem, "ssi", (char *id, char *name, int *maxstack),
+ICOMMAND(inventoryitem, "ssissN", (char *id, char *name, int *maxstack, char *model, char *icon, int *numargs),
 {
+    (void)model;
+    (void)icon;
+    (void)numargs;
     if(!id[0] || !name[0] || *maxstack <= 0)
     {
         conoutf(CON_ERROR, "inventoryitem requires an id, display name, and positive max stack");
@@ -9621,6 +9638,8 @@ int getinventoryitemmaxstack(int index)
 {
     return serverinventoryitems.inrange(index) ? serverinventoryitems[index]->maxstack : 0;
 }
+
+const char *getinventoryitemmodel(int index) { return ""; }
 
 int getworlditemtype(int item)
 {

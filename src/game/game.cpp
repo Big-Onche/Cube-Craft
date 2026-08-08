@@ -2010,6 +2010,8 @@ namespace game
     });
     ICOMMAND(creativeblockmodel, "i", (int *index),
     {
+        const char *model = getinventoryitemmodel(*index);
+        if(model[0]) { result(model); return; }
         const int type = getworlditemtype(*index);
         const int worldindex = getworlditemindex(*index);
         result(type == WORLD_ITEM_CUBE || type == WORLD_ITEM_NONE ? "" : getworldscattermodel(worldindex));
