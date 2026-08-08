@@ -789,6 +789,10 @@ namespace game
         -1, -1, -1, -1, -1, -1, -1, -1, -1
     };
     static int survivalcounts[SURVIVAL_USABLE_SLOTS] = { 0 };
+    static int craftingitems[CRAFT_GRID_MAX] = { -1, -1, -1, -1, -1, -1, -1, -1, -1 };
+    static int craftingcounts[CRAFT_GRID_MAX] = { 0 };
+    static int craftinggridsize = 2, craftingstationitem = -1, craftingrecipe = -1,
+               craftingoutputitem = -1, craftingoutputcount = 0;
 
     enum
     {
@@ -854,6 +858,14 @@ namespace game
             survivalcounts[i] = 0;
         }
         creativehotbarslot = 0;
+        loopi(CRAFT_GRID_MAX)
+        {
+            craftingitems[i] = -1;
+            craftingcounts[i] = 0;
+        }
+        craftinggridsize = 2;
+        craftingstationitem = craftingrecipe = craftingoutputitem = -1;
+        craftingoutputcount = 0;
     }
 
     void loadsurvivalinventory(const int *items, const int *counts, int slots)
@@ -871,6 +883,46 @@ namespace game
     {
         loadsurvivalinventory(items, counts, slots);
         creativehotbarslot = clamp(selected, 0, CREATIVE_HOTBAR_SLOTS - 1);
+    }
+
+    void receivecraftstate(const int *items, const int *counts, int slots, int gridsize, int stationitem,
+                           int recipe, int outputitem, int outputcount)
+    {
+        loopi(CRAFT_GRID_MAX)
+        {
+            craftingitems[i] = i < slots && items[i] >= 0 && counts[i] > 0 ? items[i] : -1;
+            craftingcounts[i] = i < slots && items[i] >= 0 && counts[i] > 0 ? counts[i] : 0;
+        }
+        craftinggridsize = gridsize == 3 ? 3 : 2;
+        craftingstationitem = stationitem;
+        craftingrecipe = recipe;
+        craftingoutputitem = outputitem;
+        craftingoutputcount = max(outputcount, 0);
+    }
+
+    static void updateclientcraftpreview()
+    {
+        craftmatch match;
+        if(matchcraftrecipe(craftingitems, craftingcounts, craftinggridsize, craftingstationitem, -1, 0, -1, match))
+        {
+            craftingrecipe = match.recipe;
+            craftingoutputitem = match.outputitem;
+            craftingoutputcount = match.outputcount;
+        }
+        else
+        {
+            craftingrecipe = craftingoutputitem = -1;
+            craftingoutputcount = 0;
+        }
+    }
+
+    static void requestcraftaction(int action, int first = 0, int second = 0, int third = 0, int fourth = 0)
+    {
+#ifndef STANDALONE
+        if(waitforserveredit()) addmsg(N_CRAFTACTION, "ri6", int(newworldrequestid()), action, first, second, third, fourth);
+#else
+        (void)action; (void)first; (void)second; (void)third; (void)fourth;
+#endif
     }
 
     void receiveserversettings(int breakmillis, int scatterbreakmillis, int waterupdates, int waterdistance, int waterspeed)
@@ -1367,10 +1419,31 @@ namespace game
         return bx1 < px2 && bx2 > px1 && by1 < py2 && by2 > py1 && bz1 < pz2 && bz2 > pz1;
     }
 
+    static bool opencraftingtable(const selinfo &hit)
+    {
+        if(!m_survival) return false;
+        const int tableitem = getinventoryitemindex("crafting_table"), cube = getworldcubeindexat(ivec(hit.o).add(CREATIVE_GRID / 2), WORLD_ORIENT_TOP);
+        if(tableitem < 0 || getworldcubeitem(cube) != tableitem) return false;
+        craftinggridsize = 3;
+        craftingstationitem = tableitem;
+        updateclientcraftpreview();
+        selinfo absolute = hit;
+        if(waitforserveredit())
+        {
+            worldselectiontoabsolute(absolute);
+            requestcraftaction(CRAFT_ACTION_OPEN_TABLE, absolute.o.x, absolute.o.y, absolute.o.z, 0);
+        }
+#ifndef STANDALONE
+        execute("hideui survival_inventory; showui crafting_table");
+#endif
+        return true;
+    }
+
     static void creativeplace()
     {
         selinfo hit;
         if(!creativehit(hit)) return;
+        if(opencraftingtable(hit)) return;
 
         const int selected = selectedcreativeblock(), type = getworlditemtype(selected), worldindex = getworlditemindex(selected);
         if(selected < 0) return;
@@ -1777,6 +1850,78 @@ namespace game
             swap(survivalcounts[*from], survivalcounts[*to]);
             if(waitforserveredit())
                 addmsg(N_INVENTORYACTION, "ri4", int(newworldrequestid()), INVENTORY_ACTION_SWAP, *from, *to);
+        }
+    });
+    ICOMMAND(opencraftinginventory, "", (),
+    {
+        craftinggridsize = 2;
+        craftingstationitem = -1;
+        updateclientcraftpreview();
+        requestcraftaction(CRAFT_ACTION_OPEN_PLAYER);
+    });
+    ICOMMAND(getcraftinggridsize, "", (), intret(craftinggridsize));
+    ICOMMAND(getcraftinggriditem, "i", (int *slot),
+    {
+        intret(*slot >= 0 && *slot < craftinggridsize * craftinggridsize && craftingcounts[*slot] > 0 ? craftingitems[*slot] : -1);
+    });
+    ICOMMAND(getcraftinggridcount, "i", (int *slot),
+    {
+        intret(*slot >= 0 && *slot < craftinggridsize * craftinggridsize ? craftingcounts[*slot] : 0);
+    });
+    ICOMMAND(getcraftingoutputitem, "", (), intret(craftingoutputitem));
+    ICOMMAND(getcraftingoutputcount, "", (), intret(craftingoutputcount));
+    ICOMMAND(craftinginventorytogrid, "ii", (int *inventoryslot, int *gridslot),
+    {
+        if(*inventoryslot < 0 || *inventoryslot >= SURVIVAL_USABLE_SLOTS || *gridslot < 0 || *gridslot >= craftinggridsize * craftinggridsize) return;
+        if(waitforserveredit()) requestcraftaction(CRAFT_ACTION_INVENTORY_TO_GRID, *inventoryslot, *gridslot);
+        else
+        {
+            swap(survivalitems[*inventoryslot], craftingitems[*gridslot]);
+            swap(survivalcounts[*inventoryslot], craftingcounts[*gridslot]);
+            updateclientcraftpreview();
+        }
+    });
+    ICOMMAND(craftinggridtoinventory, "ii", (int *gridslot, int *inventoryslot),
+    {
+        if(*inventoryslot < 0 || *inventoryslot >= SURVIVAL_USABLE_SLOTS || *gridslot < 0 || *gridslot >= craftinggridsize * craftinggridsize) return;
+        if(waitforserveredit()) requestcraftaction(CRAFT_ACTION_GRID_TO_INVENTORY, *gridslot, *inventoryslot);
+        else
+        {
+            swap(survivalitems[*inventoryslot], craftingitems[*gridslot]);
+            swap(survivalcounts[*inventoryslot], craftingcounts[*gridslot]);
+            updateclientcraftpreview();
+        }
+    });
+    ICOMMAND(craftinggridswap, "ii", (int *from, int *to),
+    {
+        if(*from < 0 || *from >= craftinggridsize * craftinggridsize || *to < 0 || *to >= craftinggridsize * craftinggridsize) return;
+        if(waitforserveredit()) requestcraftaction(CRAFT_ACTION_GRID_SWAP, *from, *to);
+        else
+        {
+            swap(craftingitems[*from], craftingitems[*to]);
+            swap(craftingcounts[*from], craftingcounts[*to]);
+            updateclientcraftpreview();
+        }
+    });
+    ICOMMAND(craftingtakeoutput, "i", (int *inventoryslot),
+    {
+        if(*inventoryslot < 0 || *inventoryslot >= SURVIVAL_USABLE_SLOTS || craftingrecipe < 0) return;
+        if(waitforserveredit()) requestcraftaction(CRAFT_ACTION_TAKE_OUTPUT, craftingrecipe, *inventoryslot);
+        else
+        {
+            craftmatch match;
+            if(!matchcraftrecipe(craftingitems, craftingcounts, craftinggridsize, craftingstationitem, -1, 0, craftingrecipe, match)) return;
+            const int stack = max(getinventoryitemmaxstack(match.outputitem), 1);
+            if(survivalcounts[*inventoryslot] > 0 && survivalitems[*inventoryslot] != match.outputitem) return;
+            if(survivalcounts[*inventoryslot] + match.outputcount > stack) return;
+            loopi(CRAFT_GRID_MAX) if(match.consume[i] > 0)
+            {
+                craftingcounts[i] -= match.consume[i];
+                if(craftingcounts[i] <= 0) { craftingitems[i] = -1; craftingcounts[i] = 0; }
+            }
+            survivalitems[*inventoryslot] = match.outputitem;
+            survivalcounts[*inventoryslot] += match.outputcount;
+            updateclientcraftpreview();
         }
     });
 #ifndef STANDALONE

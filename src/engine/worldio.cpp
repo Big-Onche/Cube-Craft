@@ -298,6 +298,7 @@ static int worldgrassscatter = -1, worldrosescatter = -1,
 static void updateleavesalpha();
 static void setworldleavesalpha(cube *root, bool enabled);
 static worldcubedefinition *findworldcube(const char *name);
+static inventoryitemdefinition *findinventoryitem(const char *id);
 
 int numworldcubes()
 {
@@ -462,6 +463,12 @@ const char *getinventoryitemname(int index)
 const char *getinventoryitemid(int index)
 {
     return inventoryitemdefinitions.inrange(index) ? inventoryitemdefinitions[index]->id : "";
+}
+
+int getinventoryitemindex(const char *id)
+{
+    inventoryitemdefinition *item = findinventoryitem(id);
+    return item ? inventoryitemdefinitions.find(item) : -1;
 }
 
 int getinventoryitemmaxstack(int index)
@@ -897,6 +904,8 @@ static bool loadworlddefinitions(bool assets = true)
             }
         }
     }
+
+    reloadrecipes(true);
 
     if(!assets)
     {
@@ -9581,6 +9590,7 @@ void initserverworlddefinitions()
     resetserverworlddefinitions();
     if(!execfile("config/world.cfg", false)) fatal("server startup failed: could not load config/world.cfg");
     resolveserverworlddefinitions();
+    reloadrecipes(true);
     conoutf("loaded %d inventory item, %d world cube, and %d world object server definitions",
             serverinventoryitems.length(), serverworldcubes.length(), serverworldobjects.length());
 }
@@ -9594,6 +9604,17 @@ ICOMMAND(worldload, "", (),
 });
 
 int numinventoryitems() { return serverinventoryitems.length(); }
+
+const char *getinventoryitemid(int index)
+{
+    return serverinventoryitems.inrange(index) ? serverinventoryitems[index]->id : "";
+}
+
+int getinventoryitemindex(const char *id)
+{
+    serverinventoryitemdefinition *item = findserverinventoryitem(id);
+    return item ? serverinventoryitems.find(item) : -1;
+}
 
 int getinventoryitemmaxstack(int index)
 {

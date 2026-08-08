@@ -803,6 +803,26 @@ namespace game
                 if(!p.overread()) receiveinventory(items, counts, SURVIVAL_USABLE_SLOTS, selected);
                 break;
             }
+            case N_CRAFTSTATE:
+            {
+                const int slots = getint(p), gridsize = getint(p), stationitem = getint(p), recipe = getint(p),
+                          outputitem = getint(p), outputcount = getint(p);
+                if(slots != CRAFT_GRID_MAX || (gridsize != 2 && gridsize != 3))
+                {
+                    conoutf(CON_ERROR, "server sent an invalid crafting grid");
+                    disconnect();
+                    return;
+                }
+                int items[CRAFT_GRID_MAX], counts[CRAFT_GRID_MAX];
+                loopi(CRAFT_GRID_MAX)
+                {
+                    items[i] = getint(p);
+                    counts[i] = getint(p);
+                    if(counts[i] <= 0) { items[i] = -1; counts[i] = 0; }
+                }
+                if(!p.overread()) receivecraftstate(items, counts, CRAFT_GRID_MAX, gridsize, stationitem, recipe, outputitem, outputcount);
+                break;
+            }
             case N_ACTIONRESULT:
             {
                 const uint requestid = uint(getint(p));

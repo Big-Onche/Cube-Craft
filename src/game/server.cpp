@@ -112,7 +112,8 @@ namespace server
         bool connected, local, worldready, hasposition, inventoryloaded, inventorydirty, breakactive;
         string name, playerid, pendingpublickey, pendingname;
         int inventoryitems[SURVIVAL_USABLE_SLOTS], inventorycounts[SURVIVAL_USABLE_SLOTS];
-        ivec breaktarget;
+        int craftingitems[CRAFT_GRID_MAX], craftingcounts[CRAFT_GRID_MAX], craftinggridsize, craftingstationitem;
+        ivec breaktarget, craftingstationtarget;
         vector<uchar> position;
         vec o;
         ENetPacket *getmap;
@@ -130,7 +131,8 @@ namespace server
                        lastrequestid(0), breakrequestid(0),
                        connected(false), local(false),
                        worldready(false), hasposition(false), inventoryloaded(false), inventorydirty(false), breakactive(false),
-                       breaktarget(0, 0, 0), o(0, 0, 0), getmap(NULL),
+                       craftinggridsize(2), craftingstationitem(-1), breaktarget(0, 0, 0), craftingstationtarget(0, 0, 0),
+                       o(0, 0, 0), getmap(NULL),
                        identitychallenge(NULL), identity(NULL)
         {
             name[0] = playerid[0] = pendingpublickey[0] = pendingname[0] = '\0';
@@ -138,6 +140,11 @@ namespace server
             {
                 inventoryitems[i] = -1;
                 inventorycounts[i] = 0;
+            }
+            loopi(CRAFT_GRID_MAX)
+            {
+                craftingitems[i] = -1;
+                craftingcounts[i] = 0;
             }
         }
 
@@ -188,6 +195,7 @@ namespace server
     static vector<serverworldaction *> serverworldactions;
     static vector<serverdrop *> serverdrops;
     static uint nextdropid = 1;
+    static serverworldaction *findworldaction(const ivec &target, int action);
     static void setworldactionstate(const ivec &target, int action, int orient, int item);
 
     vector<clientinfo *> clients;
@@ -626,6 +634,13 @@ namespace server
             ci.inventorycounts[i] = 0;
         }
         ci.selectedslot = 0;
+        loopi(CRAFT_GRID_MAX)
+        {
+            ci.craftingitems[i] = -1;
+            ci.craftingcounts[i] = 0;
+        }
+        ci.craftinggridsize = 2;
+        ci.craftingstationitem = -1;
         ci.inventorydirty = false;
     }
 
@@ -639,9 +654,12 @@ namespace server
         copystring(temppath, findfile(temporary, "wb"));
         stream *file = openrawfile(temporary, "wb");
         if(!file) return false;
-        bool ok = file->printf("survival_inventory 1\nselected %d\n", ci.selectedslot) > 0;
+        bool ok = file->printf("survival_inventory 2\nselected %d\ncrafting %d %d %d %d %d\n", ci.selectedslot, ci.craftinggridsize,
+                               ci.craftingstationitem, ci.craftingstationtarget.x, ci.craftingstationtarget.y, ci.craftingstationtarget.z) > 0;
         loopi(SURVIVAL_USABLE_SLOTS) if(ok)
             ok = file->printf("slot %d %d %d\n", i, ci.inventoryitems[i], ci.inventorycounts[i]) > 0;
+        loopi(CRAFT_GRID_MAX) if(ok)
+            ok = file->printf("craftslot %d %d %d\n", i, ci.craftingitems[i], ci.craftingcounts[i]) > 0;
         delete file;
         if(!ok || !replaceserveridentityfile(temppath, finalpath))
         {
@@ -664,14 +682,14 @@ namespace server
         stream *file = openrawfile(relative, "rb");
         if(!file) return true;
         bool versionseen = false, valid = true;
-        bool slotsseen[SURVIVAL_USABLE_SLOTS] = { false };
+        bool slotsseen[SURVIVAL_USABLE_SLOTS] = { false }, craftslotsseen[CRAFT_GRID_MAX] = { false };
         string line;
         while(file->getline(line, sizeof(line)))
         {
             int version, selected, slot, item, count;
             if(sscanf(line, "survival_inventory %d", &version) == 1)
             {
-                if(versionseen || version != 1) valid = false;
+                if(versionseen || (version != 1 && version != 2)) valid = false;
                 versionseen = true;
             }
             else if(sscanf(line, "selected %d", &selected) == 1)
@@ -692,7 +710,33 @@ namespace server
                     ci.inventorycounts[slot] = count;
                 }
             }
-            else if(line[0] && line[0] != '/' && line[0] != '#') valid = false;
+            else
+            {
+                int gridsize, stationitem, x, y, z;
+                if(sscanf(line, "crafting %d %d %d %d %d", &gridsize, &stationitem, &x, &y, &z) == 5)
+                {
+                    if((gridsize != 2 && gridsize != 3) || stationitem >= numinventoryitems()) valid = false;
+                    else
+                    {
+                        ci.craftinggridsize = gridsize;
+                        ci.craftingstationitem = stationitem;
+                        ci.craftingstationtarget = ivec(x, y, z);
+                    }
+                }
+                else if(sscanf(line, "craftslot %d %d %d", &slot, &item, &count) == 3)
+                {
+                    if(slot < 0 || slot >= CRAFT_GRID_MAX || craftslotsseen[slot] || count < 0 ||
+                       (item >= 0 && count > getinventoryitemmaxstack(item)) || (count == 0 && item != -1) ||
+                       (count > 0 && (item < 0 || item >= numinventoryitems()))) valid = false;
+                    else
+                    {
+                        craftslotsseen[slot] = true;
+                        ci.craftingitems[slot] = item;
+                        ci.craftingcounts[slot] = count;
+                    }
+                }
+                else if(line[0] && line[0] != '/' && line[0] != '#') valid = false;
+            }
             if(!valid) break;
         }
         delete file;
@@ -716,6 +760,43 @@ namespace server
         {
             putint(p, ci.inventoryitems[i]);
             putint(p, ci.inventorycounts[i]);
+        }
+        sendpacket(ci.clientnum, 1, p.finalize());
+    }
+
+    static bool craftingstationvalid(const clientinfo &ci)
+    {
+        if(ci.craftinggridsize == 2) return ci.craftingstationitem < 0;
+        if(ci.craftinggridsize != 3 || !ci.hasposition || ci.craftingstationitem < 0) return false;
+        serverworldaction *state = findworldaction(ci.craftingstationtarget, WORLD_ACTION_PLACE_CUBE);
+        if(!state || state->action != WORLD_ACTION_PLACE_CUBE || state->item != ci.craftingstationitem) return false;
+        return vec(ci.craftingstationtarget).add(8).dist(ci.o) <= 144.0f;
+    }
+
+    static bool servercraftmatch(const clientinfo &ci, int requestedrecipe, craftmatch &match)
+    {
+        // Skill progression is intentionally separate from recipe matching. Until
+        // that subsystem exists, players have no named skill and level zero.
+        return craftingstationvalid(ci) && matchcraftrecipe(ci.craftingitems, ci.craftingcounts, ci.craftinggridsize,
+                                                           ci.craftingstationitem, -1, 0, requestedrecipe, match);
+    }
+
+    static void sendcraftstate(clientinfo &ci)
+    {
+        craftmatch match;
+        servercraftmatch(ci, -1, match);
+        packetbuf p(MAXTRANS, ENET_PACKET_FLAG_RELIABLE);
+        putint(p, N_CRAFTSTATE);
+        putint(p, CRAFT_GRID_MAX);
+        putint(p, ci.craftinggridsize);
+        putint(p, ci.craftingstationitem);
+        putint(p, match.recipe);
+        putint(p, match.outputitem);
+        putint(p, match.outputcount);
+        loopi(CRAFT_GRID_MAX)
+        {
+            putint(p, ci.craftingitems[i]);
+            putint(p, ci.craftingcounts[i]);
         }
         sendpacket(ci.clientnum, 1, p.finalize());
     }
@@ -1042,6 +1123,7 @@ namespace server
         conoutf("identity accepted: client %d, %s", ci.clientnum, kind);
         sendf(ci.clientnum, 1, "ri2s", N_IDENTITYSUCCESS, PLAYER_IDENTITY_VERSION, ci.playerid);
         sendinventory(ci);
+        sendcraftstate(ci);
         sendf(ci.clientnum, 1, "ri", N_WELCOME);
         loopv(clients)
         {
@@ -1790,6 +1872,92 @@ namespace server
         return true;
     }
 
+    static bool rejectcraftaction(clientinfo &ci, uint requestid, const char *reason, bool violation = false, bool malicious = false)
+    {
+        const bool result = rejectaction(ci, requestid, reason, violation, malicious);
+        sendcraftstate(ci);
+        return result;
+    }
+
+    static bool handlecraftaction(clientinfo &ci, uint requestid, int action, int first, int second, int third, int fourth)
+    {
+        (void)fourth;
+        const char *error = NULL;
+        if(!validnewrequest(ci, requestid, error)) return rejectcraftaction(ci, requestid, error, requestid == ci.lastrequestid);
+        if(servercreative()) return rejectcraftaction(ci, requestid, "crafting is disabled in creative mode");
+        switch(action)
+        {
+            case CRAFT_ACTION_OPEN_PLAYER:
+                ci.craftinggridsize = 2;
+                ci.craftingstationitem = -1;
+                break;
+            case CRAFT_ACTION_OPEN_TABLE:
+            {
+                const int tableitem = getinventoryitemindex("crafting_table");
+                const ivec target(first, second, third);
+                serverworldaction *state = findworldaction(target, WORLD_ACTION_PLACE_CUBE);
+                if(tableitem < 0 || !state || state->action != WORLD_ACTION_PLACE_CUBE || state->item != tableitem)
+                    return rejectcraftaction(ci, requestid, "the requested crafting table does not exist");
+                if(!ci.hasposition || vec(first + 8, second + 8, third + 8).dist(ci.o) > 144.0f)
+                    return rejectcraftaction(ci, requestid, "the crafting table is out of reach");
+                ci.craftinggridsize = 3;
+                ci.craftingstationitem = tableitem;
+                ci.craftingstationtarget = target;
+                break;
+            }
+            case CRAFT_ACTION_INVENTORY_TO_GRID:
+                if(!craftingstationvalid(ci)) return rejectcraftaction(ci, requestid, "the crafting station is no longer accessible");
+                if(first < 0 || first >= SURVIVAL_USABLE_SLOTS || second < 0 || second >= ci.craftinggridsize * ci.craftinggridsize)
+                    return rejectcraftaction(ci, requestid, "invalid crafting slot", true, true);
+                swap(ci.inventoryitems[first], ci.craftingitems[second]);
+                swap(ci.inventorycounts[first], ci.craftingcounts[second]);
+                markinventorydirty(ci);
+                break;
+            case CRAFT_ACTION_GRID_TO_INVENTORY:
+                if(!craftingstationvalid(ci)) return rejectcraftaction(ci, requestid, "the crafting station is no longer accessible");
+                if(first < 0 || first >= ci.craftinggridsize * ci.craftinggridsize || second < 0 || second >= SURVIVAL_USABLE_SLOTS)
+                    return rejectcraftaction(ci, requestid, "invalid crafting slot", true, true);
+                swap(ci.craftingitems[first], ci.inventoryitems[second]);
+                swap(ci.craftingcounts[first], ci.inventorycounts[second]);
+                markinventorydirty(ci);
+                break;
+            case CRAFT_ACTION_GRID_SWAP:
+                if(!craftingstationvalid(ci)) return rejectcraftaction(ci, requestid, "the crafting station is no longer accessible");
+                if(first < 0 || first >= ci.craftinggridsize * ci.craftinggridsize || second < 0 || second >= ci.craftinggridsize * ci.craftinggridsize)
+                    return rejectcraftaction(ci, requestid, "invalid crafting slot", true, true);
+                swap(ci.craftingitems[first], ci.craftingitems[second]);
+                swap(ci.craftingcounts[first], ci.craftingcounts[second]);
+                markinventorydirty(ci);
+                break;
+            case CRAFT_ACTION_TAKE_OUTPUT:
+            {
+                if(second < 0 || second >= SURVIVAL_USABLE_SLOTS) return rejectcraftaction(ci, requestid, "invalid output inventory slot", true, true);
+                craftmatch match;
+                if(!servercraftmatch(ci, first, match)) return rejectcraftaction(ci, requestid, "the authoritative crafting grid does not match that recipe");
+                const int stack = max(getinventoryitemmaxstack(match.outputitem), 1);
+                if(ci.inventorycounts[second] > 0 && ci.inventoryitems[second] != match.outputitem)
+                    return rejectcraftaction(ci, requestid, "the output inventory slot contains another item");
+                if(ci.inventorycounts[second] + match.outputcount > stack)
+                    return rejectcraftaction(ci, requestid, "the output does not fit in that inventory slot");
+                loopi(CRAFT_GRID_MAX) if(match.consume[i] > 0)
+                {
+                    ci.craftingcounts[i] -= match.consume[i];
+                    if(ci.craftingcounts[i] <= 0) { ci.craftingitems[i] = -1; ci.craftingcounts[i] = 0; }
+                }
+                ci.inventoryitems[second] = match.outputitem;
+                ci.inventorycounts[second] += match.outputcount;
+                markinventorydirty(ci);
+                break;
+            }
+            default:
+                return rejectcraftaction(ci, requestid, "invalid crafting action", true, true);
+        }
+        sendactionresult(ci, requestid, true);
+        sendinventory(ci);
+        sendcraftstate(ci);
+        return true;
+    }
+
     static serveredit *cloneserveredit(const serveredit &source)
     {
         serveredit *edit = new serveredit;
@@ -2524,6 +2692,14 @@ namespace server
                     const uint requestid = uint(getint(p));
                     const int action = getint(p), first = getint(p), second = getint(p);
                     if(ci && ci->connected && !p.overread()) handleinventoryaction(*ci, requestid, action, first, second);
+                    break;
+                }
+                case N_CRAFTACTION:
+                {
+                    clientinfo *ci = getinfo(sender);
+                    const uint requestid = uint(getint(p));
+                    const int action = getint(p), first = getint(p), second = getint(p), third = getint(p), fourth = getint(p);
+                    if(ci && ci->connected && !p.overread()) handlecraftaction(*ci, requestid, action, first, second, third, fourth);
                     break;
                 }
                 case N_WORLDACTION:

@@ -156,6 +156,27 @@ extern const char *getinventoryitemname(int index);
 extern const char *getinventoryitemid(int index);
 extern int getinventoryitemmaxstack(int index);
 extern const char *getinventoryitemicon(int index);
+extern int getinventoryitemindex(const char *id);
+
+enum { CRAFT_GRID_MAX = 9 };
+struct craftmatch
+{
+    int recipe, outputitem, outputcount, consume[CRAFT_GRID_MAX];
+
+    craftmatch() : recipe(-1), outputitem(-1), outputcount(0) { loopi(CRAFT_GRID_MAX) consume[i] = 0; }
+};
+extern bool reloadrecipes(bool report = true);
+extern int numcraftrecipes();
+extern int numitemtags();
+extern const char *getcraftrecipeid(int recipe);
+extern int getcraftrecipeoutputitem(int recipe);
+extern int getcraftrecipeoutputcount(int recipe);
+extern int getcraftrecipeskill(int recipe);
+extern int getcraftrecipeskilllevel(int recipe);
+extern bool itemhastag(int item, int tag);
+extern int finditemtag(const char *id);
+extern bool matchcraftrecipe(const int *items, const int *counts, int gridsize, int stationitem,
+                             int skill, int skilllevel, int requestedrecipe, craftmatch &match);
 extern int getworlditemtype(int item);
 extern int getworlditemindex(int item);
 extern int getworldobjectdropcount(int type, int index);

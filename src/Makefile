@@ -117,6 +117,7 @@ CLIENT_OBJS= \
 	game/entities.o \
 	game/environment.o \
 	game/game.o \
+	game/recipes.o \
 	game/render.o \
 	game/server.o \
 	game/world.o
@@ -156,6 +157,7 @@ SERVER_OBJS= \
 	standalone/engine/worldio.o \
 	standalone/game/entities.o \
 	standalone/game/game.o \
+	standalone/game/recipes.o \
 	standalone/game/server.o
 
 SERVER_PCH= standalone/shared/cube.h.gch standalone/engine/engine.h.gch standalone/game/game.h.gch

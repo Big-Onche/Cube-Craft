@@ -64,7 +64,7 @@ enum
     N_SETPRIVILEGE, N_SETMASTER, N_SERVERCOMMAND,
     N_SERVERIDENTITY, N_IDENTITYLOGIN, N_IDENTITYREGISTER, N_IDENTITYCHALLENGE,
     N_IDENTITYRESPONSE, N_IDENTITYSUCCESS, N_IDENTITYFAILURE, N_IDENTITYREVOKED,
-    N_INVENTORYSTATE, N_INVENTORYACTION, N_WORLDACTION, N_WORLDAUTH, N_ACTIONRESULT,
+    N_INVENTORYSTATE, N_INVENTORYACTION, N_CRAFTSTATE, N_CRAFTACTION, N_WORLDACTION, N_WORLDAUTH, N_ACTIONRESULT,
     N_BREAKSTATE, N_DROPSETTINGS, N_DROPSPAWN, N_DROPDELETE, N_DROPPICKUP,
     NUMMSG
 };
@@ -73,6 +73,16 @@ enum
 {
     INVENTORY_ACTION_SWAP = 0,
     INVENTORY_ACTION_SELECT
+};
+
+enum
+{
+    CRAFT_ACTION_OPEN_PLAYER = 0,
+    CRAFT_ACTION_OPEN_TABLE,
+    CRAFT_ACTION_INVENTORY_TO_GRID,
+    CRAFT_ACTION_GRID_TO_INVENTORY,
+    CRAFT_ACTION_GRID_SWAP,
+    CRAFT_ACTION_TAKE_OUTPUT
 };
 
 enum
@@ -115,7 +125,7 @@ static const int msgsizes[] =
     N_SETPRIVILEGE, 3, N_SETMASTER, 0, N_SERVERCOMMAND, 0,
     N_SERVERIDENTITY, 0, N_IDENTITYLOGIN, 0, N_IDENTITYREGISTER, 0, N_IDENTITYCHALLENGE, 0,
     N_IDENTITYRESPONSE, 0, N_IDENTITYSUCCESS, 0, N_IDENTITYFAILURE, 0, N_IDENTITYREVOKED, 0,
-    N_INVENTORYSTATE, 0, N_INVENTORYACTION, 5, N_WORLDACTION, 9, N_WORLDAUTH, 7,
+    N_INVENTORYSTATE, 0, N_INVENTORYACTION, 5, N_CRAFTSTATE, 0, N_CRAFTACTION, 7, N_WORLDACTION, 9, N_WORLDAUTH, 7,
     N_ACTIONRESULT, 0, N_BREAKSTATE, 10, N_DROPSETTINGS, 6, N_DROPSPAWN, 10, N_DROPDELETE, 3, N_DROPPICKUP, 6,
     -1
 };
@@ -123,7 +133,7 @@ static const int msgsizes[] =
 #define TESSERACT_SERVER_PORT 42000
 #define TESSERACT_LANINFO_PORT 41998
 #define TESSERACT_MASTER_PORT 41999
-#define PROTOCOL_VERSION 14
+#define PROTOCOL_VERSION 15
 
 static inline uint worlddrophash(uint value)
 {
@@ -236,6 +246,8 @@ namespace game
     extern const vector<worlddrop *> &getworlddrops();
     extern int getdynamicentsmaxdistance();
     extern void receiveinventory(const int *items, const int *counts, int slots, int selected);
+    extern void receivecraftstate(const int *items, const int *counts, int slots, int gridsize, int stationitem,
+                                  int recipe, int outputitem, int outputcount);
     extern void receiveactionresult(uint requestid, int result, const char *reason);
     extern void receivebreakstate(int actor, uint requestid, int phase, int action, const ivec &target, int orient, int stage);
     extern int smoothmove, smoothdist;
