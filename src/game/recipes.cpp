@@ -316,7 +316,7 @@ namespace
         return ingredient.item >= 0 ? ingredient.item == item : itemhastag(item, ingredient.tag);
     }
 
-    static bool matchshaped(const recipedefinition &recipe, const int *items, const int *counts, int gridsize, bool mirrored, craftmatch &match)
+    static bool matchshaped(const recipedefinition &recipe, const int *items, const int *counts, int gridsize, bool mirrored, int crafts, craftmatch &match)
     {
         int minx = gridsize, miny = gridsize, maxx = -1, maxy = -1;
         loopi(gridsize) loopj(gridsize)
@@ -337,48 +337,43 @@ namespace
             }
             else
             {
-                if(items[gridslot] < 0 || counts[gridslot] <= 0 || !ingredientmatches(recipe.ingredients[ingredientindex], items[gridslot])) return false;
-                match.consume[gridslot] = 1;
+                if(items[gridslot] < 0 || counts[gridslot] < crafts || !ingredientmatches(recipe.ingredients[ingredientindex], items[gridslot])) return false;
+                match.consume[gridslot] = crafts;
             }
         }
         return true;
     }
 
-    static bool distributetag(const recipedefinition &recipe, const recipeingredientdefinition &ingredient, int group,
-                              int remaining, int groups, const int *groupitems, int *available, int *assigned,
-                              int ingredientindex);
+    static bool distributetag(const recipedefinition &recipe, const recipeingredientdefinition &ingredient, int group, int remaining, int groups, const int *groupitems, int *available, int *assigned, int ingredientindex, int crafts);
 
-    static bool assigntags(const recipedefinition &recipe, int ingredientindex, int groups, const int *groupitems,
-                           int *available, int *assigned)
+    static bool assigntags(const recipedefinition &recipe, int ingredientindex, int groups, const int *groupitems, int *available, int *assigned, int crafts)
     {
         while(ingredientindex < recipe.ingredients.length() && recipe.ingredients[ingredientindex].item >= 0) ++ingredientindex;
         if(ingredientindex >= recipe.ingredients.length()) return true;
-        return distributetag(recipe, recipe.ingredients[ingredientindex], 0, recipe.ingredients[ingredientindex].count,
-                             groups, groupitems, available, assigned, ingredientindex);
+        return distributetag(recipe, recipe.ingredients[ingredientindex], 0, recipe.ingredients[ingredientindex].count * crafts, groups, groupitems, available, assigned, ingredientindex, crafts);
     }
 
-    static bool distributetag(const recipedefinition &recipe, const recipeingredientdefinition &ingredient, int group,
-                              int remaining, int groups, const int *groupitems, int *available, int *assigned,
-                              int ingredientindex)
+    static bool distributetag(const recipedefinition &recipe, const recipeingredientdefinition &ingredient, int group, int remaining, int groups, const int *groupitems, int *available, int *assigned, int ingredientindex, int crafts)
     {
         if(group >= groups)
-            return remaining == 0 && assigntags(recipe, ingredientindex + 1, groups, groupitems, available, assigned);
+            return remaining == 0 && assigntags(recipe, ingredientindex + 1, groups, groupitems, available, assigned, crafts);
         const int maximum = ingredientmatches(ingredient, groupitems[group]) ? min(remaining, available[group]) : 0;
         for(int take = maximum; take >= 0; --take)
         {
             available[group] -= take;
             assigned[ingredientindex * CRAFT_GRID_MAX + group] = take;
-            if(distributetag(recipe, ingredient, group + 1, remaining - take, groups, groupitems, available, assigned, ingredientindex)) return true;
+            if(distributetag(recipe, ingredient, group + 1, remaining - take, groups, groupitems, available, assigned, ingredientindex, crafts)) return true;
             assigned[ingredientindex * CRAFT_GRID_MAX + group] = 0;
             available[group] += take;
         }
         return false;
     }
 
-    static bool matchshapeless(const recipedefinition &recipe, const int *items, const int *counts, int gridsize, craftmatch &match)
+    static bool matchshapeless(const recipedefinition &recipe, const int *items, const int *counts, int gridsize, int crafts, craftmatch &match)
     {
-        int groupitems[CRAFT_GRID_MAX], available[CRAFT_GRID_MAX], assigned[CRAFT_GRID_MAX * CRAFT_GRID_MAX] = { 0 }, groups = 0, total = 0, required = 0;
-        loopv(recipe.ingredients) required += recipe.ingredients[i].count;
+        int groupitems[CRAFT_GRID_MAX], available[CRAFT_GRID_MAX], assigned[CRAFT_GRID_MAX * CRAFT_GRID_MAX] = { 0 },
+            groups = 0, total = 0, required = 0;
+        loopv(recipe.ingredients) required += recipe.ingredients[i].count * crafts;
         loopi(gridsize * gridsize) if(items[i] >= 0 && counts[i] > 0)
         {
             total += counts[i];
@@ -387,16 +382,23 @@ namespace
             if(group < 0) { group = groups++; groupitems[group] = items[i]; available[group] = 0; }
             available[group] += counts[i];
         }
-        if(total != required) return false;
+        if(total < required) return false;
+        loopi(groups)
+        {
+            bool compatible = false;
+            loopvj(recipe.ingredients) if(ingredientmatches(recipe.ingredients[j], groupitems[i])) { compatible = true; break; }
+            if(!compatible) return false;
+        }
         loopv(recipe.ingredients) if(recipe.ingredients[i].item >= 0)
         {
             int group = -1;
             loopj(groups) if(groupitems[j] == recipe.ingredients[i].item) { group = j; break; }
-            if(group < 0 || available[group] < recipe.ingredients[i].count) return false;
-            available[group] -= recipe.ingredients[i].count;
-            assigned[i * CRAFT_GRID_MAX + group] = recipe.ingredients[i].count;
+            const int ingredientcount = recipe.ingredients[i].count * crafts;
+            if(group < 0 || available[group] < ingredientcount) return false;
+            available[group] -= ingredientcount;
+            assigned[i * CRAFT_GRID_MAX + group] = ingredientcount;
         }
-        if(!assigntags(recipe, 0, groups, groupitems, available, assigned)) return false;
+        if(!assigntags(recipe, 0, groups, groupitems, available, assigned, crafts)) return false;
         int groupconsumed[CRAFT_GRID_MAX] = { 0 };
         loopv(recipe.ingredients) loopj(groups) groupconsumed[j] += assigned[i * CRAFT_GRID_MAX + j];
         loopi(gridsize * gridsize) if(items[i] >= 0 && counts[i] > 0)
@@ -410,6 +412,21 @@ namespace
             }
         }
         return true;
+    }
+
+    static bool matchcompiledrecipe(const recipedefinition &recipe, const int *items, const int *counts, int gridsize, int crafts, craftmatch &match)
+    {
+        match = craftmatch();
+        bool matched = recipe.type == RECIPE_SHAPED && recipe.width <= gridsize && recipe.height <= gridsize
+                     ? matchshaped(recipe, items, counts, gridsize, false, crafts, match) : false;
+        if(!matched && recipe.type == RECIPE_SHAPED && recipe.mirror)
+        {
+            match = craftmatch();
+            matched = matchshaped(recipe, items, counts, gridsize, true, crafts, match);
+        }
+        if(!matched && recipe.type == RECIPE_SHAPELESS)
+            matched = matchshapeless(recipe, items, counts, gridsize, crafts, match);
+        return matched;
     }
 }
 
@@ -432,8 +449,7 @@ bool itemhastag(int item, int tag)
     return itemtags.inrange(tag) && itemtags[tag]->members.inrange(item) && itemtags[tag]->members[item] != 0;
 }
 
-bool matchcraftrecipe(const int *items, const int *counts, int gridsize, int stationitem,
-                      int skill, int skilllevel, int requestedrecipe, craftmatch &match)
+bool matchcraftrecipe(const int *items, const int *counts, int gridsize, int stationitem, int skill, int skilllevel, int requestedrecipe, craftmatch &match, int maxoutput)
 {
     match = craftmatch();
     if(!items || !counts || (gridsize != 2 && gridsize != 3)) return false;
@@ -444,19 +460,26 @@ bool matchcraftrecipe(const int *items, const int *counts, int gridsize, int sta
         const recipedefinition &recipe = *recipes[i];
         if(recipe.stationitem >= 0 && recipe.stationitem != stationitem) continue;
         if(recipe.skill >= 0 && (recipe.skill != skill || skilllevel < recipe.skilllevel)) continue;
+        const int outputlimit = min(max(maxoutput, 0), max(getinventoryitemmaxstack(recipe.outputitem), 1)),
+                  maxcrafts = recipe.outputcount > 0 ? outputlimit / recipe.outputcount : 0;
+        int low = 1, high = maxcrafts, crafts = 0;
         craftmatch candidate;
-        bool matched = recipe.type == RECIPE_SHAPED && recipe.width <= gridsize && recipe.height <= gridsize
-                     ? matchshaped(recipe, items, counts, gridsize, false, candidate) : false;
-        if(!matched && recipe.type == RECIPE_SHAPED && recipe.mirror)
+        while(low <= high)
         {
-            candidate = craftmatch();
-            matched = matchshaped(recipe, items, counts, gridsize, true, candidate);
+            const int attempt = low + (high - low) / 2;
+            craftmatch attempted;
+            if(matchcompiledrecipe(recipe, items, counts, gridsize, attempt, attempted))
+            {
+                crafts = attempt;
+                candidate = attempted;
+                low = attempt + 1;
+            }
+            else high = attempt - 1;
         }
-        if(!matched && recipe.type == RECIPE_SHAPELESS) matched = matchshapeless(recipe, items, counts, gridsize, candidate);
-        if(!matched) continue;
+        if(crafts <= 0) continue;
         candidate.recipe = i;
         candidate.outputitem = recipe.outputitem;
-        candidate.outputcount = recipe.outputcount;
+        candidate.outputcount = recipe.outputcount * crafts;
         match = candidate;
         return true;
     }

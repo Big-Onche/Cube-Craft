@@ -176,7 +176,7 @@ extern int getcraftrecipeskilllevel(int recipe);
 extern bool itemhastag(int item, int tag);
 extern int finditemtag(const char *id);
 extern bool matchcraftrecipe(const int *items, const int *counts, int gridsize, int stationitem,
-                             int skill, int skilllevel, int requestedrecipe, craftmatch &match);
+                             int skill, int skilllevel, int requestedrecipe, craftmatch &match, int maxoutput = INT_MAX);
 extern int getworlditemtype(int item);
 extern int getworlditemindex(int item);
 extern int getworldobjectdropcount(int type, int index);

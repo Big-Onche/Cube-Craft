@@ -789,12 +789,12 @@ namespace server
         return vec(ci.craftingstationtarget).add(8).dist(ci.o) <= 144.0f;
     }
 
-    static bool servercraftmatch(const clientinfo &ci, int requestedrecipe, craftmatch &match)
+    static bool servercraftmatch(const clientinfo &ci, int requestedrecipe, craftmatch &match, int maxoutput = INT_MAX)
     {
         // Skill progression is intentionally separate from recipe matching. Until
         // that subsystem exists, players have no named skill and level zero.
         return craftingstationvalid(ci) && matchcraftrecipe(ci.craftingitems, ci.craftingcounts, ci.craftinggridsize,
-                                                           ci.craftingstationitem, -1, 0, requestedrecipe, match);
+                                                           ci.craftingstationitem, -1, 0, requestedrecipe, match, maxoutput);
     }
 
     static void sendcraftstate(clientinfo &ci)
@@ -1966,13 +1966,13 @@ namespace server
             case CRAFT_ACTION_TAKE_OUTPUT:
             {
                 if(second < 0 || second >= SURVIVAL_USABLE_SLOTS) return rejectcraftaction(ci, requestid, "invalid output inventory slot", true, true);
-                craftmatch match;
-                if(!servercraftmatch(ci, first, match)) return rejectcraftaction(ci, requestid, "the authoritative crafting grid does not match that recipe");
-                const int stack = max(getinventoryitemmaxstack(match.outputitem), 1);
-                if(ci.inventorycounts[second] > 0 && ci.inventoryitems[second] != match.outputitem)
+                const int outputitem = getcraftrecipeoutputitem(first);
+                if(ci.inventorycounts[second] > 0 && ci.inventoryitems[second] != outputitem)
                     return rejectcraftaction(ci, requestid, "the output inventory slot contains another item");
-                if(ci.inventorycounts[second] + match.outputcount > stack)
-                    return rejectcraftaction(ci, requestid, "the output does not fit in that inventory slot");
+                const int stack = max(getinventoryitemmaxstack(outputitem), 1), capacity = stack - ci.inventorycounts[second];
+                craftmatch match;
+                if(!servercraftmatch(ci, first, match, capacity))
+                    return rejectcraftaction(ci, requestid, "the authoritative crafting grid does not match or fit that recipe");
                 loopi(CRAFT_GRID_MAX) if(match.consume[i] > 0)
                 {
                     ci.craftingcounts[i] -= match.consume[i];
@@ -1987,14 +1987,13 @@ namespace server
             {
                 if(second != INVENTORY_CLICK_LEFT && second != INVENTORY_CLICK_RIGHT)
                     return rejectcraftaction(ci, requestid, "invalid crafting output click", true, true);
-                craftmatch match;
-                if(!servercraftmatch(ci, first, match))
-                    return rejectcraftaction(ci, requestid, "the authoritative crafting grid does not match that recipe");
-                const int stack = max(getinventoryitemmaxstack(match.outputitem), 1);
-                if(ci.inventorycursorcount > 0 && ci.inventorycursoritem != match.outputitem)
+                const int outputitem = getcraftrecipeoutputitem(first);
+                if(ci.inventorycursorcount > 0 && ci.inventorycursoritem != outputitem)
                     return rejectcraftaction(ci, requestid, "the cursor contains another item");
-                if(ci.inventorycursorcount + match.outputcount > stack)
-                    return rejectcraftaction(ci, requestid, "the output does not fit on the cursor");
+                const int stack = max(getinventoryitemmaxstack(outputitem), 1), capacity = stack - ci.inventorycursorcount;
+                craftmatch match;
+                if(!servercraftmatch(ci, first, match, capacity))
+                    return rejectcraftaction(ci, requestid, "the authoritative crafting grid does not match or fit that recipe");
                 loopi(CRAFT_GRID_MAX) if(match.consume[i] > 0)
                 {
                     ci.craftingcounts[i] -= match.consume[i];

@@ -1943,11 +1943,12 @@ namespace game
         if(waitforserveredit()) requestcraftaction(CRAFT_ACTION_TAKE_OUTPUT, craftingrecipe, *inventoryslot);
         else
         {
+            if(survivalcounts[*inventoryslot] > 0 && survivalitems[*inventoryslot] != craftingoutputitem) return;
+            const int stack = max(getinventoryitemmaxstack(craftingoutputitem), 1);
+            const int capacity = stack - survivalcounts[*inventoryslot];
             craftmatch match;
-            if(!matchcraftrecipe(craftingitems, craftingcounts, craftinggridsize, craftingstationitem, -1, 0, craftingrecipe, match)) return;
-            const int stack = max(getinventoryitemmaxstack(match.outputitem), 1);
-            if(survivalcounts[*inventoryslot] > 0 && survivalitems[*inventoryslot] != match.outputitem) return;
-            if(survivalcounts[*inventoryslot] + match.outputcount > stack) return;
+            if(!matchcraftrecipe(craftingitems, craftingcounts, craftinggridsize, craftingstationitem,
+                                 -1, 0, craftingrecipe, match, capacity)) return;
             loopi(CRAFT_GRID_MAX) if(match.consume[i] > 0)
             {
                 craftingcounts[i] -= match.consume[i];
@@ -1962,11 +1963,12 @@ namespace game
     {
         if((*button != INVENTORY_CLICK_LEFT && *button != INVENTORY_CLICK_RIGHT) || craftingrecipe < 0) return;
         const int recipe = craftingrecipe;
+        if(inventorycursorcount > 0 && inventorycursoritem != craftingoutputitem) return;
+        const int stack = max(getinventoryitemmaxstack(craftingoutputitem), 1);
+        const int capacity = stack - inventorycursorcount;
         craftmatch match;
-        if(!matchcraftrecipe(craftingitems, craftingcounts, craftinggridsize, craftingstationitem, -1, 0, recipe, match)) return;
-        const int stack = max(getinventoryitemmaxstack(match.outputitem), 1);
-        if(inventorycursorcount > 0 && inventorycursoritem != match.outputitem) return;
-        if(inventorycursorcount + match.outputcount > stack) return;
+        if(!matchcraftrecipe(craftingitems, craftingcounts, craftinggridsize, craftingstationitem,
+                             -1, 0, recipe, match, capacity)) return;
         loopi(CRAFT_GRID_MAX) if(match.consume[i] > 0)
         {
             craftingcounts[i] -= match.consume[i];
